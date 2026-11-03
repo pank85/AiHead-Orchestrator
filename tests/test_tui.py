@@ -129,3 +129,26 @@ async def test_launch_ergo_modal_and_quick_launch():
 
         await pilot.click("#btn-cancel")
         assert not isinstance(pilot.app.screen, LaunchErgoModal)
+
+
+@pytest.mark.asyncio
+async def test_launch_master_submits_to_app_state():
+    """Verify launching a master correctly stores MasterSession in app_state.masters."""
+    from herdr_master.core.models import HarnessKind
+    from herdr_master.ui.tui.modals.launch_master import MasterLaunchParams
+
+    app = HerdrMasterApp(demo=True)
+    async with app.run_test(size=(110, 45)) as pilot:
+        await pilot.press("n")
+        modal = pilot.app.screen
+        modal.dismiss(
+            MasterLaunchParams(
+                name="test-coord",
+                harness=HarnessKind.AGY,
+                model="gemini-3.8-flash-high",
+            )
+        )
+        await pilot.pause()
+        assert "master-test-coord" in pilot.app.app_state.masters
+        master = pilot.app.app_state.masters["master-test-coord"]
+        assert master.harness == HarnessKind.AGY
