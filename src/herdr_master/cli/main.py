@@ -2,8 +2,14 @@
 
 import asyncio
 import os
+import signal
 from datetime import datetime
 from typing import Optional
+
+try:
+    signal.signal(signal.SIGHUP, signal.SIG_IGN)
+except Exception:
+    pass
 
 import typer
 from rich.console import Console

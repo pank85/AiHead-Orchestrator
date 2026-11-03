@@ -7,7 +7,7 @@
 [![Python: 3.10+](https://img.shields.io/badge/python-3.10+-3776AB.svg?logo=python&logoColor=white)](https://www.python.org/downloads/)
 [![Herdr: v0.9.5+](https://img.shields.io/badge/herdr-v0.9.5+-8A2BE2.svg)](https://herdr.dev)
 [![TUI: Textual](https://img.shields.io/badge/TUI-Textual%208.x-00D4AA.svg)](https://textual.textualize.io/)
-[![Tests: 30 passed](https://img.shields.io/badge/tests-30%20passed-success.svg)](#-testing--verification)
+[![Tests: 31 passed](https://img.shields.io/badge/tests-31%20passed-success.svg)](#-testing--verification)
 [![Code style: ruff](https://img.shields.io/badge/code%20style-ruff-000000.svg)](https://github.com/astral-sh/ruff)
 
 ---
@@ -236,7 +236,7 @@ herdm init --target-branch develop
 The project includes an automated test suite covering state machines, framing protocols, launcher lifecycles, and Textual pilot interactions:
 
 ```bash
-# Run full test suite (30 passed)
+# Run full test suite (31 passed)
 uv run pytest tests/
 
 # Code quality check with Ruff
@@ -244,7 +244,7 @@ uv run ruff check .
 ```
 
 ```text
-============================== 30 passed in 6.06s ==============================
+============================== 31 passed in 6.06s ==============================
 ```
 
 ---

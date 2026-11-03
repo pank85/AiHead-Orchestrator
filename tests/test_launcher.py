@@ -80,12 +80,17 @@ async def test_launch_ergo_inside_empty_workspace():
     mock_client = AsyncMock()
     mock_client.session = "default"
 
-    # Mock snapshot where current workspace has only 1 tab
+    # Mock snapshot where current workspace has existing tab w9:t1
     fake_ws = AsyncMock()
     fake_ws.workspace_id = "w9"
     fake_ws.tab_count = 1
+    fake_old_tab = AsyncMock()
+    fake_old_tab.tab_id = "w9:t1"
+    fake_old_tab.workspace_id = "w9"
+
     fake_snap = AsyncMock()
     fake_snap.workspaces = [fake_ws]
+    fake_snap.tabs = [fake_old_tab]
     mock_client.get_snapshot.return_value = fake_snap
 
     mock_client.create_tab.return_value = {
@@ -123,6 +128,8 @@ async def test_launch_ergo_inside_empty_workspace():
     mock_client.create_tab.assert_called_once()
     mock_client.start_agent.assert_called_once()
     mock_client.prompt_agent.assert_called_once()
+    # Must close the old tab once work started
+    mock_client.close_tab.assert_called_once_with("w9:t1")
 
 
 @pytest.mark.asyncio

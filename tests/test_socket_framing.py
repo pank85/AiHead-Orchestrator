@@ -189,3 +189,26 @@ async def test_subscribe_stream_and_double_subscribe_guard():
         finally:
             server.close()
             await server.wait_closed()
+
+
+@pytest.mark.asyncio
+async def test_start_agent_retries_on_agent_pane_busy():
+    """Verify start_agent automatically retries if the pane shell is not yet ready."""
+    from unittest.mock import AsyncMock
+
+    client = HerdrClient(socket_path="/tmp/fake.sock")
+    client._rpc = AsyncMock()
+    client._rpc.side_effect = [
+        HerdrRPCError("agent_pane_busy", "agent target pane wD:p4 is not an available shell"),
+        {"result": {"type": "agent_started", "name": "scout"}},
+    ]
+
+    res = await client.start_agent(
+        name="scout",
+        kind="agy",
+        pane_id="wD:p4",
+        timeout_ms=5000,
+    )
+
+    assert res["type"] == "agent_started"
+    assert client._rpc.call_count == 2
