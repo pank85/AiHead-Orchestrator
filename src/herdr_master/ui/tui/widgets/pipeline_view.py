@@ -10,6 +10,7 @@ from textual.widgets import Button, Static
 from herdr_master.core.models import PipelinePhase
 from herdr_master.ui.tui.state import AppState
 from herdr_master.ui.tui.widgets.dag import TaskDAGWidget
+from herdr_master.ui.tui.widgets.quick_launch import QuickLaunchBar
 
 
 class RoleCardWidget(Static):
@@ -184,6 +185,7 @@ class PipelineView(VerticalScroll):
     def __init__(self, app_state: AppState, **kwargs) -> None:
         super().__init__(**kwargs)
         self.app_state = app_state
+        self._quick_launch = QuickLaunchBar()
         self._scout_card = RoleCardWidget("Scout", app_state)
         self._architect_card = RoleCardWidget("Architect", app_state)
         self._reviewer_card = RoleCardWidget("Reviewer", app_state)
@@ -192,6 +194,7 @@ class PipelineView(VerticalScroll):
         self._gate_bar = ApprovalGateBar(is_enabled=len(app_state.squad.worker_pool) > 0)
 
     def compose(self) -> ComposeResult:
+        yield self._quick_launch
         with Horizontal(classes="cards-container"):
             yield self._scout_card
             yield self._architect_card
