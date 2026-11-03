@@ -1,13 +1,30 @@
 """CLI interface for herdr-master (herdm)."""
 
+import asyncio
+import os
+from datetime import datetime
+from typing import Optional
+
 import typer
 from rich.console import Console
+
+from herdr_master.core.config import load_project_config, squad_from_project_config
+from herdr_master.core.context import resolve_herdr_context
+from herdr_master.core.models import HarnessKind
+from herdr_master.herdr.client import HerdrClient
+from herdr_master.pipeline.launcher import launch_ergo, launch_master
 
 app = typer.Typer(
     name="herdm",
     help="👑 Universal multi-master, multi-worker cross-harness AI orchestrator built on Herdr.",
     add_completion=True,
 )
+master_app = typer.Typer(help="Manage and launch Herdr Master orchestrators (Multiple Jobs).")
+pipeline_app = typer.Typer(help="Manage and run cross-harness Ergo pipelines (Single Major Job).")
+
+app.add_typer(master_app, name="master")
+app.add_typer(pipeline_app, name="pipeline")
+
 console = Console()
 
 
@@ -30,9 +47,89 @@ def init(
 def status():
     """Show current active masters, workers, and pipelines."""
     console.print("[bold cyan]Herdr-Master Status Snapshot[/bold cyan]")
-    console.print("  • Herdr Environment: Active")
-    console.print("  • No active workers currently running.")
+    ctx = resolve_herdr_context()
+    env_status = "Active (inside Herdr)" if ctx.is_inside_herdr else "Outside Herdr"
+    console.print(f"  • Herdr Environment: {env_status}")
+    console.print(f"  • Socket: [cyan]{ctx.socket_path}[/cyan]")
     console.print("Run [yellow]herdm tui[/yellow] to launch the interactive terminal dashboard.")
+
+
+@master_app.command("start")
+def master_start(
+    name: str = typer.Option("master-coordinator", help="Master orchestrator agent name"),
+    harness: str = typer.Option("agy", help="Harness kind: agy, pi, claude, opencode"),
+    model: str = typer.Option("gemini-3.8-flash-high", help="Model slug"),
+    task: Optional[str] = typer.Option(None, "--task", "-t", help="Initial task/job for master"),
+    session: str = typer.Option("default", help="Herdr session name"),
+    attach: bool = typer.Option(
+        True, "--attach/--no-attach", help="Attach to Herdr if outside Herdr"
+    ),
+):
+    """Launch a new Herdr Master orchestrator for multiple jobs."""
+    ctx = resolve_herdr_context(explicit_session=session)
+    client = HerdrClient(session=session, socket_path=ctx.socket_path)
+
+    async def _run():
+        hkind = HarnessKind(harness.lower())
+        return await launch_master(
+            client=client,
+            name=name,
+            harness=hkind,
+            model=model,
+            initial_task=task,
+        )
+
+    console.print(f"[bold cyan]👑 Launching Herdr Master[/bold cyan] ({name} on {model})...")
+    res = asyncio.run(_run())
+    ws_id = res.get("workspace_id")
+    pane_id = res.get("pane_id")
+    console.print(
+        f"[green]✓[/green] Master active in workspace [cyan]{ws_id}[/cyan], "
+        f"pane [cyan]{pane_id}[/cyan]"
+    )
+
+    if not ctx.is_inside_herdr and attach:
+        console.print("[yellow]Attaching to Herdr session...[/yellow]")
+        os.execvp("herdr", ["herdr"])
+
+
+@pipeline_app.command("ergo")
+@app.command("ergo")
+def run_ergo(
+    intent: str = typer.Argument(..., help="Feature intent or objective"),
+    label: Optional[str] = typer.Option(None, "--label", "-l", help="Dedicated workspace label"),
+    session: str = typer.Option("default", help="Herdr session name"),
+    attach: bool = typer.Option(
+        True, "--attach/--no-attach", help="Attach to Herdr if outside Herdr"
+    ),
+):
+    """Launch a new Ergo pipeline for a single major job."""
+    ctx = resolve_herdr_context(explicit_session=session)
+    client = HerdrClient(session=session, socket_path=ctx.socket_path)
+    squad = squad_from_project_config(load_project_config())
+
+    ws_label = label or f"ergo-{datetime.now().strftime('%Y%m%d-%H%M')}"
+
+    async def _run():
+        return await launch_ergo(
+            client=client,
+            intent=intent,
+            workspace_label=ws_label,
+            squad=squad,
+        )
+
+    console.print(f"[bold magenta]⚡ Launching Ergo Pipeline[/bold magenta] ('{intent}')...")
+    res = asyncio.run(_run())
+    ws_id = res.get("workspace_id")
+    pane_id = res.get("scout_pane_id")
+    console.print(
+        f"[green]✓[/green] Ergo Scout active in workspace [cyan]{ws_id}[/cyan], "
+        f"pane [cyan]{pane_id}[/cyan]"
+    )
+
+    if not ctx.is_inside_herdr and attach:
+        console.print("[yellow]Attaching to Herdr session...[/yellow]")
+        os.execvp("herdr", ["herdr"])
 
 
 @app.command()
