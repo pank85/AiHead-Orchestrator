@@ -6,7 +6,7 @@ from textual.app import App, ComposeResult
 from textual.binding import Binding
 from textual.containers import Horizontal
 
-from herdr_master.core.models import WorkerState
+from herdr_master.core.models import MasterSession, PipelinePhase, PipelineRun, WorkerState
 from herdr_master.core.state_machine import WorkerEvent, transition_worker_state
 from herdr_master.herdr.client import HerdrClient
 from herdr_master.ui.tui.messages import (
@@ -14,12 +14,15 @@ from herdr_master.ui.tui.messages import (
 )
 from herdr_master.ui.tui.modals.config_drawer import ConfigDrawer
 from herdr_master.ui.tui.modals.confirm import ConfirmModal
+from herdr_master.ui.tui.modals.launch_ergo import ErgoLaunchParams, LaunchErgoModal
+from herdr_master.ui.tui.modals.launch_master import LaunchMasterModal, MasterLaunchParams
 from herdr_master.ui.tui.modals.prompt_dialog import PromptDialog
 from herdr_master.ui.tui.state import AppState
 from herdr_master.ui.tui.widgets.deck import CenterDeck
 from herdr_master.ui.tui.widgets.footer import ActionFooter
 from herdr_master.ui.tui.widgets.header_bar import HeaderBar
 from herdr_master.ui.tui.widgets.hierarchy import HierarchyTree
+from herdr_master.ui.tui.widgets.quick_launch import QuickLaunchBar
 
 
 class HerdrMasterApp(App):
@@ -29,6 +32,8 @@ class HerdrMasterApp(App):
 
     BINDINGS = [
         Binding("tab", "toggle_focus", "Focus", priority=True),
+        Binding("n", "new_master", "New Master"),
+        Binding("e", "new_ergo", "New Ergo"),
         Binding("1", "deck_mode(1)", "Output"),
         Binding("2", "deck_mode(2)", "Diff"),
         Binding("3", "deck_mode(3)", "Pipeline"),
@@ -116,6 +121,104 @@ class HerdrMasterApp(App):
             self._deck.focus()
         else:
             self._tree.focus()
+
+    def action_new_master(self) -> None:
+        """Open the Launch Herdr Master dialog."""
+
+        async def _on_master_launch(params: Optional[MasterLaunchParams]):
+            if params is None:
+                return
+            self.notify(
+                f"Launching Herdr Master: {params.name} ({params.model})",
+                severity="information",
+            )
+            if not self.demo and self.client:
+                try:
+                    ws_id = self.app_state.workspace_id or "default"
+                    tab_res = await self.client.create_tab(
+                        workspace_id=ws_id, label=params.name, focus=True
+                    )
+                    pane_id = tab_res.root_pane.pane_id
+                    await self.client.start_agent(
+                        name=params.name,
+                        kind=params.harness.value,
+                        pane_id=pane_id,
+                        args=["--model", params.model],
+                    )
+                    task_cmd = (
+                        f"/herdr-master {params.initial_task}"
+                        if params.initial_task
+                        else "/herdr-master"
+                    )
+                    await self.client.prompt_agent(target=params.name, prompt=task_cmd)
+                except Exception as e:
+                    self.notify(f"Herdr launch error: {e}", severity="error")
+
+            master_session = MasterSession(
+                session_id=f"master-{params.name}",
+                herdr_session=self.session_name,
+                workspace_id=self.app_state.workspace_id or "default",
+                pane_id="p-master",
+                harness=params.harness,
+                role="root-orchestrator",
+            )
+            self.app_state.masters[master_session.session_id] = master_session
+            self.app_state.selected_target_id = master_session.session_id
+            self._update_all_widgets()
+
+        self.push_screen(
+            LaunchMasterModal(),
+            lambda res: self.call_later(_on_master_launch, res),
+        )
+
+    def action_new_ergo(self) -> None:
+        """Open the Launch Ergo Pipeline dialog."""
+
+        async def _on_ergo_launch(params: Optional[ErgoLaunchParams]):
+            if params is None:
+                return
+            if params.customize_squad_first:
+                self.action_open_config()
+                return
+
+            self.notify(
+                f"Launching Ergo Pipeline: '{params.intent}'",
+                severity="information",
+            )
+            run_id = f"ergo-{params.workspace_label}"
+            self.app_state.pipeline_run = PipelineRun(
+                run_id=run_id,
+                intent=params.intent,
+                squad=self.app_state.squad,
+                phase=PipelinePhase.SCOUT,
+            )
+            if not self.demo and self.client:
+                try:
+                    ws_res = await self.client.create_workspace(
+                        label=params.workspace_label, focus=True
+                    )
+                    self.app_state.workspace_id = ws_res.workspace.workspace_id
+                    self.app_state.workspace_label = params.workspace_label
+                except Exception as e:
+                    self.notify(f"Workspace creation error: {e}", severity="error")
+
+            self.app_state.active_deck_mode = 3
+            self._update_all_widgets()
+
+        self.push_screen(
+            LaunchErgoModal(self.app_state.squad),
+            lambda res: self.call_later(_on_ergo_launch, res),
+        )
+
+    def on_quick_launch_bar_launch_master_requested(
+        self, event: QuickLaunchBar.LaunchMasterRequested
+    ) -> None:
+        self.action_new_master()
+
+    def on_quick_launch_bar_launch_ergo_requested(
+        self, event: QuickLaunchBar.LaunchErgoRequested
+    ) -> None:
+        self.action_new_ergo()
 
     def action_deck_mode(self, mode: int) -> None:
         """Switch center deck view mode (1..4)."""

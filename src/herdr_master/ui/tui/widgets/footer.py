@@ -21,13 +21,14 @@ class ActionFooter(Static):
         t = Text()
         keys = [
             ("Tab", "Focus"),
+            ("n", "New Master"),
+            ("e", "New Ergo"),
+            ("c", "Config"),
             ("1-4", "Deck"),
             ("p", "Prompt"),
             ("r", "Review"),
             ("m", "Squash Land"),
             ("k", "Kill"),
-            ("c", "Config"),
-            ("d", "Diff"),
             ("q", "Quit"),
         ]
         for key, label in keys:

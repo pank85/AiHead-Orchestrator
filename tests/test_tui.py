@@ -4,11 +4,14 @@ import pytest
 
 from herdr_master.ui.tui.app import HerdrMasterApp
 from herdr_master.ui.tui.modals.config_drawer import ConfigDrawer
+from herdr_master.ui.tui.modals.launch_ergo import LaunchErgoModal
+from herdr_master.ui.tui.modals.launch_master import LaunchMasterModal
 from herdr_master.ui.tui.widgets.deck import CenterDeck
 from herdr_master.ui.tui.widgets.footer import ActionFooter
 from herdr_master.ui.tui.widgets.header_bar import HeaderBar
 from herdr_master.ui.tui.widgets.hierarchy import HierarchyTree
 from herdr_master.ui.tui.widgets.pipeline_view import PipelineView
+from herdr_master.ui.tui.widgets.quick_launch import QuickLaunchBar
 
 
 @pytest.mark.asyncio
@@ -68,3 +71,44 @@ async def test_config_drawer_modal_open():
         # Dismiss with Cancel button
         await pilot.click("#btn-cancel")
         assert not isinstance(pilot.app.screen, ConfigDrawer)
+
+
+@pytest.mark.asyncio
+async def test_launch_master_modal_and_quick_launch():
+    """Verify clicking #btn-new-master or pressing 'n' opens LaunchMasterModal."""
+    app = HerdrMasterApp(demo=True)
+    async with app.run_test(size=(100, 45)) as pilot:
+        # Check quick launch bar exists in pipeline view
+        quick_bar = pilot.app.query_one(QuickLaunchBar)
+        assert quick_bar is not None
+
+        # Press 'n' to open LaunchMasterModal
+        await pilot.press("n")
+        assert isinstance(pilot.app.screen, LaunchMasterModal)
+        await pilot.click("#btn-cancel")
+        assert not isinstance(pilot.app.screen, LaunchMasterModal)
+
+        # Click button on QuickLaunchBar
+        await pilot.click("#btn-new-master")
+        assert isinstance(pilot.app.screen, LaunchMasterModal)
+        await pilot.click("#btn-cancel")
+        assert not isinstance(pilot.app.screen, LaunchMasterModal)
+
+
+@pytest.mark.asyncio
+async def test_launch_ergo_modal_and_quick_launch():
+    """Verify clicking #btn-new-ergo or pressing 'e' opens LaunchErgoModal."""
+    app = HerdrMasterApp(demo=True)
+    async with app.run_test(size=(100, 45)) as pilot:
+        # Press 'e' to open LaunchErgoModal
+        await pilot.press("e")
+        assert isinstance(pilot.app.screen, LaunchErgoModal)
+        await pilot.click("#btn-cancel")
+        assert not isinstance(pilot.app.screen, LaunchErgoModal)
+
+        # Click button on QuickLaunchBar
+        await pilot.click("#btn-new-ergo")
+        assert isinstance(pilot.app.screen, LaunchErgoModal)
+        await pilot.click("#btn-cancel")
+        assert not isinstance(pilot.app.screen, LaunchErgoModal)
+
