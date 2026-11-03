@@ -3,6 +3,7 @@
 import os
 from pathlib import Path
 from typing import Optional
+
 from pydantic import BaseModel
 
 
@@ -22,12 +23,12 @@ def resolve_herdr_context(explicit_session: Optional[str] = None) -> HerdrContex
     1. If explicit_session is passed:
        - If 'default': ~/.config/herdr/herdr.sock
        - Else: ~/.config/herdr/sessions/<explicit_session>/herdr.sock
-    2. If running inside an existing Herdr session (HERDR_SOCKET_PATH is set):
+    2. If running inside an existing Herdr session (HERDR_SOCKET_PATH or HERDR_SOCKET is set):
        - Use the existing socket and extract session name if nested under sessions/<name>.
     3. Fallback:
        - Always use 'default' (~/.config/herdr/herdr.sock).
     """
-    env_socket = os.environ.get("HERDR_SOCKET_PATH")
+    env_socket = os.environ.get("HERDR_SOCKET_PATH") or os.environ.get("HERDR_SOCKET")
     env_workspace = os.environ.get("HERDR_WORKSPACE_ID")
     env_pane = os.environ.get("HERDR_PANE_ID")
     env_tab = os.environ.get("HERDR_TAB_ID")
@@ -38,7 +39,9 @@ def resolve_herdr_context(explicit_session: Optional[str] = None) -> HerdrContex
         if session_name == "default":
             socket_path = Path.home() / ".config" / "herdr" / "herdr.sock"
         else:
-            socket_path = Path.home() / ".config" / "herdr" / "sessions" / session_name / "herdr.sock"
+            socket_path = (
+                Path.home() / ".config" / "herdr" / "sessions" / session_name / "herdr.sock"
+            )
     elif env_socket:
         socket_path = Path(env_socket)
         # Determine session name from socket path
