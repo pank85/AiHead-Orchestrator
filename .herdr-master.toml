@@ -1,0 +1,25 @@
+[general]
+default_session = "default"
+target_integration_branch = "develop"
+create_develop_if_missing = true
+disallow_hard_reset = true
+
+[worktree]
+base_directory = ".herdr-worktrees"
+naming_template = "herdm/{job_name}-{timestamp}"
+auto_clean_on_success = true
+
+[models.default_squad]
+scout = "agy:gemini-3.8-flash-high"
+architect = "pi:openai-codex/gpt-6.1-sol:high"
+reviewer = "agy:gemini-4-argon-high:high"
+
+[models.worker_pool]
+general_backend = "pi:xai/grok-4.7:medium"
+concurrency_logic = "pi:openai-codex/gpt-6.1-terra:medium"
+frontend_multimodal = "agy:gemini-3.8-flash:medium"
+
+[tui]
+refresh_rate_ms = 250
+theme = "dark"
+stream_buffer_lines = 1000

@@ -8,6 +8,7 @@ from herdr_master.core.models import (
     EffortLevel,
     HarnessBinding,
     HarnessKind,
+    MasterSession,
     PipelinePhase,
     PipelineRun,
     Squad,
@@ -32,6 +33,7 @@ class AppState(BaseModel):
 
     squad: Squad = Field(default_factory=Squad)
     pipeline_run: Optional[PipelineRun] = None
+    masters: Dict[str, MasterSession] = Field(default_factory=dict)
     workers: Dict[str, WorkerSession] = Field(default_factory=dict)
     output_scrollback: Dict[str, str] = Field(default_factory=dict)
     diff_content: Dict[str, str] = Field(default_factory=dict)
@@ -165,6 +167,18 @@ new file mode 100644
 """,
         }
 
+        masters = {
+            "master-main": MasterSession(
+                session_id="master-main",
+                herdr_session="default",
+                workspace_id="ws-01",
+                pane_id="p-master",
+                harness=HarnessKind.AGY,
+                role="root-orchestrator",
+                child_workers=["coder-1", "coder-2", "coder-3"],
+            )
+        }
+
         return cls(
             session_name="default",
             workspace_label="ergo-20261103",
@@ -177,6 +191,7 @@ new file mode 100644
             selected_target_id="coder-2",
             squad=squad,
             pipeline_run=run,
+            masters=masters,
             workers=workers,
             output_scrollback=output_scrollback,
             diff_content=diff_content,
