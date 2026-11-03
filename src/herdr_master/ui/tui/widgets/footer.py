@@ -21,8 +21,8 @@ class ActionFooter(Static):
         t = Text()
         keys = [
             ("Tab", "Focus"),
-            ("n", "New Master"),
-            ("e", "New Ergo"),
+            ("n", "Master [Multi-Jobs]"),
+            ("e", "Ergo [Single-Job]"),
             ("c", "Config"),
             ("1-4", "Deck"),
             ("p", "Prompt"),

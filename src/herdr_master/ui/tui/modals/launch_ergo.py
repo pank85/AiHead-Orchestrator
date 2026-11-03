@@ -73,10 +73,10 @@ class LaunchErgoModal(ModalScreen[Optional[ErgoLaunchParams]]):
 
     def compose(self) -> ComposeResult:
         with Vertical(classes="modal-box"):
-            yield Static("⚡ Launch New Ergo Pipeline", classes="modal-title")
+            yield Static("⚡ Launch New Ergo Pipeline — Single Major Job", classes="modal-title")
             yield Static(
-                "Creates a dedicated workspace that orchestrates a new Ergo multi-role "
-                "pipeline with separate Herdr tabs for each agent "
+                "Creates a dedicated workspace that orchestrates a single major job end-to-end "
+                "through an Ergo multi-role pipeline with separate Herdr tabs for each agent "
                 "(Scout → Architect → Parallel Specialist Coders → Reviewer).",
                 classes="modal-desc",
             )
