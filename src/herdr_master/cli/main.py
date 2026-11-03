@@ -155,7 +155,16 @@ def tui(
     from herdr_master.ui.tui.app import HerdrMasterApp
 
     tui_app = HerdrMasterApp(session=session, demo=demo)
-    tui_app.run()
+    result = tui_app.run()
+    if isinstance(result, dict) and result.get("action") == "attach":
+        target_session = result.get("session", session)
+        console.print(
+            f"[yellow]Attaching to isolated Herdr session '{target_session}'...[/yellow]"
+        )
+        os.execvp("herdr", ["herdr", "--session", target_session])
+    elif isinstance(result, dict) and result.get("action") == "done":
+        ws_id = result.get("workspace_id")
+        console.print(f"[green]✓[/green] Active in workspace [cyan]{ws_id}[/cyan]")
 
 
 if __name__ == "__main__":

@@ -1,5 +1,7 @@
 """Unit and Pilot tests for Herdr-Master Textual TUI Cockpit."""
 
+from pathlib import Path
+
 import pytest
 from textual.widgets import Tree
 
@@ -152,3 +154,97 @@ async def test_launch_master_submits_to_app_state():
         assert "master-test-coord" in pilot.app.app_state.masters
         master = pilot.app.app_state.masters["master-test-coord"]
         assert master.harness == HarnessKind.AGY
+
+
+@pytest.mark.asyncio
+async def test_tui_launch_ergo_outside_herdr_exits_with_attach():
+    """Verify launching Ergo outside Herdr triggers exit with attach result."""
+    from unittest.mock import AsyncMock, patch
+
+    from herdr_master.core.context import HerdrContext
+    from herdr_master.ui.tui.modals.launch_ergo import ErgoLaunchParams
+
+    mock_client = AsyncMock()
+    mock_client.session = "default"
+
+    fake_ctx = HerdrContext(
+        is_inside_herdr=False,
+        session_name="default",
+        socket_path=Path("/tmp/herdr.sock"),
+    )
+    fake_res = {
+        "session": "ergo-worker",
+        "workspace_id": "w_test",
+        "scout_pane_id": "w_test:p1",
+        "tab_id": "w_test:t1",
+    }
+
+    app = HerdrMasterApp(demo=False)
+    app.client = mock_client
+
+    with (
+        patch("herdr_master.ui.tui.app.resolve_herdr_context", return_value=fake_ctx),
+        patch("herdr_master.ui.tui.app.launch_ergo", new_callable=AsyncMock, return_value=fake_res),
+    ):
+        async with app.run_test(size=(110, 45)) as pilot:
+            await pilot.press("e")
+            modal = pilot.app.screen
+            modal.dismiss(
+                ErgoLaunchParams(
+                    intent="Deploy service",
+                    workspace_label="worker",
+                    start_pipeline=True,
+                )
+            )
+            await pilot.pause()
+            assert app.return_value == {"action": "attach", "session": "ergo-worker"}
+
+
+@pytest.mark.asyncio
+async def test_tui_launch_ergo_inside_herdr_exits_with_done():
+    """Verify launching Ergo inside Herdr triggers exit with done result."""
+    from unittest.mock import AsyncMock, patch
+
+    from herdr_master.core.context import HerdrContext
+    from herdr_master.ui.tui.modals.launch_ergo import ErgoLaunchParams
+
+    mock_client = AsyncMock()
+    mock_client.session = "default"
+
+    fake_ctx = HerdrContext(
+        is_inside_herdr=True,
+        session_name="default",
+        workspace_id="w9",
+        pane_id="w9:p1",
+        socket_path=Path("/tmp/herdr.sock"),
+    )
+    fake_res = {
+        "session": "default",
+        "workspace_id": "w9",
+        "scout_pane_id": "w9:p2",
+        "tab_id": "w9:t2",
+    }
+
+    app = HerdrMasterApp(demo=False)
+    app.client = mock_client
+
+    with (
+        patch("herdr_master.ui.tui.app.resolve_herdr_context", return_value=fake_ctx),
+        patch("herdr_master.ui.tui.app.launch_ergo", new_callable=AsyncMock, return_value=fake_res),
+    ):
+        async with app.run_test(size=(110, 45)) as pilot:
+            await pilot.press("e")
+            modal = pilot.app.screen
+            modal.dismiss(
+                ErgoLaunchParams(
+                    intent="Deploy service",
+                    workspace_label="worker",
+                    start_pipeline=True,
+                )
+            )
+            await pilot.pause()
+            assert app.return_value == {
+                "action": "done",
+                "session": "default",
+                "workspace_id": "w9",
+            }
