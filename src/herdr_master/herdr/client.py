@@ -1,11 +1,12 @@
 """Typed client wrappers for Herdr Protocol 22 RPC and subscription APIs."""
 
+import asyncio
 from pathlib import Path
 from typing import Any, Dict, List, Optional, Union
 
 from herdr_master.core.context import resolve_herdr_context
 from herdr_master.herdr.snapshot import SessionSnapshot
-from herdr_master.herdr.socket import send_rpc
+from herdr_master.herdr.socket import HerdrRPCError, send_rpc
 from herdr_master.herdr.subscribe import HerdrSubscription
 
 
@@ -121,6 +122,7 @@ class HerdrClient:
         """Start a supported interactive agent in an existing pane.
 
         timeout_ms must be in (3000, 300000].
+        Retries automatically if the newly spawned shell has not yet initialized.
         """
         clamped_timeout = max(3001, min(300000, timeout_ms))
         params: Dict[str, Any] = {
@@ -131,8 +133,22 @@ class HerdrClient:
             "timeout_ms": clamped_timeout,
         }
         rpc_timeout = (clamped_timeout / 1000.0) + 15.0
-        resp = await self._rpc("agent.start", params, timeout=rpc_timeout)
-        return resp.get("result", {})
+
+        last_err: Optional[Exception] = None
+        for attempt in range(25):
+            try:
+                resp = await self._rpc("agent.start", params, timeout=rpc_timeout)
+                return resp.get("result", {})
+            except HerdrRPCError as err:
+                last_err = err
+                if err.code == "agent_pane_busy" or "not an available shell" in err.message:
+                    if attempt < 24:
+                        await asyncio.sleep(0.3)
+                        continue
+                raise
+        if last_err:
+            raise last_err
+        return {}
 
     async def prompt_agent(
         self,
@@ -153,8 +169,27 @@ class HerdrClient:
             rpc_timeout = (timeout_ms / 1000.0) + 15.0
         else:
             rpc_timeout = 30.0
-        resp = await self._rpc("agent.prompt", params, timeout=rpc_timeout)
-        return resp.get("result", {})
+
+        last_err: Optional[Exception] = None
+        for attempt in range(20):
+            try:
+                resp = await self._rpc("agent.prompt", params, timeout=rpc_timeout)
+                return resp.get("result", {})
+            except HerdrRPCError as err:
+                last_err = err
+                if attempt < 19 and err.code in (
+                    "agent_target_not_found",
+                    "agent_prompt_stalled",
+                    "agent_not_ready",
+                    "agent_launch_pending",
+                    "agent_busy",
+                ):
+                    await asyncio.sleep(0.5)
+                    continue
+                raise
+        if last_err:
+            raise last_err
+        return {}
 
     async def read_agent(
         self,

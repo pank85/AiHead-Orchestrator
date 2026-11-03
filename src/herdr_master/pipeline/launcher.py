@@ -178,6 +178,12 @@ async def launch_master(
     else:
         session_name = ctx.session_name
         target_ws_id = ctx.workspace_id
+        snap = await active_client.get_snapshot()
+        existing_tabs = [
+            t.tab_id
+            for t in snap.tabs
+            if t.workspace_id == target_ws_id
+        ]
         tab_res = await active_client.create_tab(
             workspace_id=ctx.workspace_id,
             label=name,
@@ -225,6 +231,15 @@ async def launch_master(
             await active_client.focus_tab(target_tab_id)
     except Exception:
         pass
+
+    # Once work has started, close the rest of the tabs of this workspace
+    if ctx.is_inside_herdr and existing_tabs:
+        for old_tab_id in existing_tabs:
+            if old_tab_id != target_tab_id:
+                try:
+                    await active_client.close_tab(old_tab_id)
+                except Exception:
+                    pass
 
     return {
         "session": session_name,
@@ -304,36 +319,21 @@ async def launch_ergo(
             scout_tab_id = tab_res.get("tab", {}).get("tab_id")
     else:
         session_name = ctx.session_name
-        # Check current workspace tab count
+        target_ws_id = ctx.workspace_id
         snap = await active_client.get_snapshot()
-        current_ws = next((w for w in snap.workspaces if w.workspace_id == ctx.workspace_id), None)
-        has_other_tabs = current_ws.tab_count > 1 if current_ws else False
-
-        if not has_other_tabs:
-            # Workspace without other tabs: work right here!
-            target_ws_id = ctx.workspace_id
-            tab_res = await active_client.create_tab(
-                workspace_id=ctx.workspace_id,
-                label="scout",
-                focus=True,
-                cwd=target_cwd,
-            )
-            scout_pane_id = tab_res.get("root_pane", {}).get("pane_id") or tab_res.get("pane_id")
-            scout_tab_id = tab_res.get("tab", {}).get("tab_id")
-        else:
-            # Workspace has other tabs: create a dedicated workspace
-            ws_res = await active_client.create_workspace(
-                label=workspace_label,
-                focus=True,
-                cwd=target_cwd,
-            )
-            scout_ws_id = ws_res.get("workspace", {}).get("workspace_id")
-            target_ws_id = scout_ws_id
-            scout_pane_id = ws_res.get("root_pane", {}).get("pane_id")
-            scout_tab_id = (
-                ws_res.get("tab", {}).get("tab_id")
-                or ws_res.get("root_pane", {}).get("tab_id")
-            )
+        existing_tabs = [
+            t.tab_id
+            for t in snap.tabs
+            if t.workspace_id == target_ws_id
+        ]
+        tab_res = await active_client.create_tab(
+            workspace_id=target_ws_id,
+            label="scout",
+            focus=True,
+            cwd=target_cwd,
+        )
+        scout_pane_id = tab_res.get("root_pane", {}).get("pane_id") or tab_res.get("pane_id")
+        scout_tab_id = tab_res.get("tab", {}).get("tab_id")
 
     if not scout_pane_id:
         raise RuntimeError(f"Could not allocate Scout pane in workspace {target_ws_id}")
@@ -377,6 +377,15 @@ async def launch_ergo(
             await active_client.focus_tab(scout_tab_id)
     except Exception:
         pass
+
+    # Once work has started, close the rest of the tabs of this workspace
+    if ctx.is_inside_herdr and existing_tabs:
+        for old_tab_id in existing_tabs:
+            if old_tab_id != scout_tab_id:
+                try:
+                    await active_client.close_tab(old_tab_id)
+                except Exception:
+                    pass
 
     return {
         "session": session_name,
