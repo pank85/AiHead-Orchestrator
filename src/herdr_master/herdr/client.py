@@ -26,13 +26,19 @@ class HerdrClient:
             self.socket_path = ctx.socket_path
         self.timeout = timeout
 
-    async def _rpc(self, method: str, params: Optional[Dict[str, Any]] = None) -> Dict[str, Any]:
+    async def _rpc(
+        self,
+        method: str,
+        params: Optional[Dict[str, Any]] = None,
+        timeout: Optional[float] = None,
+    ) -> Dict[str, Any]:
         """Execute one-shot RPC and return raw response dict."""
+        rpc_timeout = timeout if timeout is not None else self.timeout
         return await send_rpc(
             socket_path=self.socket_path,
             method=method,
             params=params,
-            timeout=self.timeout,
+            timeout=rpc_timeout,
         )
 
     async def ping(self) -> Dict[str, Any]:
@@ -112,22 +118,30 @@ class HerdrClient:
             "args": args if args is not None else [],
             "timeout_ms": clamped_timeout,
         }
-        resp = await self._rpc("agent.start", params)
+        rpc_timeout = (clamped_timeout / 1000.0) + 15.0
+        resp = await self._rpc("agent.start", params, timeout=rpc_timeout)
         return resp.get("result", {})
 
     async def prompt_agent(
         self,
-        pane_id: str,
+        target: str,
         prompt: str,
         wait: Optional[Any] = None,
+        timeout_ms: Optional[int] = None,
     ) -> Dict[str, Any]:
         """Send bracketed prompt text to an agent."""
         params: Dict[str, Any] = {
-            "target": pane_id,
+            "target": target,
             "text": prompt,
-            "wait": wait,
         }
-        resp = await self._rpc("agent.prompt", params)
+        if wait is not None:
+            params["wait"] = wait
+        if timeout_ms is not None:
+            params["timeout_ms"] = timeout_ms
+            rpc_timeout = (timeout_ms / 1000.0) + 15.0
+        else:
+            rpc_timeout = 30.0
+        resp = await self._rpc("agent.prompt", params, timeout=rpc_timeout)
         return resp.get("result", {})
 
     async def read_agent(
