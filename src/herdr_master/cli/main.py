@@ -83,14 +83,17 @@ def master_start(
     res = asyncio.run(_run())
     ws_id = res.get("workspace_id")
     pane_id = res.get("pane_id")
+    target_session = res.get("session", session)
     console.print(
-        f"[green]✓[/green] Master active in workspace [cyan]{ws_id}[/cyan], "
-        f"pane [cyan]{pane_id}[/cyan]"
+        f"[green]✓[/green] Master active in session [cyan]{target_session}[/cyan], "
+        f"workspace [cyan]{ws_id}[/cyan], pane [cyan]{pane_id}[/cyan]"
     )
 
     if not ctx.is_inside_herdr and attach:
-        console.print("[yellow]Attaching to Herdr session...[/yellow]")
-        os.execvp("herdr", ["herdr"])
+        console.print(
+            f"[yellow]Attaching to isolated Herdr session '{target_session}'...[/yellow]"
+        )
+        os.execvp("herdr", ["herdr", "--session", target_session])
 
 
 @pipeline_app.command("ergo")
@@ -116,20 +119,24 @@ def run_ergo(
             intent=intent,
             workspace_label=ws_label,
             squad=squad,
+            session=session if session != "default" else None,
         )
 
     console.print(f"[bold magenta]⚡ Launching Ergo Pipeline[/bold magenta] ('{intent}')...")
     res = asyncio.run(_run())
     ws_id = res.get("workspace_id")
     pane_id = res.get("scout_pane_id")
+    target_session = res.get("session", session)
     console.print(
-        f"[green]✓[/green] Ergo Scout active in workspace [cyan]{ws_id}[/cyan], "
-        f"pane [cyan]{pane_id}[/cyan]"
+        f"[green]✓[/green] Ergo Scout active in session [cyan]{target_session}[/cyan], "
+        f"workspace [cyan]{ws_id}[/cyan], pane [cyan]{pane_id}[/cyan]"
     )
 
     if not ctx.is_inside_herdr and attach:
-        console.print("[yellow]Attaching to Herdr session...[/yellow]")
-        os.execvp("herdr", ["herdr"])
+        console.print(
+            f"[yellow]Attaching to isolated Herdr session '{target_session}'...[/yellow]"
+        )
+        os.execvp("herdr", ["herdr", "--session", target_session])
 
 
 @app.command()

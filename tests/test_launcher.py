@@ -147,9 +147,14 @@ async def test_launch_ergo_outside_herdr():
         reviewer=HarnessBinding.from_slug("agy:gemini-4-argon-high"),
     )
 
+    mock_snap = AsyncMock()
+    mock_snap.workspaces = []
+    mock_client.get_snapshot.return_value = mock_snap
+
     with (
         patch("herdr_master.pipeline.launcher.resolve_herdr_context", return_value=fake_ctx),
         patch("herdr_master.pipeline.launcher.ensure_herdr_server", new_callable=AsyncMock),
+        patch("herdr_master.pipeline.launcher.HerdrClient", return_value=mock_client),
     ):
         res = await launch_ergo(
             client=mock_client,
@@ -161,6 +166,7 @@ async def test_launch_ergo_outside_herdr():
 
     assert res["workspace_id"] == "w_new"
     assert res["scout_pane_id"] == "w_new:p1"
+    assert res["session"] == "ergo-worker"
     mock_client.create_workspace.assert_called_once()
     mock_client.start_agent.assert_called_once()
     mock_client.prompt_agent.assert_called_once()
