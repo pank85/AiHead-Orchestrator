@@ -1,0 +1,27 @@
+id = "devswha.herdr-master"
+name = "herdr-master"
+version = "0.1.0"
+min_herdr_version = "0.9.0"
+description = "Universal multi-master, multi-worker cross-harness AI agent orchestrator & cockpit TUI"
+platforms = ["linux", "macos"]
+
+[[panes]]
+id = "cockpit"
+title = "Herdr-Master Cockpit"
+placement = "tab"
+command = ["/home/pank/projects/herdr-master/.venv/bin/herdm", "tui"]
+platforms = ["linux", "macos"]
+
+[[actions]]
+id = "cockpit"
+title = "Open Herdr-Master Cockpit"
+contexts = ["workspace"]
+command = ["herdr", "plugin", "pane", "open", "--plugin", "devswha.herdr-master", "--entrypoint", "cockpit", "--placement", "tab", "--focus"]
+platforms = ["linux", "macos"]
+
+[[actions]]
+id = "new-workspace"
+title = "New Herdr-Master Workspace"
+contexts = ["workspace"]
+command = ["/home/pank/projects/herdr-master/scripts/launch-workspace.sh"]
+platforms = ["linux", "macos"]
