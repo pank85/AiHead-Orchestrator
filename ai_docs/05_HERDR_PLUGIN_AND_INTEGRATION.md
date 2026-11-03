@@ -117,7 +117,7 @@ Project-level or global configuration can be stored in `.herdr-master.toml` (or 
 
 ```toml
 [general]
-default_session = "hermes"
+default_session = "default"
 target_integration_branch = "develop"
 create_develop_if_missing = true
 disallow_hard_reset = true

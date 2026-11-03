@@ -35,7 +35,7 @@ Commands:
 Initializes `.herdr-master/` in the current git repository, creates default `config.toml`, sets up mailbox directories, and verifies `develop` branch existence.
 
 ```bash
-herdm init [--target-branch develop] [--session hermes]
+herdm init [--target-branch develop] [--session default]
 ```
 
 #### `herdm master start`
@@ -102,7 +102,7 @@ The TUI provides a visual command center inspired by Herdr's lean, high-density 
 
 ```
 +----------------------------------------------------------------------------------------------------+
-| HERDR-MASTER v0.1.0  | Session: hermes | WS: ws-main | Target: develop [CLEAN] | Agents: 4 Active | 14:30 |
+| HERDR-MASTER v0.1.0  | Session: default | WS: ws-main | Target: develop [CLEAN] | Agents: 4 Active | 14:30 |
 +----------------------------------------------------------------------------------------------------+
 | MASTERS & WORKERS                  | ACTIVE VIEW: [1] Output  [2] Diff  [3] Pipeline DAG  [4] Mailbox      |
 |------------------------------------|---------------------------------------------------------------|

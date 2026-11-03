@@ -43,7 +43,7 @@ flowchart TD
 
 Herdr-Master embeds native, first-class support for the **Ergo Pipeline** via `ergo --herdr`. 
 
-When invoked, the pipeline provisions every role as an independent interactive terminal tab inside a dedicated temporary Herdr workspace (`ergo-<run-id>`) running on persistent Herdr session `hermes`.
+When invoked, the pipeline provisions every role as an independent interactive terminal tab inside a dedicated temporary Herdr workspace (`ergo-<run-id>`) running on the active Herdr session (the existing session if already inside Herdr, or `default`).
 
 ### Role-to-Harness Squad Configuration
 
@@ -99,24 +99,24 @@ When the Architect runs, Herdr-Master passes the user-approved worker pool in th
 ### Step 1: Preflight & Workspace Setup
 - Verify `git status` is clean or changes are safely isolated.
 - Ensure integration branch `develop` exists.
-- Launch or attach to Herdr session `hermes`:
+- Launch or attach to the active Herdr session (existing session or `default`):
   ```bash
-  herdr --session hermes workspace create --cwd "$WORKTREE" --label "ergo-<run-id>" --no-focus
+  herdr workspace create --cwd "$WORKTREE" --label "ergo-<run-id>" --no-focus
   ```
 
 ### Step 2: Scout Reconnaissance
 - Spawn Scout in tab `scout`:
   ```bash
-  herdr --session hermes agent start scout --kind agy --pane <pane-id> -- --model gemini-3.8-flash-high
-  herdr --session hermes agent prompt scout "Perform reconnaissance on <intent>..." --wait --timeout 180000
+  herdr agent start scout --kind agy --pane <pane-id> -- --model gemini-3.8-flash-high
+  herdr agent prompt scout "Perform reconnaissance on <intent>..." --wait --timeout 180000
   ```
 - Output produced: `.orchestration/<run-id>/context.md`.
 
 ### Step 3: Architecture & Planning
 - Spawn Architect in tab `architect`:
   ```bash
-  herdr --session hermes agent start architect --kind pi --pane <pane-id> -- --provider openai-codex --model gpt-6.1-sol
-  herdr --session hermes agent prompt architect "Formulate implementation plan..." --wait --timeout 300000
+  herdr agent start architect --kind pi --pane <pane-id> -- --provider openai-codex --model gpt-6.1-sol
+  herdr agent prompt architect "Formulate implementation plan..." --wait --timeout 300000
   ```
 - Output produced: `.orchestration/<run-id>/plan.md`.
 

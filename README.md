@@ -37,7 +37,7 @@
 graph TD
     User["Developer / Operator"] -->|CLI / TUI / Chat| Master["Herdr Master Orchestrator"]
     
-    subgraph HerdrSession ["Herdr Persistent Session (e.g. hermes / default)"]
+    subgraph HerdrSession ["Herdr Active Session (existing session or default)"]
         Master -->|Git Worktree 1| W1["Worker 1 (pi: xai/grok-4.7)<br/>Backend API"]
         Master -->|Git Worktree 2| W2["Worker 2 (agy: gemini-4-argon)<br/>Frontend / UI"]
         Master -->|Delegated Worktree| SubM["Sub-Master (claude: sonnet)<br/>Data Engine"]

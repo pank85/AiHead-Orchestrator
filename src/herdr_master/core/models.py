@@ -55,7 +55,7 @@ class WorkerSession(BaseModel):
 
 class MasterSession(BaseModel):
     session_id: str
-    herdr_session: str = "hermes"
+    herdr_session: str = "default"
     workspace_id: str
     pane_id: str
     harness: HarnessKind

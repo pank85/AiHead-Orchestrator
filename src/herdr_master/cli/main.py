@@ -14,7 +14,7 @@ console = Console()
 @app.command()
 def init(
     target_branch: str = typer.Option("develop", help="Target integration branch"),
-    session: str = typer.Option("hermes", help="Persistent Herdr session"),
+    session: str = typer.Option("default", help="Persistent Herdr session (defaults to active existing or 'default')"),
 ):
     """Initialize .herdr-master workspace configuration and git develop branch."""
     console.print(f"[green]✓[/green] Initializing Herdr-Master in current workspace...")
