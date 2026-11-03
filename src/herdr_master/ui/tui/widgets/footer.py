@@ -20,14 +20,13 @@ class ActionFooter(Static):
     def on_mount(self) -> None:
         t = Text()
         keys = [
-            ("Tab", "Focus"),
-            ("n", "Master [Multi-Jobs]"),
-            ("e", "Ergo [Single-Job]"),
-            ("c", "Config"),
-            ("1-4", "Deck"),
+            ("n", "New Master"),
+            ("e", "New Ergo"),
+            ("s/c", "Settings"),
+            ("1-4", "Views"),
             ("p", "Prompt"),
             ("r", "Review"),
-            ("m", "Squash Land"),
+            ("m", "Squash"),
             ("k", "Kill"),
             ("q", "Quit"),
         ]

@@ -22,7 +22,6 @@ from herdr_master.ui.tui.state import AppState
 from herdr_master.ui.tui.widgets.deck import CenterDeck
 from herdr_master.ui.tui.widgets.footer import ActionFooter
 from herdr_master.ui.tui.widgets.header_bar import HeaderBar
-from herdr_master.ui.tui.widgets.hierarchy import HierarchyTree
 from herdr_master.ui.tui.widgets.quick_launch import QuickLaunchBar
 
 
@@ -32,9 +31,10 @@ class HerdrMasterApp(App):
     TITLE = "HERDR-MASTER Cockpit"
 
     BINDINGS = [
-        Binding("tab", "toggle_focus", "Focus", priority=True),
         Binding("n", "new_master", "New Master"),
         Binding("e", "new_ergo", "New Ergo"),
+        Binding("s", "open_settings", "Settings"),
+        Binding("c", "open_settings", "Settings"),
         Binding("1", "deck_mode(1)", "Output"),
         Binding("2", "deck_mode(2)", "Diff"),
         Binding("3", "deck_mode(3)", "Pipeline"),
@@ -43,7 +43,6 @@ class HerdrMasterApp(App):
         Binding("r", "review_worker", "Review"),
         Binding("m", "squash_land", "Squash"),
         Binding("k", "kill_worker", "Kill"),
-        Binding("c", "open_config", "Config"),
         Binding("d", "deck_mode(2)", "Diff"),
         Binding("q", "quit", "Quit"),
     ]
@@ -55,6 +54,7 @@ class HerdrMasterApp(App):
     }
     .main-body {
         height: 1fr;
+        width: 100%;
     }
     """
 
@@ -73,14 +73,12 @@ class HerdrMasterApp(App):
             self.app_state = AppState(session_name=self.session_name)
         self.client: Optional[HerdrClient] = None
         self._header = HeaderBar(self.app_state)
-        self._tree = HierarchyTree(self.app_state)
         self._deck = CenterDeck(self.app_state)
         self._footer = ActionFooter()
 
     def compose(self) -> ComposeResult:
         yield self._header
         with Horizontal(classes="main-body"):
-            yield self._tree
             yield self._deck
         yield self._footer
 
@@ -111,17 +109,13 @@ class HerdrMasterApp(App):
 
     def _update_all_widgets(self) -> None:
         self._header.update_state(self.app_state)
-        self._tree.update_state(self.app_state)
         self._deck.update_state(self.app_state)
 
     # --- Action Handlers ---
 
     def action_toggle_focus(self) -> None:
-        """Toggle focus between HierarchyTree and CenterDeck."""
-        if self._tree.has_focus:
-            self._deck.focus()
-        else:
-            self._tree.focus()
+        """Focus the CenterDeck."""
+        self._deck.focus()
 
     def action_new_master(self) -> None:
         """Open the Launch Herdr Master dialog."""
@@ -170,11 +164,18 @@ class HerdrMasterApp(App):
         self.push_screen(LaunchMasterModal(), _on_modal_dismiss)
 
     def action_new_ergo(self) -> None:
-        """Open the Launch Ergo Pipeline dialog."""
+        """Open the 2-column Squad Settings & Ergo Pipeline Launcher."""
+        self.action_open_settings()
+
+    def action_open_settings(self) -> None:
+        """Open the 2-column Squad Settings & Ergo Pipeline Launcher dialog."""
 
         async def _on_ergo_launch(params: ErgoLaunchParams) -> None:
-            if params.customize_squad_first:
-                self.action_open_config()
+            if params.squad:
+                self.app_state.squad = params.squad
+                self._update_all_widgets()
+
+            if not params.start_pipeline:
                 return
 
             self.notify(
@@ -223,6 +224,11 @@ class HerdrMasterApp(App):
         self, event: QuickLaunchBar.LaunchErgoRequested
     ) -> None:
         self.action_new_ergo()
+
+    def on_quick_launch_bar_open_settings_requested(
+        self, event: QuickLaunchBar.OpenSettingsRequested
+    ) -> None:
+        self.action_open_settings()
 
     def action_deck_mode(self, mode: int) -> None:
         """Switch center deck view mode (1..4)."""
