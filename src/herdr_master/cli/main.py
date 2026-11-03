@@ -14,13 +14,16 @@ console = Console()
 @app.command()
 def init(
     target_branch: str = typer.Option("develop", help="Target integration branch"),
-    session: str = typer.Option("hermes", help="Persistent Herdr session"),
+    session: str = typer.Option(
+        "default",
+        help="Persistent Herdr session (defaults to active existing or 'default')",
+    ),
 ):
     """Initialize .herdr-master workspace configuration and git develop branch."""
-    console.print(f"[green]✓[/green] Initializing Herdr-Master in current workspace...")
+    console.print("[green]✓[/green] Initializing Herdr-Master in current workspace...")
     console.print(f"  • Target integration branch: [cyan]{target_branch}[/cyan]")
     console.print(f"  • Herdr session: [cyan]{session}[/cyan]")
-    console.print(f"[green]✓[/green] Ready. Use 'herdm master start' or '/herdr-master' in a pane.")
+    console.print("[green]✓[/green] Ready. Use 'herdm master start' or '/herdr-master' in a pane.")
 
 
 @app.command()
@@ -33,10 +36,22 @@ def status():
 
 
 @app.command()
-def tui():
-    """Launch the interactive terminal dashboard (TUI)."""
-    console.print("[bold purple]Launching Herdr-Master TUI...[/bold purple]")
-    console.print("(TUI initialized. Press Ctrl+C or 'q' to exit)")
+def tui(
+    session: str = typer.Option(
+        "default",
+        help="Persistent Herdr session (defaults to active existing or 'default')",
+    ),
+    demo: bool = typer.Option(
+        False,
+        "--demo",
+        help="Run TUI in demo mode with pre-populated Ergo pipeline data",
+    ),
+):
+    """Launch the interactive terminal management dashboard (TUI)."""
+    from herdr_master.ui.tui.app import HerdrMasterApp
+
+    tui_app = HerdrMasterApp(session=session, demo=demo)
+    tui_app.run()
 
 
 if __name__ == "__main__":
