@@ -1,0 +1,71 @@
+[build-system]
+requires = ["hatchling"]
+build-backend = "hatchling.build"
+
+[project]
+name = "herdr-master"
+version = "0.1.0"
+description = "Universal multi-master, multi-worker cross-harness AI orchestrator and TUI built on Herdr"
+readme = "README.md"
+requires-python = ">=3.10"
+license = "MIT"
+authors = [
+    { name = "Herdr Master Team" }
+]
+keywords = [
+    "herdr",
+    "agent-orchestration",
+    "multi-agent",
+    "cross-harness",
+    "antigravity",
+    "claude-code",
+    "pi",
+    "opencode",
+    "tui",
+    "ergo"
+]
+classifiers = [
+    "Development Status :: 4 - Beta",
+    "Environment :: Console",
+    "Intended Audience :: Developers",
+    "License :: OSI Approved :: MIT License",
+    "Operating System :: POSIX :: Linux",
+    "Operating System :: MacOS :: MacOS X",
+    "Programming Language :: Python :: 3",
+    "Programming Language :: Python :: 3.10",
+    "Programming Language :: Python :: 3.11",
+    "Programming Language :: Python :: 3.12",
+    "Topic :: Software Development :: Build Tools",
+    "Topic :: Terminals",
+]
+dependencies = [
+    "rich>=13.7.0",
+    "textual>=0.52.0",
+    "typer[all]>=0.12.0",
+    "pydantic>=2.6.0",
+    "psutil>=5.9.0",
+    "tomli>=2.0.1;python_version<'3.11'",
+    "tomli-w>=1.0.0",
+]
+
+[project.optional-dependencies]
+dev = [
+    "pytest>=8.0.0",
+    "pytest-asyncio>=0.23.0",
+    "black>=24.0.0",
+    "ruff>=0.3.0",
+]
+
+[project.scripts]
+herdr-master = "herdr_master.cli.main:app"
+herdm = "herdr_master.cli.main:app"
+
+[tool.hatch.build.targets.wheel]
+packages = ["src/herdr_master"]
+
+[tool.ruff]
+line-length = 100
+target-version = "py310"
+
+[tool.ruff.lint]
+select = ["E", "F", "W", "I", "B"]
