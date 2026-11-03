@@ -6,6 +6,7 @@ from textual.app import App, ComposeResult
 from textual.binding import Binding
 from textual.containers import Horizontal
 
+from herdr_master.core.context import resolve_herdr_context
 from herdr_master.core.models import MasterSession, PipelinePhase, PipelineRun, WorkerState
 from herdr_master.core.state_machine import WorkerEvent, transition_worker_state
 from herdr_master.herdr.client import HerdrClient
@@ -127,6 +128,7 @@ class HerdrMasterApp(App):
             )
             target_ws_id = self.app_state.workspace_id or "default"
             target_pane_id = "p-master"
+            target_session = self.session_name
             if not self.demo and self.client:
                 try:
                     res = await launch_master(
@@ -138,10 +140,26 @@ class HerdrMasterApp(App):
                     )
                     target_ws_id = res.get("workspace_id", target_ws_id)
                     target_pane_id = res.get("pane_id", target_pane_id)
+                    target_session = res.get("session", target_session)
                     self.notify(
                         f"Master active in pane {target_pane_id}",
                         severity="information",
                     )
+                    ctx = resolve_herdr_context()
+                    if not ctx.is_inside_herdr:
+                        self.exit(
+                            result={"action": "attach", "session": target_session}
+                        )
+                        return
+                    else:
+                        self.exit(
+                            result={
+                                "action": "done",
+                                "session": target_session,
+                                "workspace_id": target_ws_id,
+                            }
+                        )
+                        return
                 except Exception as e:
                     self.notify(f"Herdr launch error: {e}", severity="error")
 
@@ -199,10 +217,26 @@ class HerdrMasterApp(App):
                     )
                     self.app_state.workspace_id = res.get("workspace_id")
                     self.app_state.workspace_label = params.workspace_label
+                    target_session = res.get("session", self.session_name)
                     self.notify(
                         f"Ergo pipeline active in workspace '{params.workspace_label}'",
                         severity="information",
                     )
+                    ctx = resolve_herdr_context()
+                    if not ctx.is_inside_herdr:
+                        self.exit(
+                            result={"action": "attach", "session": target_session}
+                        )
+                        return
+                    else:
+                        self.exit(
+                            result={
+                                "action": "done",
+                                "session": target_session,
+                                "workspace_id": self.app_state.workspace_id,
+                            }
+                        )
+                        return
                 except Exception as e:
                     self.notify(f"Ergo launch error: {e}", severity="error")
 
