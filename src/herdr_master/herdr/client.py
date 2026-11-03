@@ -74,6 +74,12 @@ class HerdrClient:
         resp = await self._rpc("workspace.close", params)
         return resp.get("result", {})
 
+    async def focus_workspace(self, workspace_id: str) -> Dict[str, Any]:
+        """Focus a specific workspace and bring it to foreground."""
+        params = {"workspace_id": workspace_id}
+        resp = await self._rpc("workspace.focus", params)
+        return resp.get("result", {})
+
     async def create_tab(
         self,
         workspace_id: Optional[str] = None,
@@ -96,6 +102,12 @@ class HerdrClient:
         """Close an existing tab."""
         params = {"tab_id": tab_id}
         resp = await self._rpc("tab.close", params)
+        return resp.get("result", {})
+
+    async def focus_tab(self, tab_id: str) -> Dict[str, Any]:
+        """Focus a specific tab within its workspace."""
+        params = {"tab_id": tab_id}
+        resp = await self._rpc("tab.focus", params)
         return resp.get("result", {})
 
     async def start_agent(
