@@ -69,11 +69,11 @@ class LaunchMasterModal(ModalScreen[Optional[MasterLaunchParams]]):
 
     def compose(self) -> ComposeResult:
         with Vertical(classes="modal-box"):
-            yield Static("👑 Launch New Herdr Master", classes="modal-title")
+            yield Static("👑 Launch New Herdr Master — Multiple Jobs", classes="modal-title")
             yield Static(
                 "Starts a dedicated Master Orchestrator session in a Herdr tab. "
-                "The Master receives jobs from you, isolates each job in its own "
-                "Git worktree, spawns worker tabs, and coordinates them.",
+                "The Master coordinates multiple independent jobs, isolates each job in its own "
+                "Git worktree, spawns worker tabs, and lands them serially.",
                 classes="modal-desc",
             )
 

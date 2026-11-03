@@ -58,36 +58,39 @@ class QuickLaunchBar(Static):
 
     def compose(self) -> ComposeResult:
         with Horizontal(classes="launch-container"):
-            # Card 1: New Herdr Master
+            # Card 1: New Herdr Master (Multiple Jobs)
             with Vertical(classes="launch-card"):
                 content = Text()
-                content.append("👑 New Herdr Master\n", style="bold cyan")
+                content.append("👑 New Herdr Master  ", style="bold cyan")
+                content.append("[Multiple Jobs]\n", style="bold yellow")
                 content.append(
-                    "A main herd coordinator that orchestrates multiple jobs across "
+                    "A main herd coordinator that orchestrates multiple independent jobs across "
                     "isolated Git worktrees and delegates to worker tabs.\n",
                     style="dim",
                 )
                 yield Static(content, classes="card-content")
                 with Horizontal(classes="card-actions"):
                     yield Button(
-                        "👑 New Herdr Master",
+                        "👑 New Herdr Master (Multiple Jobs)",
                         id="btn-new-master",
                         variant="primary",
                     )
 
-            # Card 2: New Ergo Pipeline
+            # Card 2: New Ergo Pipeline (Single Major Job)
             with Vertical(classes="launch-card-ergo"):
                 content = Text()
-                content.append("⚡ New Ergo Pipeline\n", style="bold magenta")
+                content.append("⚡ New Ergo Pipeline  ", style="bold magenta")
+                content.append("[Single Major Job]\n", style="bold green")
                 content.append(
-                    "A new workspace that orchestrates a new Ergo pipeline with "
-                    "multiple Herdr tabs, one for each agent.\n",
+                    "A dedicated workspace that orchestrates a single major job end-to-end "
+                    "with multiple Herdr tabs for each specialist agent "
+                    "(Scout → Architect → Coders → Reviewer).\n",
                     style="dim",
                 )
                 yield Static(content, classes="card-content")
                 with Horizontal(classes="card-actions"):
                     yield Button(
-                        "⚡ New Ergo Pipeline",
+                        "⚡ New Ergo Pipeline (Single Major Job)",
                         id="btn-new-ergo",
                         variant="success",
                     )
