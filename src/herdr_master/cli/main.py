@@ -14,6 +14,8 @@ except Exception:
 import typer
 from rich.console import Console
 
+from herdr_master.cli.skills import install_skills as run_install_skills
+from herdr_master.cli.skills import skills_app
 from herdr_master.core.config import load_project_config, squad_from_project_config
 from herdr_master.core.context import resolve_herdr_context
 from herdr_master.core.models import HarnessKind
@@ -30,6 +32,7 @@ pipeline_app = typer.Typer(help="Manage and run cross-harness Ergo pipelines (Si
 
 app.add_typer(master_app, name="master")
 app.add_typer(pipeline_app, name="pipeline")
+app.add_typer(skills_app, name="skills")
 
 console = Console()
 
@@ -171,6 +174,19 @@ def tui(
     elif isinstance(result, dict) and result.get("action") == "done":
         ws_id = result.get("workspace_id")
         console.print(f"[green]✓[/green] Active in workspace [cyan]{ws_id}[/cyan]")
+
+
+@app.command("install")
+def install_cmd(
+    force: bool = typer.Option(
+        True,
+        "--force/--no-force",
+        "-f",
+        help="Overwrite or update existing symlinks",
+    ),
+) -> None:
+    """Install standalone /herdr-master and /ergo skills across all 4 agent harnesses."""
+    run_install_skills(force=force)
 
 
 if __name__ == "__main__":

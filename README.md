@@ -7,7 +7,7 @@
 [![Python: 3.10+](https://img.shields.io/badge/python-3.10+-3776AB.svg?logo=python&logoColor=white)](https://www.python.org/downloads/)
 [![Herdr: v0.9.5+](https://img.shields.io/badge/herdr-v0.9.5+-8A2BE2.svg)](https://herdr.dev)
 [![TUI: Textual](https://img.shields.io/badge/TUI-Textual%208.x-00D4AA.svg)](https://textual.textualize.io/)
-[![Tests: 31 passed](https://img.shields.io/badge/tests-31%20passed-success.svg)](#-testing--verification)
+[![Tests: 35 passed](https://img.shields.io/badge/tests-35%20passed-success.svg)](#-testing--verification)
 [![Code style: ruff](https://img.shields.io/badge/code%20style-ruff-000000.svg)](https://github.com/astral-sh/ruff)
 
 ---
@@ -173,20 +173,27 @@ Verify your installation:
 herdm --help
 ```
 
-### Option 2: Herdr Plugin / Agent Skill Installation
+### Option 2: Standalone Skills & Slash Commands Across All 4 Harnesses
 
-Install the canonical `/herdr-master` skill into all local agent harnesses (`agy`, `pi`, `claude`):
+Install canonical `/herdr-master` and `/ergo` skills & slash commands across all local agent harnesses (**Antigravity**, **Pi**, **Claude Code**, and **OpenCode**):
 
 ```bash
-cd herdr-master
-chmod +x scripts/install-skill.sh
-./scripts/install-skill.sh
+# Using herdm CLI:
+herdm install
+# (or herdm skills install)
+
+# Or via zero-dependency shell script:
+./scripts/install-skills.sh
 ```
 
-Now, inside any Herdr pane with `HERDR_ENV=1`, invoke directly:
+Inspect active installed skills & commands across all harnesses at any time:
 ```bash
-/herdr-master "Refactor auth middleware to use Redis session store"
+herdm skills list
 ```
+
+Now, inside **any** interactive session or Herdr pane across all 4 harnesses, invoke directly:
+* **`/herdr-master [task]`** — Launch root master orchestrator for multiple concurrent jobs
+* **`/ergo [--herdr] [intent]`** — Launch phased pipeline (Scout→Architect→Pool→Reviewer)
 
 ---
 
@@ -236,7 +243,7 @@ herdm init --target-branch develop
 The project includes an automated test suite covering state machines, framing protocols, launcher lifecycles, and Textual pilot interactions:
 
 ```bash
-# Run full test suite (31 passed)
+# Run full test suite (35 passed)
 uv run pytest tests/
 
 # Code quality check with Ruff
@@ -244,7 +251,7 @@ uv run ruff check .
 ```
 
 ```text
-============================== 31 passed in 6.06s ==============================
+============================== 35 passed in 6.59s ==============================
 ```
 
 ---
