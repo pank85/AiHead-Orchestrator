@@ -18,38 +18,97 @@
 
 Whether coordinating multiple background jobs simultaneously or driving a structured multi-stage coding pipeline, Herdr-Master connects different agent harnesses (**Antigravity**, **Pi**, **Claude Code**, and **OpenCode**) under a unified protocol with strict Git worktree sandboxing.
 
-### 🌟 Key Highlights
+---
 
-1. **Dual Orchestration Modes**:
-   - **`👑 New Herdr Master` (Multiple Jobs)**: A persistent root orchestrator that delegates diverse subtasks to parallel workers and subordinate sub-masters across isolated Herdr tabs.
-   - **`⚡ New Ergo Pipeline` (Single Major Job)**: An end-to-end phased pipeline (`Scout` → `Architect` → `Parallel Coders` → `Reviewer` → `Squash Integration`) designed to conquer a complex objective.
-2. **Interactive TUI Cockpit & 2-Column Squad Editor**:
-   - **Full-Width Landing Deck**: A clean, 100% full-width first page with 3 quick-launch action cards.
-   - **2-Column Settings Modal**: 
-     - **Top 75%**: Squad Topology Tree (left) + Live Agent Detail Editor (right) for harness, model, reasoning effort, and worker pool scaling.
-     - **Bottom 25%**: Objective prompt input, workspace label, and immediate execution buttons.
-3. **Session Isolation & Seamless Focus**:
-   - **Outside Herdr**: Automatically boots a dedicated, isolated named session (`herdr --session ergo-...`) hiding unrelated workspaces and projects, then immediately attaches to provide an uncluttered view.
-   - **Inside Herdr**: Seamlessly registers the worker tab within the active session, invoking `workspace.focus` and `tab.focus` RPC endpoints so your viewport instantly tracks the active agent without terminal freeze.
-4. **Cross-Harness Interoperability (IHCP)**:
-   - Mix and match agent harnesses within the same workflow (e.g., Scout on Gemini Flash via `agy`, Architect on Grok 4.7 via `pi`, parallel Coders on Codex & Claude Sonnet, and Reviewer on Gemini Argon).
-5. **Git Worktree Isolation & Mandatory Review Gate**:
-   - Every worker operates in an isolated temporary Git worktree (`herdm/<job>-<timestamp>`). No agent touches the primary working tree.
-   - All changes must pass a cumulative blind diff review before squash-landing to `develop`.
-   - **Zero `git reset --hard`**: Preserves code integrity at all times.
+## ⚡ Standalone Skills & Slash Commands (All 4 Harnesses)
+
+Herdr-Master ships with **first-class, standalone agent skills and slash commands** that can be installed directly into all four supported agent harnesses (**Antigravity**, **Pi**, **Claude Code**, and **OpenCode**). 
+
+### 🎯 The Two Standalone Capabilities
+
+#### 1. `/herdr-master [task]` — Persistent Root Orchestrator (Multiple Jobs)
+* **Works with OR without an initial prompt**:
+  * You can invoke `/herdr-master` **completely blank without a prompt**. The Master will initialize, inspect the Herdr workspace, verify Git repository state (ensuring the `develop` integration branch is ready), and confirm that orchestration is active.
+  * It will prompt: *"Orchestration is active. What is your first job?"*
+  * It stays alive in your workspace as a long-running supervisor. You can assign jobs interactively throughout your session whenever needed.
+* **Autonomous Delegation & Sandboxing**:
+  * For each task you delegate, the Master creates an isolated Git worktree branched from `develop`.
+  * It opens a dedicated Herdr tab with the optimal harness and model for that task.
+  * It monitors workers reactively using native async watchers (zero polling loops).
+  * It runs a mandatory **Master Final Review Gate** on the cumulative diff, sending remediation requests if needed, and safely lands approved changes via squash merge into `develop`.
+  * **Zero `git reset --hard`**: Your main working tree remains untouched and protected.
+
+#### 2. `/ergo [--herdr] [--models ...] [intent]` — Phased Pipeline (Single Major Job)
+* **Structured Multi-Stage Execution**:
+  * Runs a rigid, high-assurance pipeline: `Scout` (reconnaissance) → `Architect` (system design & work breakdown) → `Parallel Coders` (isolated worktree implementations) → `Reviewer` (blind diff review gate) → `Squash Integration`.
+* **Dual Execution Modes**:
+  * **Native Subagent Mode**: Executes using the parent harness's native subagent tool (`define_subagent` in `agy`, background agents in `pi` / `claude`, or native `subagent` in `opencode`).
+  * **`--herdr` Cross-Harness Mode**: Executes every pipeline role as an interactive Herdr tab in a temporary workspace, letting you mix and match engines (e.g. Gemini Flash for Scout, Grok 4.7 for Architect, Codex & Claude for Coders, and Gemini Argon for Reviewer).
+
+---
+
+### 📦 1-Command Installation Across All Harnesses
+
+Install both canonical `/herdr-master` and `/ergo` skills & slash commands across all installed harnesses with a single command:
+
+```bash
+# Using the herdm CLI:
+herdm install
+# (or: herdm skills install)
+
+# Or using the zero-dependency shell script:
+./scripts/install-skills.sh
+```
+
+### 🗺️ Multi-Harness Integration Matrix
+
+The installer automatically detects and symlinks canonical skill definitions into the native directories of all 4 harnesses:
+
+| Harness | Skill Type | Destination Path | Available Command |
+| :--- | :--- | :--- | :--- |
+| **Antigravity (`agy`)** | Native Skill | `~/.gemini/config/skills/herdr-master/SKILL.md`<br/>`~/.gemini/config/skills/ergo/SKILL.md` | `/herdr-master`<br/>`/ergo` |
+| **Pi (`pi`)** | Prompt / Slash Command | `~/.pi/agent/prompts/herdr-master.md`<br/>`~/.pi/agent/prompts/ergo.md` | `/herdr-master`<br/>`/ergo` |
+| **Claude Code (`claude`)** | Custom Slash Command | `~/.claude/commands/herdr-master.md`<br/>`~/.claude/commands/ergo.md` | `/herdr-master`<br/>`/ergo` |
+| **OpenCode (`opencode`)** | Skill & Command | `~/.config/opencode/skills/`<br/>`~/.config/opencode/commands/` | `/herdr-master`<br/>`/ergo` |
+
+### 🔍 Inspect Installation Status
+
+You can inspect the live status of all installed skill endpoints at any time:
+
+```bash
+herdm skills list
+```
+
+```text
+                👑 Herdr-Master & Ergo Standalone Harness Skills                
+┏━━━━━━━━━━━━━━━━━━━━━━┳━━━━━━━━━━━━━━━━┳━━━━━━━━━┳━━━━━━━━━━━━━━━━━┳━━━━━━━━━━┓
+┃ Harness              ┃ Command / Role ┃ Type    ┃ Installed Path  ┃  Status  ┃
+┡━━━━━━━━━━━━━━━━━━━━━━╇━━━━━━━━━━━━━━━━╇━━━━━━━━━╇━━━━━━━━━━━━━━━━━╇━━━━━━━━━━┩
+│ Antigravity (agy)    │ /herdr-master  │ skill   │ ~/.gemini/...   │ ✓ Active │
+│ Pi (pi)              │ /herdr-master  │ command │ ~/.pi/...       │ ✓ Active │
+│ Claude Code (claude) │ /herdr-master  │ command │ ~/.claude/...   │ ✓ Active │
+│ OpenCode (opencode)  │ /herdr-master  │ skill   │ ~/.config/...   │ ✓ Active │
+│ OpenCode (opencode)  │ /herdr-master  │ command │ ~/.config/...   │ ✓ Active │
+│ Antigravity (agy)    │ /ergo          │ skill   │ ~/.gemini/...   │ ✓ Active │
+│ Pi (pi)              │ /ergo          │ command │ ~/.pi/...       │ ✓ Active │
+│ Claude Code (claude) │ /ergo          │ command │ ~/.claude/...   │ ✓ Active │
+│ OpenCode (opencode)  │ /ergo          │ skill   │ ~/.config/...   │ ✓ Active │
+│ OpenCode (opencode)  │ /ergo          │ command │ ~/.config/...   │ ✓ Active │
+└──────────────────────┴────────────────┴─────────┴─────────────────┴──────────┘
+```
 
 ---
 
 ## 🖥️ Interactive TUI Cockpit
 
-Launch the interactive terminal dashboard at any time:
+Herdr-Master also features a standalone interactive terminal management cockpit built on Textual:
 
 ```bash
 herdm tui
 ```
 
 ### 1. Main Cockpit Screen (Full-Width Landing View)
-The primary landing view gives an uncluttered, high-density dashboard with three prominent quick-launch cards:
+The landing view gives an uncluttered, 100% full-width dashboard with three prominent quick-launch cards:
 
 ```text
 ┌────────────────────────────────────────────────────────────────────────────────────────┐
@@ -152,9 +211,9 @@ Define any agent using the compact slug format: `<harness>:<model>[:<effort>]`
 
 ---
 
-## 🚀 Quickstart & Installation
+## 🚀 Quickstart & Installation (CLI)
 
-### Option 1: Standalone CLI & TUI Installation (Recommended)
+### Standalone CLI Installation
 
 ```bash
 # Clone repository
@@ -172,28 +231,6 @@ Verify your installation:
 ```bash
 herdm --help
 ```
-
-### Option 2: Standalone Skills & Slash Commands Across All 4 Harnesses
-
-Install canonical `/herdr-master` and `/ergo` skills & slash commands across all local agent harnesses (**Antigravity**, **Pi**, **Claude Code**, and **OpenCode**):
-
-```bash
-# Using herdm CLI:
-herdm install
-# (or herdm skills install)
-
-# Or via zero-dependency shell script:
-./scripts/install-skills.sh
-```
-
-Inspect active installed skills & commands across all harnesses at any time:
-```bash
-herdm skills list
-```
-
-Now, inside **any** interactive session or Herdr pane across all 4 harnesses, invoke directly:
-* **`/herdr-master [task]`** — Launch root master orchestrator for multiple concurrent jobs
-* **`/ergo [--herdr] [intent]`** — Launch phased pipeline (Scout→Architect→Pool→Reviewer)
 
 ---
 
@@ -215,6 +252,10 @@ herdm ergo "Add WebSocket notification server" \
 
 ### 2. Launch Root Herdr Master (Multiple Jobs)
 ```bash
+# Launch without task (wait for interactive delegation)
+herdm master start backend-lead
+
+# Or launch with an initial task
 herdm master start backend-lead \
   --harness agy \
   --model gemini-4-argon-high \
@@ -240,7 +281,7 @@ herdm init --target-branch develop
 
 ## 🧪 Testing & Verification
 
-The project includes an automated test suite covering state machines, framing protocols, launcher lifecycles, and Textual pilot interactions:
+The project includes an automated test suite covering state machines, framing protocols, launcher lifecycles, standalone skills installer, and Textual pilot interactions:
 
 ```bash
 # Run full test suite (35 passed)
