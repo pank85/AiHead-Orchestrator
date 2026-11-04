@@ -127,7 +127,7 @@ async def test_unconfigured_tui_matches_resolver_cli_and_launch(tmp_path: Path):
     assert app.app_state.pipeline_run.metadata["pane_id"] == "w-live:orch"
     assert app.app_state.pipeline_run.metadata["orchestrator_pane_id"] == "w-live:orch"
     assert "scout_pane_id" not in app.app_state.pipeline_run.metadata
-    assert app.return_value == {"action": "attach", "session": "ergo-worker"}
+    assert app.return_value is None
 
 
 @pytest.mark.asyncio
@@ -273,7 +273,9 @@ async def test_master_dialog_scout_medium_override_and_custom_model(tmp_path: Pa
     assert app.app_state.masters
     master = next(iter(app.app_state.masters.values()))
     assert master.pane_id == "w-live:master"
-    assert app.return_value["action"] == "done"
+    assert app.return_value is None
+    assert kwargs["fresh_workspace"] is True
+    assert kwargs["focus"] is False
 
 
 @pytest.mark.asyncio

@@ -105,56 +105,67 @@ herdm tui
 ```
 
 ### 1. Main Cockpit Screen (Full-Width Landing View)
-The landing view gives an uncluttered, 100% full-width dashboard with three prominent quick-launch cards:
+The default **[0] Workspaces** view is a full-width control panel. It discovers the
+current socket, the default session, and named local sessions under
+`~/.config/herdr/sessions/`, refreshing every three seconds without blocking input.
+
+- Click a workspace to expand its agents and terminal panes; arrow keys and Enter work too.
+- Status icons distinguish **● running**, **! blocked**, **○ idle**, **✓ done**, and **? unknown**.
+- Click an agent to focus its workspace, tab, and exact pane. Within the current Herdr
+  session the cockpit stays open; outside Herdr (or when switching sessions), the CLI
+  attaches to that session after focusing the agent.
+- Offline sessions are marked explicitly; retained snapshots are marked **stale** and
+  cannot be navigated to. Demo mode is labeled and never controls live panes.
+- **[3] Pipeline** retains the compact role summaries, worker pool, and task table.
+- **New Master** and **New Ergo** both offer a **Project folder** field and **Browse…**
+  directory picker. Type a path (including `~`) or select a folder; each launch opens
+  a fresh workspace with that project as its working directory. The cockpit stays
+  open after launching, so one TUI can manage jobs across multiple projects.
+- In **New Ergo / Squad Settings**, changing folders reloads that project's squad
+  defaults (discarding unsaved squad edits). **Save Default** writes only to the
+  selected project's `.herdr-master.toml`. Invalid folders or settings block launch;
+  selecting another valid project lets you continue.
 
 ```text
-┌────────────────────────────────────────────────────────────────────────────────────────┐
-│ 👑 HERDR-MASTER COCKPIT        [● CONNECTED]  Workspaces: 1  Agents: 0    17:30       │
-├────────────────────────────────────────────────────────────────────────────────────────┤
-│                                                                                        │
-│  ╭─ 👑 New Herdr Master ──╮  ╭─ ⚡ New Ergo Pipeline ──╮  ╭─ ⚙️ Configure Squad ─────╮  │
-│  │ Multiple Jobs           │  │ Single Major Job        │  │ Default Harness & Squad  │  │
-│  │ Main orchestrator that  │  │ Dedicated workspace &   │  │ Configure default roles, │  │
-│  │ delegates to multiple   │  │ multi-tab Ergo pipeline │  │ harnesses, models and    │  │
-│  │ worker tabs & squads.   │  │ (Scout→Architect→Pool). │  │ worker squad topology.   │  │
-│  │                         │  │                         │  │                          │  │
-│  │  [ 👑 Launch Master ]   │  │  [ ⚡ Launch Ergo ]     │  │  [ ⚙️ Configure Squad ]  │  │
-│  ╰─────────────────────────╯  ╰─────────────────────────╯  ╰──────────────────────────╯  │
-│                                                                                        │
-│  [1] Pipeline Graph    [2] Cumulative Diff    [3] Agent Output Streamer                │
-└────────────────────────────────────────────────────────────────────────────────────────┘
-│ [n] New Master  [e] New Ergo  [s/c] Settings  [1..4] View Modes  [q] Quit              │
-└────────────────────────────────────────────────────────────────────────────────────────┘
+ [0] Workspaces  [1] Output  [2] Diff  [3] Pipeline  [4] Mailbox
+ [ New Master ]           [ New Ergo ]           [ Squad Settings ]
+ 2/2 sessions online · 3 workspaces · 4 agents
+ ▼ ● running  project-a · default · 2 panes
+   ├── ● running  Builder · Implement · w1:p1 · /projects/project-a
+   └── ○ idle     Reviewer · Review · w1:p2 · /projects/project-a
+ ▶ ○ idle  project-b · default · 1 pane
+ ▶ ● running  backend · ergo-backend · 1 pane
+
+ [n] New Master  [e] New Ergo  [s/c] Settings  [0-4] Views  [q] Quit
 ```
 
 ---
 
 ### 2. 2-Column Squad Topology & Dynamic Capability Editor
-Press `[ ⚡ New Ergo Pipeline ]`, `[ ⚙️ Configure Squad ]`, or keys `e` / `s`:
+Press `[ New Ergo ]`, `[ Squad Settings ]`, or keys `e` / `s`:
+
+Squad options use two columns beside a compact topology tree. Configuration height
+is capped, leaving extra terminal rows for the multiline prompt. The layout adapts
+on resize: narrower trees and buttons on small screens, stacked options below 72
+columns, and scrollable settings when necessary. Enter inserts a prompt line; Tab
+moves from the prompt to the actions.
 
 ```text
-┌─ ⚡ ERGO SQUAD TOPOLOGY & PIPELINE LAUNCHER ───────────────────────────────────────────┐
-│                                                                                        │
-│ ┌─ Top 75%: Squad Configuration ─────────────────────────────────────────────────────┐ │
-│ │  Topology Tree (Left Column)           │  Agent Details (Right Column)              │ │
-│ │                                        │                                            │ │
-│ │  👑 Herdr-Master Root                  │  Worker Pool: worker-1 (Position #1)       │ │
-│ │  ├── ● Scout (agy:gemini-3.8-flash)    │  Harness:     [ agy ▼ ]                    │ │
-│ │  ├── ● Architect (pi:codex/gpt-6.1)    │  Model:       [ gemini-3.8-flash         ] │ │
-│ │  ├── 📦 Worker Pool (2 workers)        │  Effort:      (Decided dynamically per task│ │
-│ │  │   ├── ↳ worker-1 (agy:flash)        │  Name:        [ worker-1                 ] │ │
-│ │  │   └── ↳ worker-2 (pi:xai/grok-4.7)  │  Capability:  [ Junior dev - Fast edits  ] │ │
-│ │  └── ● Reviewer (pi:xai/grok-4.7)      │                                            │ │
-│ │                                        │  [+ Add Worker]  [- Remove] [↑ Up] [↓ Down]│ │
-│ └────────────────────────────────────────┴────────────────────────────────────────────┘ │
-│                                                                                        │
-│ ┌─ Bottom 25%: Execution Deck ───────────────────────────────────────────────────────┐ │
-│ │  Objective Prompt: [ Implement OAuth2 SSO & JWT authentication                  ]  │ │
-│ │  Workspace Label:  [ ergo-auth-pipeline     ]                                      │ │
-│ │                                                                                    │ │
-│ │  [ ⚡ Start Ergo Pipeline ]         [ 💾 Save Default ]          [ Cancel ]        │ │
-│ └────────────────────────────────────────────────────────────────────────────────────┘ │
-└────────────────────────────────────────────────────────────────────────────────────────┘
+┌─ Squad Settings & Ergo Pipeline Launcher ─────────────────────────────┐
+│ Topology             │ Scout Role Configuration                     │
+│ ├─ Scout             │ Harness [ agy ▼ ]     Model [ gemini-… ]      │
+│ ├─ Architect         │ Effort  [ Medium ▼ ]  Role  [ scout    ]      │
+│ ├─ Worker Pool       │                                              │
+│ └─ Reviewer          │                                              │
+├─────────────────────────────────────────────────────────────────────┤
+│ Project folder: [ /projects/my-app ] [Browse…] Workspace: [ergo-app] │
+│ Feature objective / prompt:                         [ Start Ergo  ] │
+│ ┌─────────────────────────────────────────────────┐ [ Save Default] │
+│ │ Implement OAuth2 SSO.                            │ [ Cancel      ] │
+│ │ Include tests and migration notes.               │                 │
+│ │                                                 │                 │
+│ └─────────────────────────────────────────────────┘                 │
+└─────────────────────────────────────────────────────────────────────┘
 ```
 
 > **Dynamic Worker Capability Model**:

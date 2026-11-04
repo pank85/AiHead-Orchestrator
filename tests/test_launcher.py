@@ -1,6 +1,7 @@
 """Launcher adopts inherited sessions and hands off the canonical skill."""
 
 import json
+import re
 from pathlib import Path
 from unittest.mock import AsyncMock, patch
 
@@ -88,9 +89,22 @@ def _client():
         "root_pane": {"pane_id": "w9:p2"},
         "tab": {"tab_id": "w9:t2"},
     }
-    client.start_agent.return_value = {"type": "agent_started"}
+    async def start_agent(**kwargs):
+        # Mirror Herdr's RPC validation; a permissive AsyncMock hid invalid names.
+        if re.fullmatch(r"[a-z][a-z0-9_-]{0,31}", kwargs["name"]) is None:
+            raise ValueError(
+                "agent name must start with a lowercase letter and contain only "
+                "lowercase letters, digits, '-' or '_' (1-32 characters)"
+            )
+        return {"type": "agent_started"}
+
+    client.start_agent.side_effect = start_agent
     client.prompt_agent.return_value = {"type": "ok"}
     return client
+
+
+def _rpc_args(cli_args: list[str]) -> list[str]:
+    return cli_args[cli_args.index("--") + 1 :]
 
 
 def test_build_agent_args_product_routes():
@@ -149,7 +163,8 @@ async def test_launch_master_no_override_uses_catalog_scout():
     assert res["session"] == "alpha"
     assert res["harness"] == "agy"
     assert res["model"] == "gemini-3.8-flash-medium"
-    assert client.start_agent.await_args.kwargs["args"] == SCOUT_ARGS
+    assert client.start_agent.await_args.kwargs["kind"] == "agy"
+    assert client.start_agent.await_args.kwargs["args"] == _rpc_args(SCOUT_ARGS)
     prompt = client.prompt_agent.await_args.args[1]
     assert prompt.startswith(load_skill_body("herdr-master").rstrip("\n"))
     assert prompt != "/herdr-master Audit codebase"
@@ -174,7 +189,8 @@ async def test_launch_master_claude_uses_prompt_prefix_not_effort_flag():
         )
     args = client.start_agent.await_args.kwargs["args"]
     prompt = client.prompt_agent.await_args.args[1]
-    assert args[:3] == ["--kind", "claude", "--"]
+    assert client.start_agent.await_args.kwargs["kind"] == "claude"
+    assert args[0] != "--kind"
     assert "--effort" not in args
     assert "--thinking" not in args
     assert "--dangerously-skip-permissions" in args
@@ -202,9 +218,10 @@ async def test_launch_ergo_adopts_workspace_and_names_orchestrator():
     assert res["owns_workspace"] is False
     assert res["session"] == "alpha"
     assert res["socket"] == "/tmp/sessions/alpha/herdr.sock"
-    assert res["agent_name"] == ORCHESTRATOR_NAME
+    assert res["agent_name"] == ORCHESTRATOR_NAME == "ergo-orchestrator"
     assert client.start_agent.await_args.kwargs["name"] == ORCHESTRATOR_NAME
-    assert client.start_agent.await_args.kwargs["args"] == SCOUT_ARGS
+    assert client.start_agent.await_args.kwargs["kind"] == "agy"
+    assert client.start_agent.await_args.kwargs["args"] == _rpc_args(SCOUT_ARGS)
     assert client.create_tab.await_args.kwargs["label"] == ORCHESTRATOR_NAME
     prompt = client.prompt_agent.await_args.args[1]
     body = load_skill_body("ergo").rstrip("\n")
@@ -306,10 +323,42 @@ async def test_launch_ergo_outside_uses_wrapper_and_does_not_close():
     assert res["session"] == "ergo-worker"
     assert res["owns_workspace"] is True
     assert res["pane_id"] == res["scout_pane_id"] == "w_new:p1"
-    assert client.start_agent.await_args.kwargs["args"] == ARCHITECT_ARGS
+    assert client.start_agent.await_args.kwargs["kind"] == "pi"
+    assert client.start_agent.await_args.kwargs["args"] == _rpc_args(ARCHITECT_ARGS)
     assert client.start_agent.await_args.kwargs["name"] == ORCHESTRATOR_NAME
     client.close_tab.assert_not_called()
     client.close_workspace.assert_not_called()
+
+
+@pytest.mark.asyncio
+async def test_inside_fresh_workspace_does_not_touch_inherited_workspace():
+    client = _client()
+    client.create_workspace.return_value = {
+        "workspace": {"workspace_id": "w_new"},
+        "root_pane": {"pane_id": "w_new:p1"},
+        "tab": {"tab_id": "w_new:t1"},
+    }
+    ctx = _inside()
+    with patch("herdr_master.pipeline.launcher.resolve_herdr_context", return_value=ctx):
+        res = await launch_ergo(
+            client=client,
+            intent="Deploy service",
+            workspace_label="ergo-fresh",
+            squad=Squad(),
+            cwd="/tmp/repo",
+            fresh_workspace=True,
+            focus=False,
+        )
+    assert res["workspace_id"] == "w_new"
+    assert res["owns_workspace"] is True
+    assert res["session"] == "alpha"
+    client.create_workspace.assert_awaited_once()
+    assert client.create_workspace.await_args.kwargs["focus"] is False
+    assert client.create_workspace.await_args.kwargs["label"] == "ergo-fresh"
+    client.create_tab.assert_not_called()
+    client.focus_workspace.assert_not_called()
+    client.focus_tab.assert_not_called()
+    assert client.start_agent.await_args.kwargs["args"] == _rpc_args(SCOUT_ARGS)
 
 
 @pytest.mark.asyncio

@@ -1,16 +1,14 @@
-"""Dedicated Ergo Pipeline View widget with Role Cards, Worker Pool, DAG, and Gates."""
+"""Dedicated Ergo Pipeline View widget with role cards, worker pool, and DAG."""
 
-from rich.panel import Panel
 from rich.table import Table
 from rich.text import Text
 from textual.app import ComposeResult
 from textual.containers import Horizontal, VerticalScroll
-from textual.widgets import Button, Static
+from textual.widgets import Static
 
 from herdr_master.core.models import PipelinePhase
 from herdr_master.ui.tui.state import AppState
 from herdr_master.ui.tui.widgets.dag import TaskDAGWidget
-from herdr_master.ui.tui.widgets.quick_launch import QuickLaunchBar
 
 
 class RoleCardWidget(Static):
@@ -20,10 +18,10 @@ class RoleCardWidget(Static):
     RoleCardWidget {
         width: 1fr;
         height: auto;
-        margin: 0 1;
+        margin: 0;
         padding: 0 1;
         background: #181818;
-        border: solid #333333;
+        border-left: solid #333333;
     }
     """
 
@@ -71,14 +69,14 @@ class RoleCardWidget(Static):
             )
 
         text = Text()
-        text.append(f"👑 {self.role_name.upper()}\n", style="bold cyan")
-        text.append(f"Binding: {binding.to_slug()}\n", style="bold white")
-        text.append(f"Status:  [{badge}]\n", style=f"bold {badge_color}")
-        text.append(f"Output:  {artifact}\n", style="dim")
+        text.append(f"{self.role_name.upper()} ", style="bold cyan")
+        text.append(f"[{badge}]\n", style=f"bold {badge_color}")
+        text.append(f"{binding.to_slug()}\n", style="bold white")
+        text.append(artifact, style="dim")
         if warning:
-            text.append(f"{warning}\n", style="bold yellow")
+            text.append(f"\n{warning}", style="bold yellow")
 
-        self.update(Panel(text, border_style=badge_color))
+        self.update(text)
 
 
 class WorkerPoolStripWidget(Static):
@@ -87,9 +85,8 @@ class WorkerPoolStripWidget(Static):
     DEFAULT_CSS = """
     WorkerPoolStripWidget {
         height: auto;
-        margin: 1 0;
+        margin: 1 0 0 0;
         background: #141414;
-        border: solid #333333;
         padding: 0 1;
     }
     """
@@ -110,16 +107,18 @@ class WorkerPoolStripWidget(Static):
         run = self.app_state.pipeline_run
 
         table = Table(
-            title="[bold cyan]Ordered Specialist Worker Pool[/bold cyan]",
+            title="[bold cyan]Worker Pool[/bold cyan]",
+            box=None,
+            pad_edge=False,
             title_justify="left",
             border_style="dim",
             expand=True,
             show_header=True,
             header_style="bold magenta",
         )
-        table.add_column("#", width=4, style="bold")
-        table.add_column("Binding Slug", width=36)
-        table.add_column("Capability Label", width=22)
+        table.add_column("#", width=2, style="bold")
+        table.add_column("Binding Slug", ratio=2)
+        table.add_column("Capability Label", ratio=1)
         table.add_column("Assigned Tasks", style="bold green")
 
         for idx, worker in enumerate(squad.worker_pool):
@@ -136,46 +135,13 @@ class WorkerPoolStripWidget(Static):
         self.update(table)
 
 
-class ApprovalGateBar(Static):
-    """Action bar for Approval Gate (Proceed / Edit Plan / Abort)."""
-
-    DEFAULT_CSS = """
-    ApprovalGateBar {
-        height: 3;
-        margin-top: 1;
-        background: #1c1c1c;
-        border-top: solid cyan;
-        padding: 0 1;
-        align: center middle;
-    }
-    ApprovalGateBar Button {
-        margin: 0 2;
-    }
-    """
-
-    def __init__(self, is_enabled: bool = True, **kwargs) -> None:
-        super().__init__(**kwargs)
-        self.is_enabled = is_enabled
-
-    def compose(self) -> ComposeResult:
-        with Horizontal():
-            yield Button(
-                "Proceed (Approval Gate)",
-                id="btn-proceed",
-                variant="success",
-                disabled=not self.is_enabled,
-            )
-            yield Button("Edit Plan", id="btn-edit-plan", variant="primary")
-            yield Button("Abort Pipeline", id="btn-abort", variant="error")
-
-
 class PipelineView(VerticalScroll):
-    """The complete Ergo cockpit view featuring roles, pool, DAG, and gates."""
+    """The Ergo cockpit view featuring roles, worker pool, and task DAG."""
 
     DEFAULT_CSS = """
     PipelineView {
         height: 1fr;
-        padding: 1;
+        padding: 0 1;
     }
     .cards-container {
         height: auto;
@@ -185,23 +151,19 @@ class PipelineView(VerticalScroll):
     def __init__(self, app_state: AppState, **kwargs) -> None:
         super().__init__(**kwargs)
         self.app_state = app_state
-        self._quick_launch = QuickLaunchBar()
         self._scout_card = RoleCardWidget("Scout", app_state)
         self._architect_card = RoleCardWidget("Architect", app_state)
         self._reviewer_card = RoleCardWidget("Reviewer", app_state)
         self._pool_strip = WorkerPoolStripWidget(app_state)
         self._dag = TaskDAGWidget(app_state.pipeline_run)
-        self._gate_bar = ApprovalGateBar(is_enabled=len(app_state.squad.worker_pool) > 0)
 
     def compose(self) -> ComposeResult:
-        yield self._quick_launch
         with Horizontal(classes="cards-container"):
             yield self._scout_card
             yield self._architect_card
             yield self._reviewer_card
         yield self._pool_strip
         yield self._dag
-        yield self._gate_bar
 
     def update_state(self, app_state: AppState) -> None:
         self.app_state = app_state

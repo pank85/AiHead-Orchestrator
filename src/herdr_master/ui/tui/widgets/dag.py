@@ -16,7 +16,7 @@ class TaskDAGWidget(Static):
         height: auto;
         padding: 0 1;
         background: #141414;
-        border: solid #333333;
+        margin-top: 1;
     }
     """
 
@@ -37,18 +37,20 @@ class TaskDAGWidget(Static):
             return
 
         table = Table(
-            title="[bold cyan]Ergo Pipeline Task DAG[/bold cyan]",
+            title="[bold cyan]Pipeline Tasks[/bold cyan]",
+            box=None,
+            pad_edge=False,
             title_justify="left",
             border_style="dim",
             expand=True,
             show_header=True,
             header_style="bold magenta",
         )
-        table.add_column("Task ID", style="bold white", width=12)
-        table.add_column("Status", width=16)
-        table.add_column("Dependency", width=18)
-        table.add_column("Assigned Specialist", width=28)
-        table.add_column("Files", style="dim")
+        table.add_column("Task", style="bold white", ratio=1)
+        table.add_column("Status", ratio=1)
+        table.add_column("Dependency", ratio=1)
+        table.add_column("Specialist", ratio=2)
+        table.add_column("Files", style="dim", ratio=2)
 
         for task in self.run.tasks:
             color = STATE_COLORS.get(task.status, "white")

@@ -23,7 +23,7 @@ class ActionFooter(Static):
             ("n", "New Master"),
             ("e", "New Ergo"),
             ("s/c", "Settings"),
-            ("1-4", "Views"),
+            ("0-4", "Views"),
             ("p", "Prompt"),
             ("r", "Review"),
             ("m", "Squash"),

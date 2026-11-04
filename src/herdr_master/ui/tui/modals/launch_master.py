@@ -1,5 +1,6 @@
 """Modal screen to launch a new Herdr Master session."""
 
+from pathlib import Path
 from typing import Optional
 
 from pydantic import BaseModel
@@ -11,6 +12,8 @@ from textual.widgets import Button, Input, Label, Select, Static
 from herdr_master.core.catalog import CatalogError
 from herdr_master.core.models import EffortLevel, HarnessKind
 from herdr_master.pipeline.launcher import resolve_coordinator_binding
+from herdr_master.pipeline.squad import resolve_squad
+from herdr_master.ui.tui.modals.project_folder import ProjectFolderField
 from herdr_master.ui.tui.state import (
     compatibility_preset_note,
     coordinator_route_text,
@@ -25,6 +28,7 @@ class MasterLaunchParams(BaseModel):
     model: str
     initial_task: Optional[str] = None
     effort: Optional[EffortLevel] = None
+    project_path: Optional[Path] = None
 
 
 class LaunchMasterModal(ModalScreen[Optional[MasterLaunchParams]]):
@@ -82,10 +86,12 @@ class LaunchMasterModal(ModalScreen[Optional[MasterLaunchParams]]):
         default_name: str = "master-coordinator",
         *,
         config_error: Optional[str] = None,
+        project_path: Optional[Path] = None,
         **kwargs,
     ) -> None:
         super().__init__(**kwargs)
         self.config_error = config_error
+        self._project_folder = ProjectFolderField(project_path)
         kind, model, effort = resolve_coordinator_binding()
         self.default_name = default_name
         self._product_kind = kind.value
@@ -130,6 +136,8 @@ class LaunchMasterModal(ModalScreen[Optional[MasterLaunchParams]]):
                     classes="modal-desc",
                 )
 
+                yield self._project_folder
+
                 yield Label("Master Agent Name:", classes="field-label")
                 yield self._name_input
 
@@ -155,6 +163,11 @@ class LaunchMasterModal(ModalScreen[Optional[MasterLaunchParams]]):
         if self.config_error:
             self._set_status(self.config_error)
         self._refresh_preview()
+
+    def on_project_folder_field_changed(self, event: ProjectFolderField.Changed) -> None:
+        event.stop()
+        self.config_error = None
+        self._set_status("")
 
     def _model_is_custom(self) -> bool:
         return self._model_input.value != self._programmatic_model
@@ -235,13 +248,12 @@ class LaunchMasterModal(ModalScreen[Optional[MasterLaunchParams]]):
             return
         if event.button.id != "btn-launch" or self._submitting:
             return
-        if self.config_error:
-            self._set_status(self.config_error)
-            return
         name = self._name_input.value.strip() or self.default_name
         try:
+            project_path = self._project_folder.selected_path()
+            resolve_squad(project_path)
             kind, model, effort = self._resolved_request()
-        except CatalogError as exc:
+        except (ValueError, OSError, CatalogError) as exc:
             self._set_status(str(exc))
             return
         self._submitting = True
@@ -252,5 +264,6 @@ class LaunchMasterModal(ModalScreen[Optional[MasterLaunchParams]]):
                 model=model,
                 initial_task=self._task_input.value.strip() or None,
                 effort=effort,
+                project_path=project_path,
             )
         )

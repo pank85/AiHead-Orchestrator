@@ -23,7 +23,8 @@ from herdr_master.herdr.client import HerdrClient
 from herdr_master.pipeline.bootstrap import build_bootstrap_prompt
 from herdr_master.pipeline.squad import format_allowed_coder_models
 
-ORCHESTRATOR_NAME = "Ergo orchestrator"
+# Herdr agent names are RPC identifiers, not display labels: [a-z][a-z0-9_-]{0,31}.
+ORCHESTRATOR_NAME = "ergo-orchestrator"
 
 
 class LaunchContextError(RuntimeError):
@@ -285,6 +286,31 @@ def _tab_id(payload: dict[str, Any]) -> Optional[str]:
     return tab.get("tab_id") or root.get("tab_id")
 
 
+async def _create_owned_workspace(
+    active: HerdrClient,
+    *,
+    session_name: str,
+    socket_path: Path,
+    workspace_label: str,
+    cwd: str,
+    focus: bool,
+) -> _Allocated:
+    created = await active.create_workspace(
+        label=workspace_label,
+        focus=focus,
+        cwd=cwd,
+    )
+    return _Allocated(
+        client=active,
+        session_name=session_name,
+        socket_path=socket_path,
+        workspace_id=(created.get("workspace") or {}).get("workspace_id"),
+        pane_id=_pane_id(created),
+        tab_id=_tab_id(created),
+        owns_workspace=True,
+    )
+
+
 async def _allocate_launch_target(
     client: HerdrClient,
     ctx: HerdrContext,
@@ -294,19 +320,34 @@ async def _allocate_launch_target(
     tab_label: str,
     workspace_label: str,
     cwd: str,
+    fresh_workspace: bool = False,
+    focus: bool = True,
 ) -> _Allocated:
     """Adopt an inside workspace, or provision an isolated outside session.
 
     Inside launches never close existing tabs. ``owns_workspace`` is true only
     for a workspace this call created. Reusing ``snap.workspaces[0]`` does not
-    mark that workspace owned. Failures propagate to the caller.
+    mark that workspace owned. ``fresh_workspace`` creates a new workspace in
+    the current session and leaves the caller's workspace untouched. Failures
+    propagate to the caller.
     """
+    if fresh_workspace and ctx.is_inside_herdr:
+        active = _adopt_client(client, ctx)
+        return await _create_owned_workspace(
+            active,
+            session_name=str(ctx.session_name),
+            socket_path=Path(ctx.socket_path),
+            workspace_label=workspace_label,
+            cwd=cwd,
+            focus=focus,
+        )
+
     if ctx.is_inside_herdr:
         active = _adopt_client(client, ctx)
         tab_res = await active.create_tab(
             workspace_id=ctx.workspace_id,
             label=tab_label,
-            focus=True,
+            focus=focus,
             cwd=cwd,
         )
         return _Allocated(
@@ -324,22 +365,20 @@ async def _allocate_launch_target(
     await ensure_herdr_server(socket_path, session_name=session_name)
     active = HerdrClient(session=session_name, socket_path=socket_path)
     snap = await active.get_snapshot()
-    if not snap.workspaces:
-        created = await active.create_workspace(label=workspace_label, focus=True, cwd=cwd)
-        return _Allocated(
-            client=active,
+    if fresh_workspace or not snap.workspaces:
+        return await _create_owned_workspace(
+            active,
             session_name=session_name,
             socket_path=socket_path,
-            workspace_id=(created.get("workspace") or {}).get("workspace_id"),
-            pane_id=_pane_id(created),
-            tab_id=_tab_id(created),
-            owns_workspace=True,
+            workspace_label=workspace_label,
+            cwd=cwd,
+            focus=focus,
         )
     workspace_id = snap.workspaces[0].workspace_id
     tab_res = await active.create_tab(
         workspace_id=workspace_id,
         label=tab_label,
-        focus=True,
+        focus=focus,
         cwd=cwd,
     )
     return _Allocated(
@@ -361,8 +400,12 @@ async def _start_and_prompt(
     args: List[str],
     prompt: str,
     cwd: str,
+    focus: bool = True,
 ) -> None:
-    """Start one agent and deliver one prompt. Do not retry or delete resources."""
+    """Start one agent and deliver one prompt. Do not retry or delete resources.
+
+    ``args`` is the agent argv after ``--``. ``kind`` is a separate RPC field.
+    """
     if kind == "agy":
         ensure_agy_trusted(cwd)
     stop_event = asyncio.Event()
@@ -385,6 +428,8 @@ async def _start_and_prompt(
         except asyncio.CancelledError:
             pass
     await allocated.client.prompt_agent(allocated.pane_id or "", prompt)
+    if not focus:
+        return
     try:
         if allocated.workspace_id:
             await allocated.client.focus_workspace(allocated.workspace_id)
@@ -429,12 +474,15 @@ async def launch_master(
     session: str | None = None,
     *,
     effort: EffortLevel | None = None,
+    fresh_workspace: bool = False,
+    focus: bool = True,
 ) -> Dict[str, Any]:
     """Launch a Herdr Master coordinator with the canonical skill body.
 
     No-override calls use the catalog Scout medium route. Inside Herdr, the
-    inherited workspace is adopted and existing tabs are left open. Outside
-    Herdr, an isolated session is provisioned and marked owned.
+    inherited workspace is adopted and existing tabs are left open unless
+    ``fresh_workspace`` is set. Outside Herdr, an isolated session is
+    provisioned and marked owned.
     """
     kind, model_slug, effort_level = resolve_coordinator_binding(harness, model, effort)
     descriptor = _host_launch(kind.value, model_slug, effort_level, "master")
@@ -448,6 +496,8 @@ async def launch_master(
         tab_label=name,
         workspace_label=name,
         cwd=target_cwd,
+        fresh_workspace=fresh_workspace,
+        focus=focus,
     )
     if not allocated.pane_id:
         raise RuntimeError(f"Could not allocate pane in workspace {allocated.workspace_id}")
@@ -467,9 +517,10 @@ async def launch_master(
         allocated,
         name=name,
         kind=descriptor["kind"],
-        args=descriptor["launch_args"],
+        args=descriptor["argv"],
         prompt=prompt,
         cwd=target_cwd,
+        focus=focus,
     )
     return {
         "session": allocated.session_name,
@@ -493,6 +544,9 @@ async def launch_ergo(
     squad: Squad,
     cwd: str | None = None,
     session: str | None = None,
+    *,
+    fresh_workspace: bool = False,
+    focus: bool = True,
 ) -> Dict[str, Any]:
     """Hand an Ergo job to the canonical skill via the Scout binding.
 
@@ -517,6 +571,8 @@ async def launch_ergo(
         tab_label=ORCHESTRATOR_NAME,
         workspace_label=workspace_label,
         cwd=target_cwd,
+        fresh_workspace=fresh_workspace,
+        focus=focus,
     )
     if not allocated.pane_id:
         raise RuntimeError(
@@ -539,9 +595,10 @@ async def launch_ergo(
         allocated,
         name=ORCHESTRATOR_NAME,
         kind=descriptor["kind"],
-        args=descriptor["launch_args"],
+        args=descriptor["argv"],
         prompt=prompt,
         cwd=target_cwd,
+        focus=focus,
     )
     return {
         "session": allocated.session_name,

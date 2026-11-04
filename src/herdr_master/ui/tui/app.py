@@ -1,5 +1,6 @@
 """Textual Terminal User Interface (TUI) Application for Herdr-Master."""
 
+import asyncio
 from pathlib import Path
 from typing import Optional
 
@@ -7,9 +8,11 @@ from textual.app import App, ComposeResult
 from textual.binding import Binding
 from textual.containers import Horizontal
 
+from herdr_master.core.context import resolve_herdr_context
 from herdr_master.core.models import MasterSession, PipelinePhase, PipelineRun, WorkerState
 from herdr_master.core.state_machine import WorkerEvent, transition_worker_state
 from herdr_master.herdr.client import HerdrClient
+from herdr_master.herdr.discovery import SessionInventory, discover_clients
 from herdr_master.pipeline.launcher import (
     LaunchContextError,
     launch_ergo,
@@ -22,12 +25,21 @@ from herdr_master.ui.tui.modals.config_drawer import ConfigDrawer
 from herdr_master.ui.tui.modals.confirm import ConfirmModal
 from herdr_master.ui.tui.modals.launch_ergo import ErgoLaunchParams, LaunchErgoModal
 from herdr_master.ui.tui.modals.launch_master import LaunchMasterModal, MasterLaunchParams
+from herdr_master.ui.tui.modals.project_folder import (
+    initial_project_folder,
+    validate_project_folder,
+)
 from herdr_master.ui.tui.modals.prompt_dialog import PromptDialog
 from herdr_master.ui.tui.state import AppState
 from herdr_master.ui.tui.widgets.deck import CenterDeck
 from herdr_master.ui.tui.widgets.footer import ActionFooter
 from herdr_master.ui.tui.widgets.header_bar import HeaderBar
 from herdr_master.ui.tui.widgets.quick_launch import QuickLaunchBar
+from herdr_master.ui.tui.widgets.workspaces import (
+    WorkspaceBrowser,
+    WorkspaceTarget,
+    workspace_agents,
+)
 
 
 def _result_pane(result: dict) -> Optional[str]:
@@ -48,6 +60,7 @@ class HerdrMasterApp(App):
         Binding("e", "new_ergo", "New Ergo"),
         Binding("s", "open_settings", "Settings"),
         Binding("c", "open_settings", "Settings"),
+        Binding("0", "deck_mode(0)", "Workspaces"),
         Binding("1", "deck_mode(1)", "Output"),
         Binding("2", "deck_mode(2)", "Diff"),
         Binding("3", "deck_mode(3)", "Pipeline"),
@@ -89,6 +102,8 @@ class HerdrMasterApp(App):
         self.squad_mode = "herdr"
         self.native_harness: Optional[str] = None
         self._launch_pending = False
+        self._inventory_pending = False
+        self._navigation_pending = False
         if demo:
             self.app_state = AppState.create_demo_state()
             self.squad_sources = {
@@ -96,6 +111,7 @@ class HerdrMasterApp(App):
             }
         else:
             self.app_state = self._load_live_state()
+        self._settings_squad = self.app_state.squad.model_copy(deep=True)
         self.client: Optional[HerdrClient] = None
         self._header = HeaderBar(self.app_state)
         self._deck = CenterDeck(self.app_state)
@@ -132,26 +148,110 @@ class HerdrMasterApp(App):
                 self._bind_launch_client(resolve_launch_context(None))
             else:
                 self.client = HerdrClient(session=self.session_name)
-            await self._refresh_live_snapshot()
+            self._schedule_inventory_refresh()
+            self.set_interval(3.0, self._schedule_inventory_refresh)
+
+    def _schedule_inventory_refresh(self) -> None:
+        self.run_worker(self._refresh_live_snapshot(), group="workspace-inventory")
 
     async def _refresh_live_snapshot(self) -> None:
-        """Query live Herdr session snapshot."""
-        if self.client is None:
+        """Refresh all discovered sockets without blocking terminal interaction."""
+        if self.demo or self.client is None or self._inventory_pending:
             return
+        self._inventory_pending = True
         try:
-            snapshot = await self.client.get_snapshot()
-            self.app_state.socket_connected = True
-            self.app_state.active_agents_count = len(
-                [agent for agent in snapshot.agents if agent.agent_status != "done"]
+            previous = {item.socket_path: item for item in self.app_state.live_sessions}
+
+            async def fetch(client: HerdrClient) -> SessionInventory:
+                path = Path(client.socket_path)
+                inventory = SessionInventory(
+                    session_name=client.session or self.session_name or "default", socket_path=path
+                )
+                try:
+                    inventory.snapshot = await asyncio.wait_for(client.get_snapshot(), timeout=2.0)
+                except Exception as exc:
+                    inventory.error = str(exc)[:140] or type(exc).__name__
+                    if path in previous:
+                        inventory.snapshot = previous[path].snapshot
+                return inventory
+
+            clients = await asyncio.to_thread(discover_clients, self.client)
+            inventories = await asyncio.gather(*(fetch(client) for client in clients))
+            self.app_state.live_sessions = list(inventories)
+            self.app_state.socket_connected = any(not item.error for item in inventories)
+            self.app_state.active_agents_count = sum(
+                agent.agent_status in {"working", "idle", "blocked"}
+                for item in inventories
+                if item.snapshot and not item.error
+                for agent in item.snapshot.agents
             )
-            if snapshot.workspaces:
-                first_ws = snapshot.workspaces[0]
-                self.app_state.workspace_id = first_ws.workspace_id
-                self.app_state.workspace_label = first_ws.label or first_ws.workspace_id
+            primary = next(
+                (item for item in inventories if item.socket_path == Path(self.client.socket_path)),
+                None,
+            )
+            if primary and primary.snapshot and not primary.error:
+                snapshot = primary.snapshot
+                workspace = next(
+                    (
+                        ws
+                        for ws in snapshot.workspaces
+                        if ws.workspace_id == snapshot.focused_workspace_id
+                    ),
+                    next(iter(snapshot.workspaces), None),
+                )
+                if workspace:
+                    self.app_state.workspace_id = workspace.workspace_id
+                    self.app_state.workspace_label = workspace.label or workspace.workspace_id
             self._update_all_widgets()
-        except Exception:
-            self.app_state.socket_connected = False
-            self._update_all_widgets()
+        finally:
+            self._inventory_pending = False
+
+    def on_workspace_browser_agent_selected(self, event: WorkspaceBrowser.AgentSelected) -> None:
+        event.stop()
+        if not self._navigation_pending:
+            self.run_worker(self._navigate_to_agent(event.target), group="agent-navigation")
+
+    async def _navigate_to_agent(self, target: WorkspaceTarget) -> None:
+        """Focus the exact socket/workspace/tab/pane; never infer a worker from its label."""
+        if self.demo:
+            self.notify("Demo only: live mode opens the selected Herdr agent.")
+            return
+        if self._navigation_pending:
+            return
+        self._navigation_pending = True
+        try:
+            inventory = next(
+                (
+                    item
+                    for item in self.app_state.live_sessions
+                    if item.socket_path == target.socket_path
+                ),
+                None,
+            )
+            if not inventory or inventory.error or not inventory.snapshot:
+                self.notify("Session is offline. Wait for it to reconnect.", severity="warning")
+                return
+            agents = workspace_agents(inventory, target.workspace_id)
+            agent = next((item for item in agents if item.pane_id == target.pane_id), None)
+            if not agent:
+                self.notify("This pane has closed. Select a current agent.", severity="warning")
+                return
+            client = HerdrClient(
+                session=target.session_name, socket_path=target.socket_path, timeout=2.0
+            )
+            await client.focus_workspace(target.workspace_id)
+            if agent.tab_id:
+                await client.focus_tab(agent.tab_id)
+            await client.focus_pane(agent.pane_id)
+            context = resolve_herdr_context()
+            if not context.is_inside_herdr or context.socket_path != target.socket_path:
+                self.exit(result={"action": "attach", "session": target.session_name})
+            else:
+                self.notify(f"Focused {agent.name or agent.agent or agent.pane_id}")
+        except Exception as exc:
+            self.notify(f"Could not open agent: {exc}", severity="error")
+        finally:
+            self._navigation_pending = False
 
     def _update_all_widgets(self) -> None:
         self._header.update_state(self.app_state)
@@ -194,30 +294,23 @@ class HerdrMasterApp(App):
         return ctx
 
     def _begin_launch(self, worker, name: str) -> None:
-        if self.config_error or self._launch_pending:
+        if self._launch_pending:
             worker.close()
-            if self.config_error:
-                self.notify(self.config_error, severity="error")
-            else:
-                self.notify(
-                    "Launch already pending. Wait for the current launch to finish.",
-                    severity="warning",
-                )
+            self.notify(
+                "Launch already pending. Wait for the current launch to finish.",
+                severity="warning",
+            )
             return
         self._launch_pending = True
         self.run_worker(worker, name=name)
 
     def _exit_launch(self, ctx, session_name: str, workspace_id: Optional[str]) -> None:
-        if not ctx.is_inside_herdr:
-            self.exit(result={"action": "attach", "session": session_name})
-            return
-        self.exit(
-            result={
-                "action": "done",
-                "session": session_name,
-                "workspace_id": workspace_id,
-            }
+        """Keep this multi-project cockpit open; agent navigation remains explicit."""
+        self.notify(
+            f"Launch is in workspace {workspace_id or session_name}. This cockpit stays open.",
+            severity="information",
         )
+        self._schedule_inventory_refresh()
 
     def action_toggle_focus(self) -> None:
         """Focus the CenterDeck."""
@@ -228,9 +321,10 @@ class HerdrMasterApp(App):
 
         async def _on_master_launch(params: MasterLaunchParams) -> None:
             try:
-                if self.config_error:
-                    self.notify(self.config_error, severity="error")
-                    return
+                project_path = validate_project_folder(
+                    str(params.project_path or initial_project_folder(self.project_path))
+                )
+                resolve_squad(project_path)
                 if self.demo or self.client is None:
                     self._record_demo_master(params)
                     return
@@ -243,6 +337,9 @@ class HerdrMasterApp(App):
                     initial_task=params.initial_task,
                     session=ctx.session_name,
                     effort=params.effort,
+                    cwd=str(project_path),
+                    fresh_workspace=True,
+                    focus=False,
                 )
                 pane = _result_pane(result)
                 session_name = result.get("session")
@@ -267,7 +364,7 @@ class HerdrMasterApp(App):
                 self._begin_launch(_on_master_launch(params), "launch_master")
 
         self.push_screen(
-            LaunchMasterModal(config_error=self.config_error),
+            LaunchMasterModal(config_error=self.config_error, project_path=self.project_path),
             _on_modal_dismiss,
         )
 
@@ -300,6 +397,9 @@ class HerdrMasterApp(App):
                 "model": result.get("model"),
                 "effort": result.get("effort"),
                 "pane_id": pane,
+                "project_path": str(
+                    params.project_path or initial_project_folder(self.project_path)
+                ),
             },
         )
         self.app_state.masters[master.session_id] = master
@@ -318,11 +418,13 @@ class HerdrMasterApp(App):
                 if not params.start_pipeline:
                     if params.squad is not None:
                         self.app_state.squad = params.squad
+                        self._settings_squad = params.squad.model_copy(deep=True)
                         self._update_all_widgets()
                     return
-                if self.config_error:
-                    self.notify(self.config_error, severity="error")
-                    return
+                project_path = validate_project_folder(
+                    str(params.project_path or initial_project_folder(self.project_path))
+                )
+                resolved = resolve_squad(project_path)
                 if self.demo or self.client is None:
                     self.notify("Demo mode does not launch an orchestrator.", severity="warning")
                     return
@@ -331,8 +433,11 @@ class HerdrMasterApp(App):
                     client=self.client,
                     intent=params.intent,
                     workspace_label=params.workspace_label,
-                    squad=params.squad or self.app_state.squad,
+                    squad=params.squad or resolved.squad,
+                    cwd=str(project_path),
                     session=ctx.session_name,
+                    fresh_workspace=True,
+                    focus=False,
                 )
                 pane = _result_pane(result)
                 session_name = result.get("session")
@@ -344,10 +449,7 @@ class HerdrMasterApp(App):
                     )
                     return
                 workspace_id = result.get("workspace_id")
-                if params.squad is not None:
-                    self.app_state.squad = params.squad
-                if workspace_id:
-                    self.app_state.workspace_id = str(workspace_id)
+                self.app_state.squad = params.squad or resolved.squad
                 self.app_state.workspace_label = params.workspace_label
                 self.app_state.pipeline_run = PipelineRun(
                     run_id=f"ergo-{params.workspace_label}",
@@ -360,6 +462,7 @@ class HerdrMasterApp(App):
                         "orchestrator_pane_id": result.get("orchestrator_pane_id") or pane,
                         "session": session_name,
                         "agent_name": result.get("agent_name"),
+                        "project_path": str(project_path),
                     },
                 )
                 self.app_state.active_deck_mode = 3
@@ -384,7 +487,7 @@ class HerdrMasterApp(App):
 
         self.push_screen(
             LaunchErgoModal(
-                self.app_state.squad,
+                self._settings_squad,
                 sources=self.squad_sources,
                 mode=self.squad_mode,
                 native_harness=self.native_harness,
@@ -410,7 +513,7 @@ class HerdrMasterApp(App):
         self.action_open_settings()
 
     def action_deck_mode(self, mode: int) -> None:
-        """Switch center deck view mode (1..4)."""
+        """Switch center deck view mode (0..4)."""
         self.app_state.active_deck_mode = mode
         self._deck.switch_mode(mode)
 

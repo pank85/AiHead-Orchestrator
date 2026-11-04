@@ -81,6 +81,11 @@ class HerdrClient:
         resp = await self._rpc("workspace.focus", params)
         return resp.get("result", {})
 
+    async def focus_pane(self, pane_id: str) -> Dict[str, Any]:
+        """Focus an existing pane (Protocol 22 pane.focus)."""
+        resp = await self._rpc("pane.focus", {"pane_id": pane_id})
+        return resp.get("result", {})
+
     async def create_tab(
         self,
         workspace_id: Optional[str] = None,
@@ -177,12 +182,17 @@ class HerdrClient:
                 return resp.get("result", {})
             except HerdrRPCError as err:
                 last_err = err
-                if attempt < 19 and err.code in (
-                    "agent_target_not_found",
-                    "agent_prompt_stalled",
-                    "agent_not_ready",
-                    "agent_launch_pending",
-                    "agent_busy",
+                if attempt < 19 and (
+                    err.code
+                    in (
+                        "agent_target_not_found",
+                        "agent_prompt_stalled",
+                        "agent_not_ready",
+                        "agent_launch_pending",
+                        "agent_busy",
+                    )
+                    or "does not have a detected agent" in err.message
+                    or "not ready" in err.message
                 ):
                     await asyncio.sleep(0.5)
                     continue

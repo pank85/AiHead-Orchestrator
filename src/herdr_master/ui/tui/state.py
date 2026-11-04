@@ -30,6 +30,8 @@ from herdr_master.core.models import (
     WorkerSession,
     WorkerState,
 )
+from herdr_master.herdr.discovery import SessionInventory
+from herdr_master.herdr.snapshot import AgentSnapshot, SessionSnapshot, WorkspaceSnapshot
 from herdr_master.pipeline.squad import describe_agent
 
 
@@ -210,7 +212,9 @@ class AppState(BaseModel):
     branch_status: str = "CLEAN"
     socket_connected: bool = True
     active_agents_count: int = 0
-    active_deck_mode: int = 3  # 1: Output, 2: Diff, 3: Pipeline, 4: Mailbox
+    active_deck_mode: int = 0  # 0: Workspaces, 1: Output, 2: Diff, 3: Pipeline, 4: Mailbox
+    live_sessions: List[SessionInventory] = Field(default_factory=list)
+    inventory_demo: bool = False
     selected_target_id: Optional[str] = "scout"
 
     squad: Squad = Field(default_factory=Squad)
@@ -361,7 +365,36 @@ new file mode 100644
             branch_status="CLEAN",
             socket_connected=True,
             active_agents_count=3,
-            active_deck_mode=3,
+            active_deck_mode=0,
+            inventory_demo=True,
+            live_sessions=[
+                SessionInventory(
+                    session_name="demo",
+                    socket_path=Path("/demo/herdr.sock"),
+                    snapshot=SessionSnapshot(
+                        protocol=22,
+                        workspaces=[
+                            WorkspaceSnapshot(
+                                workspace_id="ws-01", label="ergo-20261103", agent_status="working"
+                            )
+                        ],
+                        agents=[
+                            AgentSnapshot(
+                                pane_id=worker.pane_id,
+                                workspace_id="ws-01",
+                                tab_id=worker.tab_id,
+                                agent=worker.harness.value,
+                                name=worker.worker_id,
+                                agent_status="working"
+                                if worker.state == WorkerState.WORKING
+                                else "idle",
+                                cwd=worker.worktree_path,
+                            )
+                            for worker in workers.values()
+                        ],
+                    ),
+                )
+            ],
             selected_target_id="coder-2",
             squad=squad,
             pipeline_run=run,

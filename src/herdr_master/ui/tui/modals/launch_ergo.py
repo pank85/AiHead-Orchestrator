@@ -7,12 +7,14 @@ from typing import Optional, Tuple, Union
 from pydantic import BaseModel
 from textual.app import ComposeResult
 from textual.containers import Horizontal, Vertical, VerticalScroll
+from textual.events import Resize
 from textual.screen import ModalScreen
-from textual.widgets import Button, Input, Label, Select, Static, Tree
+from textual.widgets import Button, Input, Label, Select, Static, TextArea, Tree
 
 from herdr_master.core.catalog import CatalogError, worker_route_note
 from herdr_master.core.models import EffortLevel, HarnessBinding, HarnessKind, Squad
-from herdr_master.pipeline.squad import save_squad_as_default, validate_squad
+from herdr_master.pipeline.squad import resolve_squad, save_squad_as_default, validate_squad
+from herdr_master.ui.tui.modals.project_folder import ProjectFolderField, initial_project_folder
 from herdr_master.ui.tui.state import (
     binding_launch_preview,
     catalog_worker_template,
@@ -32,6 +34,7 @@ class ErgoLaunchParams(BaseModel):
     squad: Optional[Squad] = None
     start_pipeline: bool = True
     customize_squad_first: bool = False
+    project_path: Optional[Path] = None
 
 
 class LaunchErgoModal(ModalScreen[Optional[ErgoLaunchParams]]):
@@ -66,11 +69,11 @@ class LaunchErgoModal(ModalScreen[Optional[ErgoLaunchParams]]):
         color: #888888;
     }
     .top-section {
-        height: 1fr;
+        height: 12;
         border: solid #2a2a2a;
     }
     .left-tree-col {
-        width: 36;
+        width: 32;
         height: 100%;
         border-right: solid #333333;
         background: #161616;
@@ -94,16 +97,42 @@ class LaunchErgoModal(ModalScreen[Optional[ErgoLaunchParams]]):
         height: 1fr;
     }
     .editor-heading {
+        height: 1;
         color: cyan;
         text-style: bold;
     }
     .field-label {
+        height: 1;
         color: #aaaaaa;
     }
-    .worker-pool-buttons {
+    .options-grid {
         height: auto;
     }
+    .option-column {
+        width: 1fr;
+        height: auto;
+    }
+    .option-column-secondary {
+        margin-left: 1;
+    }
+    .option-column SelectCurrent > Static#label {
+        height: 1;
+        text-wrap: nowrap;
+        text-overflow: ellipsis;
+    }
+    .editor-fields > .field-label {
+        height: auto;
+        max-height: 2;
+    }
+    .worker-pool-buttons {
+        height: 1;
+    }
     .worker-pool-buttons Button {
+        width: 1fr;
+        min-width: 4;
+        height: 1;
+        min-height: 1;
+        border: none;
         margin-right: 1;
     }
     .status-msg {
@@ -111,29 +140,72 @@ class LaunchErgoModal(ModalScreen[Optional[ErgoLaunchParams]]):
         max-height: 2;
     }
     .bottom-section {
-        height: 8;
-        min-height: 8;
-        max-height: 8;
+        height: 1fr;
         border: solid #2a2a2a;
         background: #181818;
         padding: 0 1;
     }
-    .prompt-row {
-        height: 3;
+    .project-row {
+        height: 4;
     }
-    .prompt-col {
+    .project-row ProjectFolderField {
         width: 1fr;
     }
     .ws-col {
-        width: 28;
+        width: 24;
         margin-left: 1;
     }
+    .prompt-row {
+        height: 1fr;
+    }
+    .prompt-col {
+        width: 1fr;
+        height: 1fr;
+    }
+    #ergo-intent {
+        height: 1fr;
+        min-height: 3;
+        border: solid #444444;
+    }
+    #ergo-intent:focus {
+        border: solid cyan;
+    }
     .action-button-bar {
-        height: 3;
-        align: center middle;
+        width: 18;
+        height: 1fr;
+        margin-left: 1;
     }
     .action-button-bar Button {
-        margin: 0 1;
+        width: 100%;
+        min-width: 10;
+        margin: 0;
+    }
+    LaunchErgoModal.narrow .left-tree-col {
+        width: 22;
+    }
+    LaunchErgoModal.narrow .ws-col {
+        width: 20;
+    }
+    LaunchErgoModal.narrow .action-button-bar {
+        width: 14;
+    }
+    LaunchErgoModal.short .action-button-bar Button {
+        height: 1;
+        min-height: 1;
+        border: none;
+    }
+    LaunchErgoModal.stacked-options .left-tree-col {
+        width: 18;
+    }
+    LaunchErgoModal.stacked-options .options-grid {
+        layout: vertical;
+    }
+    LaunchErgoModal.stacked-options .option-column {
+        width: 100%;
+        margin-left: 0;
+    }
+    LaunchErgoModal.stacked-options .ws-col {
+        width: 16;
     }
     """
 
@@ -153,7 +225,11 @@ class LaunchErgoModal(ModalScreen[Optional[ErgoLaunchParams]]):
         self.sources = dict(sources or {})
         self.mode = mode
         self.native_harness = native_harness
-        self.project_path = project_path
+        self.project_path = initial_project_folder(project_path)
+        self._project_folder = ProjectFolderField(self.project_path)
+        self._project_folder.tooltip = (
+            "Changing folders reloads that project's squad defaults and discards unsaved edits."
+        )
         self.config_error = config_error
         self._submitting = False
         self.status_text = ""
@@ -195,8 +271,15 @@ class LaunchErgoModal(ModalScreen[Optional[ErgoLaunchParams]]):
         self._status_label = Static("", id="squad-status", classes="status-msg")
         self._preview = Static("", id="launch-preview", classes="status-msg")
 
-        self._intent_input = Input(
-            placeholder="e.g. Implement distributed Redis cache for authentication service"
+        self._intent_input = TextArea(
+            "",
+            soft_wrap=True,
+            tab_behavior="focus",
+            show_line_numbers=False,
+            id="ergo-intent",
+        )
+        self._intent_input.tooltip = (
+            "Describe the job across multiple lines. Enter adds a line; Tab moves to the actions."
         )
         self._ws_input = Input(value=self.default_label, placeholder="Workspace label")
 
@@ -215,49 +298,92 @@ class LaunchErgoModal(ModalScreen[Optional[ErgoLaunchParams]]):
                     with VerticalScroll(classes="editor-fields"):
                         yield self._editor_heading
 
-                        yield Label("Harness Kind:", classes="field-label")
-                        yield self._harness_select
-
-                        yield Label("Model:", classes="field-label")
-                        yield self._model_input
-
-                        yield self._effort_label
-                        yield self._effort_select
+                        with Horizontal(classes="options-grid"):
+                            with Vertical(classes="option-column"):
+                                yield Label("Harness Kind:", classes="field-label")
+                                yield self._harness_select
+                                yield self._effort_label
+                                yield self._effort_select
+                            with Vertical(classes="option-column option-column-secondary"):
+                                yield Label("Model:", classes="field-label")
+                                yield self._model_input
+                                yield self._role_label_header
+                                yield self._label_input
                         yield self._effort_note
-
-                        yield self._role_label_header
-                        yield self._label_input
 
                         yield self._desc_label
                         yield self._description_input
 
                     with Horizontal(id="worker-pool-bar", classes="worker-pool-buttons"):
-                        yield Button("+ Add Worker", id="btn-add-worker", variant="success")
-                        yield Button("- Remove Worker", id="btn-remove-worker", variant="error")
+                        yield Button("+ Add", id="btn-add-worker", variant="success")
+                        yield Button("− Remove", id="btn-remove-worker", variant="error")
                         yield Button("↑ Up", id="btn-up-worker")
                         yield Button("↓ Down", id="btn-down-worker")
 
                     yield self._status_label
 
             with Vertical(classes="bottom-section"):
+                with Horizontal(classes="project-row"):
+                    yield self._project_folder
+                    with Vertical(classes="ws-col"):
+                        yield Label("Workspace label:", classes="field-label")
+                        yield self._ws_input
                 yield self._preview
                 with Horizontal(classes="prompt-row"):
                     with Vertical(classes="prompt-col"):
-                        yield Label("⚡ Ergo Feature Objective / Prompt:", classes="field-label")
+                        yield Label("Feature objective / prompt:", classes="field-label")
                         yield self._intent_input
-                    with Vertical(classes="ws-col"):
-                        yield Label("Dedicated Workspace Label:", classes="field-label")
-                        yield self._ws_input
+                    with Vertical(classes="action-button-bar"):
+                        yield Button("Start Ergo", id="btn-start-ergo", variant="success")
+                        yield Button("Save Default", id="btn-save-default", variant="warning")
+                        yield Button("Cancel", id="btn-cancel", variant="default")
 
-                with Horizontal(classes="action-button-bar"):
-                    yield Button("⚡ Start Ergo Pipeline", id="btn-start-ergo", variant="success")
-                    yield Button("💾 Save Default", id="btn-save-default", variant="warning")
-                    yield Button("Cancel", id="btn-cancel", variant="default")
+    def on_resize(self, event: Resize) -> None:
+        if self.is_mounted:
+            self._adapt_layout(event.size.width, event.size.height)
+
+    def _adapt_layout(self, width: int, height: int) -> None:
+        self.set_class(width < 100, "narrow")
+        self.set_class(width < 72, "stacked-options")
+        self.set_class(height < 32, "short")
+        # Cap configuration height; give all extra rows to the multiline prompt.
+        preferred = 16 if isinstance(self._selected_target, tuple) else 12
+        self.query_one(".top-section").styles.height = min(preferred, max(8, height - 20))
 
     def on_mount(self) -> None:
+        self._adapt_layout(self.size.width, self.size.height)
         self._rebuild_tree()
         self._load_agent_into_editor("scout")
         self._refresh_summary()
+
+    def _sync_project_folder(self) -> None:
+        """Load the selected project's defaults without changing the cockpit's project."""
+        try:
+            path = self._project_folder.selected_path()
+            if path == self.project_path and not self.config_error:
+                return
+            resolved = resolve_squad(path, mode=self.mode, native_harness=self.native_harness)
+        except Exception as exc:
+            self.config_error = (
+                f"Invalid project squad settings: {exc}. "
+                "Fix .herdr-master.toml before launching. "
+                "Refusing to launch product defaults."
+            )
+            self._set_status(f"Project folder/settings error: {exc}")
+            self._refresh_summary()
+            return
+        self.project_path = path
+        self.config_error = None
+        self.squad = resolved.squad.model_copy(deep=True)
+        self.sources = dict(resolved.sources)
+        self._rebuild_tree()
+        self._load_agent_into_editor("scout")
+        self._refresh_summary()
+        self._set_status("Loaded selected project's squad defaults.")
+
+    def on_project_folder_field_changed(self, event: ProjectFolderField.Changed) -> None:
+        event.stop()
+        self._sync_project_folder()
 
     def _set_status(self, text: str) -> None:
         self.status_text = text
@@ -437,6 +563,7 @@ class LaunchErgoModal(ModalScreen[Optional[ErgoLaunchParams]]):
                         self._refresh_worker_note(worker)
         finally:
             self._is_updating_fields = False
+            self._adapt_layout(self.size.width, self.size.height)
             self._refresh_summary()
 
     def _populate_fields(self, binding: HarnessBinding) -> None:
@@ -534,6 +661,7 @@ class LaunchErgoModal(ModalScreen[Optional[ErgoLaunchParams]]):
         return None
 
     def _validate_for_action(self) -> Optional[str]:
+        self._sync_project_folder()
         if self.config_error:
             return self.config_error
         if not self._editor_locked() and not self._model_input.value.strip():
@@ -635,10 +763,11 @@ class LaunchErgoModal(ModalScreen[Optional[ErgoLaunchParams]]):
             self._submitting = True
             self.dismiss(
                 ErgoLaunchParams(
-                    intent=self._intent_input.value.strip() or "Execute standard Ergo pipeline",
+                    intent=self._intent_input.text.strip() or "Execute standard Ergo pipeline",
                     workspace_label=self._ws_input.value.strip() or self.default_label,
                     squad=self.squad.model_copy(deep=True),
                     start_pipeline=True,
+                    project_path=self._project_folder.selected_path(),
                 )
             )
 

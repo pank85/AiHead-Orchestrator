@@ -30,8 +30,8 @@ async def test_tui_app_mount_and_components():
         # Verify HierarchyTree is NOT on the first page!
         assert len(pilot.app.query(HierarchyTree)) == 0
 
-        # Verify initial deck mode is 3 (Pipeline)
-        assert pilot.app.app_state.active_deck_mode == 3
+        # The live workspace control panel is the landing page.
+        assert pilot.app.app_state.active_deck_mode == 0
 
 
 @pytest.mark.asyncio
@@ -187,8 +187,8 @@ async def test_launch_master_submits_to_app_state():
 
 
 @pytest.mark.asyncio
-async def test_tui_launch_ergo_outside_herdr_exits_with_attach():
-    """Verify launching Ergo outside Herdr triggers exit with attach result."""
+async def test_tui_launch_ergo_outside_herdr_stays_open():
+    """The multi-project cockpit stays open after launching, even outside Herdr."""
     from unittest.mock import AsyncMock, patch
 
     from herdr_master.core.context import HerdrContext
@@ -229,12 +229,13 @@ async def test_tui_launch_ergo_outside_herdr_exits_with_attach():
                 )
             )
             await pilot.pause()
-            assert app.return_value == {"action": "attach", "session": "ergo-worker"}
+            assert app.return_value is None
+            assert app.is_running
 
 
 @pytest.mark.asyncio
-async def test_tui_launch_ergo_inside_herdr_exits_with_done():
-    """Verify launching Ergo inside Herdr triggers exit with done result."""
+async def test_tui_launch_ergo_inside_herdr_stays_open():
+    """Inside Herdr, Ergo opens a fresh workspace and the cockpit stays running."""
     from unittest.mock import AsyncMock, patch
 
     from herdr_master.core.context import HerdrContext
@@ -252,8 +253,8 @@ async def test_tui_launch_ergo_inside_herdr_exits_with_done():
     )
     fake_res = {
         "session": "default",
-        "workspace_id": "w9",
-        "pane_id": "w9:p2",
+        "workspace_id": "w-new",
+        "pane_id": "w-new:p1",
         "orchestrator_pane_id": "w9:p2",
         "scout_pane_id": "w9:p2",
         "tab_id": "w9:t2",
@@ -264,7 +265,9 @@ async def test_tui_launch_ergo_inside_herdr_exits_with_done():
 
     with (
         patch("herdr_master.ui.tui.app.resolve_launch_context", return_value=fake_ctx),
-        patch("herdr_master.ui.tui.app.launch_ergo", new_callable=AsyncMock, return_value=fake_res),
+        patch(
+            "herdr_master.ui.tui.app.launch_ergo", new_callable=AsyncMock, return_value=fake_res
+        ) as launch,
     ):
         async with app.run_test(size=(110, 45)) as pilot:
             await pilot.press("e")
@@ -277,8 +280,8 @@ async def test_tui_launch_ergo_inside_herdr_exits_with_done():
                 )
             )
             await pilot.pause()
-            assert app.return_value == {
-                "action": "done",
-                "session": "default",
-                "workspace_id": "w9",
-            }
+            assert app.return_value is None
+            assert app.app_state.workspace_id != "w-new"
+    launch.assert_awaited_once()
+    assert launch.await_args.kwargs["fresh_workspace"] is True
+    assert launch.await_args.kwargs["focus"] is False
