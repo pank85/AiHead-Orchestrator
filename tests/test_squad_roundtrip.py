@@ -24,11 +24,24 @@ def test_squad_roundtrip_toml():
         architect=HarnessBinding.from_slug("pi:openai-codex/gpt-6.1-sol:high"),
         reviewer=HarnessBinding.from_slug("agy:gemini-4-argon-high"),
         worker_pool=[
-            HarnessBinding.from_slug("pi:xai/grok-4.7", label="general_backend", order=0),
             HarnessBinding.from_slug(
-                "pi:openai-codex/gpt-6.1-terra:high", label="concurrency", order=1
+                "claude:claude-3-opus",
+                label="worker-1",
+                description="Senior dev - Very capable for complex, architectural & subtle tasks",
+                order=0,
             ),
-            HarnessBinding.from_slug("agy:gemini-4-argon-high", label="frontend", order=2),
+            HarnessBinding.from_slug(
+                "agy:gemini-3.8-flash",
+                label="worker-2",
+                description="Junior dev - Fast and cost-effective for boilerplate tasks",
+                order=1,
+            ),
+            HarnessBinding.from_slug(
+                "pi:xai/grok-4.7",
+                label="worker-3",
+                description="Mid dev - General implementation, backend, APIs, refactoring",
+                order=2,
+            ),
         ],
     )
 
@@ -43,10 +56,18 @@ def test_squad_roundtrip_toml():
         assert reloaded.reviewer.to_slug() == squad.reviewer.to_slug()
         assert len(reloaded.worker_pool) == 3
 
-        assert reloaded.worker_pool[0].to_slug() == "pi:xai/grok-4.7"
-        assert reloaded.worker_pool[0].label == "general_backend"
-        assert reloaded.worker_pool[1].to_slug() == "pi:openai-codex/gpt-6.1-terra:high"
-        assert reloaded.worker_pool[2].to_slug() == "agy:gemini-4-argon-high"
+        assert reloaded.worker_pool[0].to_slug() == "claude:claude-3-opus"
+        assert reloaded.worker_pool[0].label == "worker-1"
+        assert "Senior dev" in (reloaded.worker_pool[0].description or "")
+        assert reloaded.worker_pool[0].effort is None
+
+        assert reloaded.worker_pool[1].to_slug() == "agy:gemini-3.8-flash"
+        assert reloaded.worker_pool[1].label == "worker-2"
+        assert reloaded.worker_pool[1].effort is None
+
+        assert reloaded.worker_pool[2].to_slug() == "pi:xai/grok-4.7"
+        assert reloaded.worker_pool[2].label == "worker-3"
+        assert reloaded.worker_pool[2].effort is None
 
 
 def test_save_squad_as_default():
@@ -56,8 +77,18 @@ def test_save_squad_as_default():
         architect=HarnessBinding.from_slug("pi:openai-codex/gpt-6.1-sol:high"),
         reviewer=HarnessBinding.from_slug("agy:gemini-4-argon-high"),
         worker_pool=[
-            HarnessBinding.from_slug("pi:xai/grok-4.7", label="backend", order=0),
-            HarnessBinding.from_slug("agy:gemini-4-argon-high", label="ui", order=1),
+            HarnessBinding.from_slug(
+                "claude:claude-3-opus",
+                label="worker-1",
+                description="Senior dev",
+                order=0,
+            ),
+            HarnessBinding.from_slug(
+                "agy:gemini-3.8-flash",
+                label="worker-2",
+                description="Junior dev",
+                order=1,
+            ),
         ],
     )
 
@@ -71,8 +102,12 @@ def test_save_squad_as_default():
 
         assert reloaded_squad.scout.to_slug() == squad.scout.to_slug()
         assert len(reloaded_squad.worker_pool) == 2
-        assert reloaded_squad.worker_pool[0].label == "backend"
-        assert reloaded_squad.worker_pool[1].label == "ui"
+        assert reloaded_squad.worker_pool[0].label == "worker-1"
+        assert reloaded_squad.worker_pool[0].description == "Senior dev"
+        assert reloaded_squad.worker_pool[0].effort is None
+        assert reloaded_squad.worker_pool[1].label == "worker-2"
+        assert reloaded_squad.worker_pool[1].description == "Junior dev"
+        assert reloaded_squad.worker_pool[1].effort is None
 
 
 def test_squad_validation():
@@ -97,11 +132,22 @@ def test_format_allowed_coder_models():
     """Verify allowed coder models block formatting for the Architect prompt."""
     squad = Squad(
         worker_pool=[
-            HarnessBinding.from_slug("pi:xai/grok-4.7", label="backend", order=0),
-            HarnessBinding.from_slug("agy:gemini-4-argon-high", label="frontend", order=1),
+            HarnessBinding.from_slug(
+                "claude:claude-3-opus",
+                label="worker-1",
+                description="Senior dev - Very capable",
+                order=0,
+            ),
+            HarnessBinding.from_slug(
+                "agy:gemini-3.8-flash",
+                label="worker-2",
+                description="Junior dev - Fast and easy tasks",
+                order=1,
+            ),
         ]
     )
     block = format_allowed_coder_models(squad)
     assert "ALLOWED CODER MODELS:" in block
-    assert "- pi:xai/grok-4.7 (backend)" in block
-    assert "- agy:gemini-4-argon-high (frontend)" in block
+    assert "reasoning effort" in block
+    assert "- claude:claude-3-opus (worker-1) — Senior dev - Very capable" in block
+    assert "- agy:gemini-3.8-flash (worker-2) — Junior dev - Fast and easy tasks" in block

@@ -14,10 +14,17 @@ scout = "agy:gemini-3.8-flash-high"
 architect = "pi:openai-codex/gpt-6.1-sol:high"
 reviewer = "agy:gemini-4-argon-high:high"
 
-[models.worker_pool]
-general_backend = "pi:xai/grok-4.7:medium"
-concurrency_logic = "pi:openai-codex/gpt-6.1-terra:medium"
-frontend_multimodal = "agy:gemini-3.8-flash:medium"
+[models.worker_pool.worker-1]
+binding = "claude:claude-3-opus"
+description = "Senior dev - Very capable for complex, architectural & subtle tasks"
+
+[models.worker_pool.worker-2]
+binding = "agy:gemini-3.8-flash"
+description = "Junior dev - Fast and cost-effective for easy, straightforward & boilerplate tasks"
+
+[models.worker_pool.worker-3]
+binding = "pi:xai/grok-4.7"
+description = "Mid dev - General implementation, backend, APIs, refactoring"
 
 [tui]
 refresh_rate_ms = 250

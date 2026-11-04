@@ -81,8 +81,18 @@ class ConfigDrawer(ModalScreen[Optional[Tuple[Squad, bool]]]):
         )
         self._harness_select = Select(self.HARNESS_OPTIONS, value="agy", allow_blank=False)
         self._model_input = Input(placeholder="Model slug, e.g. gemini-4-argon-high")
+        self._effort_label = Label("Effort Level:", classes="field-label")
         self._effort_select = Select(self.EFFORT_OPTIONS, value="none", allow_blank=False)
-        self._label_input = Input(placeholder="Optional capability label")
+        self._effort_note = Label(
+            "Reasoning Effort: (Decided dynamically by Architect per task)",
+            classes="field-label",
+        )
+        self._role_label = Label("Identifier / Label:", classes="field-label")
+        self._label_input = Input(placeholder="Optional capability label (e.g. worker-1)")
+        self._desc_label = Label("Capability Info (for Architect):", classes="field-label")
+        self._desc_input = Input(
+            placeholder="e.g. Senior dev - Very capable for complex, architectural & subtle tasks"
+        )
         self._error_label = Static("", classes="error-label")
         self._pool_option_list = OptionList(classes="pool-list")
         self._selected_pool_index: int = 0
@@ -109,11 +119,15 @@ class ConfigDrawer(ModalScreen[Optional[Tuple[Squad, bool]]]):
             yield Label("Model Slug:", classes="field-label")
             yield self._model_input
 
-            yield Label("Effort Level:", classes="field-label")
+            yield self._effort_label
             yield self._effort_select
+            yield self._effort_note
 
-            yield Label("Capability Label:", classes="field-label")
+            yield self._role_label
             yield self._label_input
+
+            yield self._desc_label
+            yield self._desc_input
 
             yield Button("Apply Changes", id="btn-apply-binding", variant="primary")
             yield self._error_label
@@ -130,8 +144,11 @@ class ConfigDrawer(ModalScreen[Optional[Tuple[Squad, bool]]]):
     def _refresh_pool_list(self) -> None:
         self._pool_option_list.clear_options()
         for idx, w in enumerate(self.squad.worker_pool):
-            lbl = w.label or f"worker_{idx}"
-            self._pool_option_list.add_option(f"[{idx + 1}] {w.to_slug()} ({lbl})")
+            lbl = w.label or f"worker_{idx + 1}"
+            desc = f" — {w.description[:26]}..." if w.description else ""
+            self._pool_option_list.add_option(
+                f"[{idx + 1}] {w.to_slug(include_effort=False)} ({lbl}){desc}"
+            )
         if self.squad.worker_pool:
             idx = min(self._selected_pool_index, len(self.squad.worker_pool) - 1)
             self._pool_option_list.highlighted = idx
@@ -140,17 +157,28 @@ class ConfigDrawer(ModalScreen[Optional[Tuple[Squad, bool]]]):
         mode = self._role_select.value
         pool_container = self.query_one("#pool-mgmt-container")
 
-        if mode == "scout":
+        if mode in ("scout", "architect", "reviewer"):
             pool_container.display = False
-            self._populate_fields(self.squad.scout)
-        elif mode == "architect":
-            pool_container.display = False
-            self._populate_fields(self.squad.architect)
-        elif mode == "reviewer":
-            pool_container.display = False
-            self._populate_fields(self.squad.reviewer)
+            self._effort_label.display = True
+            self._effort_select.display = True
+            self._effort_note.display = False
+            self._desc_label.display = False
+            self._desc_input.display = False
+            self._role_label.update("Role Identifier:")
+            if mode == "scout":
+                self._populate_fields(self.squad.scout)
+            elif mode == "architect":
+                self._populate_fields(self.squad.architect)
+            elif mode == "reviewer":
+                self._populate_fields(self.squad.reviewer)
         else:  # pool
             pool_container.display = True
+            self._effort_label.display = False
+            self._effort_select.display = False
+            self._effort_note.display = True
+            self._desc_label.display = True
+            self._desc_input.display = True
+            self._role_label.update("Worker Identifier / Label:")
             if self.squad.worker_pool and self._selected_pool_index < len(self.squad.worker_pool):
                 self._populate_fields(self.squad.worker_pool[self._selected_pool_index])
 
@@ -159,6 +187,7 @@ class ConfigDrawer(ModalScreen[Optional[Tuple[Squad, bool]]]):
         self._model_input.value = binding.model
         self._effort_select.value = binding.effort.value if binding.effort else "none"
         self._label_input.value = binding.label or ""
+        self._desc_input.value = binding.description or ""
 
     def on_select_changed(self, event: Select.Changed) -> None:
         if event.select == self._role_select:
@@ -174,8 +203,14 @@ class ConfigDrawer(ModalScreen[Optional[Tuple[Squad, bool]]]):
         if bid == "btn-apply-binding":
             self._apply_current_fields()
         elif bid == "btn-add-worker":
-            new_worker = HarnessBinding.from_slug(
-                "agy:gemini-3.8-flash-high", label="new_worker", order=len(self.squad.worker_pool)
+            idx = len(self.squad.worker_pool)
+            new_worker = HarnessBinding(
+                kind=HarnessKind.AGY,
+                model="gemini-3.8-flash",
+                effort=None,
+                label=f"worker-{idx + 1}",
+                description="Junior dev - Fast and cost-effective for easy boilerplate tasks",
+                order=idx,
             )
             self.squad.worker_pool.append(new_worker)
             self._selected_pool_index = len(self.squad.worker_pool) - 1
@@ -224,15 +259,20 @@ class ConfigDrawer(ModalScreen[Optional[Tuple[Squad, bool]]]):
             effort_val = str(self._effort_select.value)
             effort = EffortLevel(effort_val) if effort_val != "none" else None
             label = self._label_input.value.strip() or None
+            desc = self._desc_input.value.strip() or None
+
+            mode = self._role_select.value
+            worker_effort = None if mode == "pool" else effort
+            worker_desc = desc if mode == "pool" else None
 
             updated = HarnessBinding(
                 kind=kind,
                 model=model,
-                effort=effort,
+                effort=worker_effort,
                 label=label,
+                description=worker_desc,
             )
 
-            mode = self._role_select.value
             if mode == "scout":
                 self.squad.scout = updated
             elif mode == "architect":

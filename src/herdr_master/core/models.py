@@ -44,6 +44,7 @@ class HarnessBinding(BaseModel):
     model: str
     effort: Optional[EffortLevel] = None
     label: Optional[str] = None
+    description: Optional[str] = None
     enabled: bool = True
     order: int = 0
 
@@ -59,6 +60,7 @@ class HarnessBinding(BaseModel):
         slug_str: str,
         default_effort: Optional[EffortLevel] = None,
         label: Optional[str] = None,
+        description: Optional[str] = None,
         enabled: bool = True,
         order: int = 0,
     ) -> "HarnessBinding":
@@ -69,6 +71,7 @@ class HarnessBinding(BaseModel):
             slug_str,
             default_effort=default_effort,
             label=label,
+            description=description,
             enabled=enabled,
             order=order,
         )
@@ -88,12 +91,23 @@ class Squad(BaseModel):
     )
     worker_pool: List[HarnessBinding] = Field(
         default_factory=lambda: [
-            HarnessBinding.from_slug("pi:xai/grok-4.7", label="general_backend", order=0),
             HarnessBinding.from_slug(
-                "pi:openai-codex/gpt-6.1-terra", label="concurrency_logic", order=1
+                "claude:claude-3-opus",
+                label="worker-1",
+                description="Senior dev - Very capable for complex, architectural tasks",
+                order=0,
             ),
             HarnessBinding.from_slug(
-                "agy:gemini-4-argon-high", label="frontend_multimodal", order=2
+                "agy:gemini-3.8-flash",
+                label="worker-2",
+                description="Junior dev - Fast and cost-effective for boilerplate tasks",
+                order=1,
+            ),
+            HarnessBinding.from_slug(
+                "pi:xai/grok-4.7",
+                label="worker-3",
+                description="Mid dev - General implementation, backend, APIs, refactoring",
+                order=2,
             ),
         ]
     )

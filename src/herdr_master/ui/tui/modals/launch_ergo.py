@@ -141,8 +141,19 @@ class LaunchErgoModal(ModalScreen[Optional[ErgoLaunchParams]]):
         self._model_input = Input(
             value="gemini-3.8-flash-high", placeholder="e.g. gemini-3.8-flash-high"
         )
+        self._effort_label = Label("Reasoning Effort:", classes="field-label")
         self._effort_select = Select(self.EFFORT_OPTIONS, value="high", allow_blank=False)
-        self._label_input = Input(value="scout", placeholder="Optional capability label")
+        self._effort_note = Label(
+            "Reasoning Effort: [dim italic](Decided dynamically by Architect)[/dim italic]",
+            classes="field-label",
+        )
+        self._role_label_header = Label("Role / Worker Name:", classes="field-label")
+        self._label_input = Input(value="scout", placeholder="Optional worker label")
+        self._desc_label = Label("Capability Info (for Architect):", classes="field-label")
+        self._description_input = Input(
+            value="",
+            placeholder="e.g. Senior dev - Very capable for complex, architectural & subtle tasks",
+        )
         self._status_label = Static("", classes="status-msg")
 
         # Bottom Section widgets
@@ -179,11 +190,15 @@ class LaunchErgoModal(ModalScreen[Optional[ErgoLaunchParams]]):
                     yield Label("Model Slug:", classes="field-label")
                     yield self._model_input
 
-                    yield Label("Reasoning Effort:", classes="field-label")
+                    yield self._effort_label
                     yield self._effort_select
+                    yield self._effort_note
 
-                    yield Label("Capability / Specialty Label:", classes="field-label")
+                    yield self._role_label_header
                     yield self._label_input
+
+                    yield self._desc_label
+                    yield self._description_input
 
                     with Horizontal(id="worker-pool-bar", classes="worker-pool-buttons"):
                         yield Button("+ Add Worker", id="btn-add-worker", variant="success")
@@ -239,7 +254,12 @@ class LaunchErgoModal(ModalScreen[Optional[ErgoLaunchParams]]):
         for idx, worker in enumerate(self.squad.worker_pool):
             w_sub = f"{worker.kind.value}:{worker.model}"
             w_name = worker.label or f"worker-{idx + 1}"
-            w_text = f"↳ [bold]{w_name}[/bold] [dim]({w_sub})[/dim]"
+            desc_text = (
+                f" • [italic dim]{worker.description[:26]}...[/italic dim]"
+                if worker.description
+                else ""
+            )
+            w_text = f"↳ [bold]{w_name}[/bold] [dim]({w_sub})[/dim]{desc_text}"
             pool_node.add_leaf(w_text, data={"type": "worker", "index": idx})
 
         # 4. Reviewer
@@ -276,6 +296,21 @@ class LaunchErgoModal(ModalScreen[Optional[ErgoLaunchParams]]):
         pool_bar = self.query_one("#worker-pool-bar", Horizontal)
 
         try:
+            if target in ("scout", "architect", "reviewer", "root"):
+                self._effort_label.display = True
+                self._effort_select.display = True
+                self._effort_note.display = False
+                self._desc_label.display = False
+                self._description_input.display = False
+                self._role_label_header.update("Role Identifier:")
+            else:
+                self._effort_label.display = False
+                self._effort_select.display = False
+                self._effort_note.display = True
+                self._desc_label.display = True
+                self._description_input.display = True
+                self._role_label_header.update("Worker Identifier / Name:")
+
             if target == "scout":
                 self._editor_heading.update("Scout Role Configuration")
                 self._populate_fields(self.squad.scout)
@@ -311,6 +346,7 @@ class LaunchErgoModal(ModalScreen[Optional[ErgoLaunchParams]]):
         self._model_input.value = binding.model
         self._effort_select.value = binding.effort.value if binding.effort else "none"
         self._label_input.value = binding.label or ""
+        self._description_input.value = binding.description or ""
 
     def on_input_changed(self, event: Input.Changed) -> None:
         if self._is_updating_fields:
@@ -330,10 +366,11 @@ class LaunchErgoModal(ModalScreen[Optional[ErgoLaunchParams]]):
         except Exception:
             hkind = HarnessKind.AGY
 
-        model_str = self._model_input.value.strip() or "gemini-3.8-flash-high"
+        model_str = self._model_input.value.strip() or "gemini-3.8-flash"
         effort_str = str(self._effort_select.value)
         effort = None if effort_str == "none" else EffortLevel(effort_str)
         label_str = self._label_input.value.strip() or None
+        desc_str = self._description_input.value.strip() or None
 
         target = self._selected_target
         if target == "scout":
@@ -357,8 +394,10 @@ class LaunchErgoModal(ModalScreen[Optional[ErgoLaunchParams]]):
                 w = self.squad.worker_pool[idx]
                 w.kind = hkind
                 w.model = model_str
-                w.effort = effort
+                # Workers do not have thinking effort; Architect decides dynamically
+                w.effort = None
                 w.label = label_str
+                w.description = desc_str
 
         # Update left tree representation
         self._rebuild_tree()
@@ -368,8 +407,13 @@ class LaunchErgoModal(ModalScreen[Optional[ErgoLaunchParams]]):
 
         if btn_id == "btn-add-worker":
             idx = len(self.squad.worker_pool)
-            new_worker = HarnessBinding.from_slug(
-                "agy:gemini-3.8-flash-high", label=f"worker-{idx + 1}", order=idx
+            new_worker = HarnessBinding(
+                kind=HarnessKind.AGY,
+                model="gemini-3.8-flash",
+                effort=None,
+                label=f"worker-{idx + 1}",
+                description="Junior dev - Fast and cost-effective for easy boilerplate tasks",
+                order=idx,
             )
             self.squad.worker_pool.append(new_worker)
             self._rebuild_tree()

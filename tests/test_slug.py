@@ -96,6 +96,19 @@ def test_squad_defaults_and_validation():
     assert squad.architect.to_slug() == "pi:openai-codex/gpt-6.1-sol:high"
     assert squad.reviewer.to_slug() == "agy:gemini-4-argon-high"
     assert len(squad.worker_pool) == 3
+    assert squad.worker_pool[0].label == "worker-1"
+    assert squad.worker_pool[0].to_slug() == "claude:claude-3-opus"
+    assert squad.worker_pool[0].effort is None
+    assert "Senior dev" in (squad.worker_pool[0].description or "")
+
+    assert squad.worker_pool[1].label == "worker-2"
+    assert squad.worker_pool[1].to_slug() == "agy:gemini-3.8-flash"
+    assert squad.worker_pool[1].effort is None
+    assert "Junior dev" in (squad.worker_pool[1].description or "")
+
+    assert squad.worker_pool[2].label == "worker-3"
+    assert squad.worker_pool[2].to_slug() == "pi:xai/grok-4.7"
+    assert squad.worker_pool[2].effort is None
 
     # Reviewer (gemini) != Architect (gpt/openai-codex)
     assert not squad.has_reviewer_model_family_conflict()

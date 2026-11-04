@@ -87,6 +87,7 @@ def parse_binding(
     raw: str,
     default_effort: Optional[EffortLevel] = None,
     label: Optional[str] = None,
+    description: Optional[str] = None,
     enabled: bool = True,
     order: int = 0,
 ) -> HarnessBinding:
@@ -98,6 +99,7 @@ def parse_binding(
         model=model_ref,
         effort=final_effort,
         label=label,
+        description=description,
         enabled=enabled,
         order=order,
     )

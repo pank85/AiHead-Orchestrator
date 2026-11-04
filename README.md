@@ -7,7 +7,7 @@
 [![Python: 3.10+](https://img.shields.io/badge/python-3.10+-3776AB.svg?logo=python&logoColor=white)](https://www.python.org/downloads/)
 [![Herdr: v0.9.5+](https://img.shields.io/badge/herdr-v0.9.5+-8A2BE2.svg)](https://herdr.dev)
 [![TUI: Textual](https://img.shields.io/badge/TUI-Textual%208.x-00D4AA.svg)](https://textual.textualize.io/)
-[![Tests: 35 passed](https://img.shields.io/badge/tests-35%20passed-success.svg)](#-testing--verification)
+[![Tests: 36 passed](https://img.shields.io/badge/tests-36%20passed-success.svg)](#-testing--verification)
 [![Code style: ruff](https://img.shields.io/badge/code%20style-ruff-000000.svg)](https://github.com/astral-sh/ruff)
 
 ---
@@ -132,7 +132,7 @@ The landing view gives an uncluttered, 100% full-width dashboard with three prom
 
 ---
 
-### 2. 2-Column Squad Topology & Pipeline Launcher Modal
+### 2. 2-Column Squad Topology & Dynamic Capability Editor
 Press `[ ⚡ New Ergo Pipeline ]`, `[ ⚙️ Configure Squad ]`, or keys `e` / `s`:
 
 ```text
@@ -141,13 +141,14 @@ Press `[ ⚡ New Ergo Pipeline ]`, `[ ⚙️ Configure Squad ]`, or keys `e` / `
 │ ┌─ Top 75%: Squad Configuration ─────────────────────────────────────────────────────┐ │
 │ │  Topology Tree (Left Column)      │  Agent Details (Right Column)                  │ │
 │ │                                   │                                                │ │
-│ │  👑 Herdr-Master Root             │  Role: Scout                                   │ │
-│ │  ├── ● Scout (agy:gemini-flash)   │  Harness:  [ agy ▼ ]                           │ │
-│ │  ├── ● Architect (pi:grok-4.7)    │  Model:    [ gemini-3.8-flash-high           ] │ │
-│ │  ├── 📦 Worker Pool (2 workers)   │  Effort:   [ high ▼ ]                          │ │
-│ │  │   ├── ● worker-1 (pi:codex)    │  Label:    [ scout                           ] │ │
-│ │  │   └── ● worker-2 (claude:sonn) │                                                │ │
-│ │  └── ● Reviewer (agy:argon)       │  [+ Add Worker]  [- Remove Worker]             │ │
+│ │  👑 Herdr-Master Root             │  Worker Pool: worker-1 (Position #1)           │ │
+│ │  ├── ● Scout (agy:gemini-flash)   │  Harness:     [ claude ▼ ]                     │ │
+│ │  ├── ● Architect (pi:codex)       │  Model:       [ claude-3-opus                ] │ │
+│ │  ├── 📦 Worker Pool (3 workers)   │  Effort:      (Decided dynamically per task)   │ │
+│ │  │   ├── ↳ worker-1 (claude:opus) │  Name:        [ worker-1                     ] │ │
+│ │  │   ├── ↳ worker-2 (agy:flash)   │  Capability:  [ Senior dev - Complex tasks   ] │ │
+│ │  │   └── ↳ worker-3 (pi:grok)     │                                                │ │
+│ │  └── ● Reviewer (agy:argon)       │  [+ Add Worker]  [- Remove Worker] [↑ Up] [↓]  │ │
 │ └───────────────────────────────────┴────────────────────────────────────────────────┘ │
 │                                                                                        │
 │ ┌─ Bottom 25%: Execution Deck ───────────────────────────────────────────────────────┐ │
@@ -158,6 +159,12 @@ Press `[ ⚡ New Ergo Pipeline ]`, `[ ⚙️ Configure Squad ]`, or keys `e` / `
 │ └────────────────────────────────────────────────────────────────────────────────────┘ │
 └────────────────────────────────────────────────────────────────────────────────────────┘
 ```
+
+> **Dynamic Worker Capability Model**:
+> Workers in the pool do **not** carry rigid thinking efforts or specific job names. Instead:
+> * Workers are generic pool members (`worker-1`, `worker-2`, `worker-3`).
+> * Each worker carries capability info (e.g. *Senior dev: Very capable for complex, architectural & subtle tasks*, or *Junior dev: Fast, boilerplate & mechanical edits*).
+> * The **Architect** inspects these capability descriptions to allocate the right model to each task and **dynamically determines reasoning effort** (`low`, `medium`, `high`, `max`) based on task complexity.
 
 ---
 
@@ -284,7 +291,7 @@ herdm init --target-branch develop
 The project includes an automated test suite covering state machines, framing protocols, launcher lifecycles, standalone skills installer, and Textual pilot interactions:
 
 ```bash
-# Run full test suite (35 passed)
+# Run full test suite (36 passed)
 uv run pytest tests/
 
 # Code quality check with Ruff
@@ -292,7 +299,7 @@ uv run ruff check .
 ```
 
 ```text
-============================== 35 passed in 6.59s ==============================
+============================== 36 passed in 7.10s ==============================
 ```
 
 ---
