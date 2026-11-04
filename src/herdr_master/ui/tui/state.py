@@ -49,12 +49,23 @@ class AppState(BaseModel):
             ),
             reviewer=HarnessBinding.from_slug("agy:gemini-4-argon-high", label="code_review_gate"),
             worker_pool=[
-                HarnessBinding.from_slug("pi:xai/grok-4.7", label="general_backend", order=0),
                 HarnessBinding.from_slug(
-                    "pi:openai-codex/gpt-6.1-terra:high", label="concurrency_logic", order=1
+                    "claude:claude-3-opus",
+                    label="worker-1",
+                    description="Senior dev - Very capable for complex, architectural tasks",
+                    order=0,
                 ),
                 HarnessBinding.from_slug(
-                    "agy:gemini-4-argon-high", label="frontend_multimodal", order=2
+                    "agy:gemini-3.8-flash",
+                    label="worker-2",
+                    description="Junior dev - Fast and cost-effective for boilerplate tasks",
+                    order=1,
+                ),
+                HarnessBinding.from_slug(
+                    "pi:xai/grok-4.7",
+                    label="worker-3",
+                    description="Mid dev - General implementation, backend, APIs, refactoring",
+                    order=2,
                 ),
             ],
         )

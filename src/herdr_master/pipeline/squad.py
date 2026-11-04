@@ -49,14 +49,22 @@ def validate_squad(squad: Squad) -> List[str]:
 
 
 def format_allowed_coder_models(squad: Squad) -> str:
-    """Format the ordered worker pool block to paste into the Architect prompt."""
-    lines: List[str] = ["ALLOWED CODER MODELS:"]
+    """Format the ordered worker pool block to paste into the Architect prompt.
+
+    Workers do not have a hardcoded thinking effort; the Architect dynamically
+    decides reasoning effort (low, medium, high, max) per task based on complexity.
+    """
+    lines: List[str] = [
+        "ALLOWED CODER MODELS: (assign each task in plan.md one worker model from this list, "
+        "and select reasoning effort low/medium/high/max based on task complexity):"
+    ]
     for worker in squad.worker_pool:
         if not worker.enabled:
             continue
-        slug = worker.to_slug()
+        slug = worker.to_slug(include_effort=False)
         hint = f" ({worker.label})" if worker.label else ""
-        lines.append(f"- {slug}{hint}")
+        desc = f" — {worker.description}" if worker.description else ""
+        lines.append(f"- {slug}{hint}{desc}")
     return "\n".join(lines)
 
 
@@ -87,17 +95,34 @@ def load_run_squad(path: Path) -> Squad:
                 if not binding_str:
                     continue
                 label = row.get("label")
+                description = row.get("description")
                 enabled = row.get("enabled", True)
                 order = row.get("order", idx)
                 binding = HarnessBinding.from_slug(
-                    binding_str, label=label, enabled=enabled, order=order
+                    binding_str,
+                    label=label,
+                    description=description,
+                    enabled=enabled,
+                    order=order,
                 )
+                binding.effort = None
                 pool.append(binding)
             elif isinstance(row, str):
-                pool.append(HarnessBinding.from_slug(row, order=idx))
+                binding = HarnessBinding.from_slug(row, order=idx)
+                binding.effort = None
+                pool.append(binding)
     elif isinstance(raw_pool, dict):
-        for idx, (label, slug) in enumerate(raw_pool.items()):
-            pool.append(HarnessBinding.from_slug(slug, label=label, order=idx))
+        for idx, (label, val) in enumerate(raw_pool.items()):
+            if isinstance(val, dict):
+                b_str = val.get("binding") or val.get("slug") or ""
+                desc = val.get("description")
+                binding = HarnessBinding.from_slug(
+                    b_str, label=label, description=desc, order=idx
+                )
+            else:
+                binding = HarnessBinding.from_slug(str(val), label=label, order=idx)
+            binding.effort = None
+            pool.append(binding)
 
     return Squad(
         scout=scout,
@@ -117,8 +142,9 @@ def save_run_squad(squad: Squad, path: Path) -> Path:
         },
         "worker_pool": [
             {
-                "binding": worker.to_slug(),
+                "binding": worker.to_slug(include_effort=False),
                 "label": worker.label or "",
+                "description": worker.description or "",
                 "enabled": worker.enabled,
                 "order": worker.order,
             }

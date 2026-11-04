@@ -84,6 +84,36 @@ async def test_settings_modal_open_and_tree():
 
 
 @pytest.mark.asyncio
+async def test_launch_ergo_modal_worker_dynamic_effort_and_description():
+    """Verify worker pool hides effort select, shows effort note, and exposes description."""
+    app = HerdrMasterApp(demo=True)
+    async with app.run_test(size=(110, 45)) as pilot:
+        await pilot.press("e")
+        modal = pilot.app.screen
+        assert isinstance(modal, LaunchErgoModal)
+
+        # Initially Scout is selected: effort select visible, description hidden
+        assert modal._effort_select.display is True
+        assert modal._effort_note.display is False
+        assert modal._description_input.display is False
+
+        # Select Worker 0: effort select hidden, dynamic effort note visible, description visible
+        modal._load_agent_into_editor(("worker", 0))
+        assert modal._effort_select.display is False
+        assert modal._effort_note.display is True
+        assert modal._description_input.display is True
+        assert "Senior dev" in modal._description_input.value
+
+        # Select Scout again: returns to standard role editor
+        modal._load_agent_into_editor("scout")
+        assert modal._effort_select.display is True
+        assert modal._effort_note.display is False
+        assert modal._description_input.display is False
+
+        await pilot.click("#btn-cancel")
+
+
+@pytest.mark.asyncio
 async def test_launch_master_modal_and_quick_launch():
     """Verify clicking #btn-new-master or pressing 'n' opens LaunchMasterModal."""
     app = HerdrMasterApp(demo=True)

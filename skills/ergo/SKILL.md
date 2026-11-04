@@ -35,8 +35,9 @@ Both compact colon syntax and natural space/comma-separated syntax are accepted:
    - Any role specified in `--models` overrides that role's default model and effort (`low` → `think`, `medium` → `think hard`, `high` → `think harder`, `max`/`xhigh` → `ultrathink`).
    - Any role **omitted** from `--models` keeps the active mode's default model/effort.
 2. **Worker Pool Override (`workers` / `coders`)**:
-   - The user may pass **one** model or a **list of models** for `workers` (e.g., `workers: gemini-3.8-flash high, gemini-4-argon high` or `workers: xai/grok-4.7, gpt-6.1-terra`).
-   - When `workers` is provided via `--models`, **replace** the default `ALLOWED CODER MODELS` block pasted into the Architect prompt with **only** the user-specified worker models (and their specified efforts). The Architect must assign each task in `plan.md` one model from that user-supplied worker list.
+   - The user may pass **one** model or a **list of models** for `workers` (e.g., `workers: claude-3-opus, gemini-3.8-flash` or `workers: xai/grok-4.7, gpt-6.1-terra`).
+   - Workers in the pool do not carry rigid thinking efforts. The Architect assigns reasoning effort dynamically based on each task's complexity.
+   - When `workers` is provided via `--models`, **replace** the default `ALLOWED CODER MODELS` block pasted into the Architect prompt with the user-specified worker models. The Architect must assign each task in `plan.md` one model from that user-supplied worker list and select the appropriate reasoning effort.
 3. **Resolving Shorthand Model Names per Harness**:
    - Match human/shorthand names (e.g., `gemini 4 argon high` → `gemini-4-argon-high`, `grok 4.7` → `xai/grok-4.7`, `terra high` → `openai-codex/gpt-6.1-terra:high`, `sol max` → `openai-codex/gpt-6.1-sol:high`) against the active harness's live models (`pi --list-models`, `agy models`, `opencode models`, or Claude models).
    - **Special note for Antigravity (`agy`) Default Mode**: Native `invoke_subagent` only accepts tier IDs (`flash_lite`, `flash`, `pro`) plus effort trigger phrases (`think` / `think hard` / `think harder` / `ultrathink`) on line 1 of `Prompt`. Map `flash-lite` → `flash_lite`, `flash` → `flash`, and `pro`/`argon`/`opus`/`sonnet` → `pro` (with the requested effort phrase on line 1) — **OR**, if the user requested distinct non-tier `agy models` slugs (e.g. mixing `claude-opus-5-5-high` and `gemini-4-argon-high`), run the run via `--herdr` (`herdr agent start ... --kind agy -- --model <exact-slug>`) so each tab pins the exact CLI model slug.
@@ -120,12 +121,10 @@ When `/ergo` is invoked with `--herdr` (optionally with role overrides `--scout 
    - **Reviewer**: `agy:gemini-4-argon-high` (or `pi:openai-codex/gpt-6.1-sol` — whichever model family did not Architect)
    - **`--herdr` Allowed Coder Models (paste this block verbatim into the Architect prompt instead of the single-harness list)**:
      ```text
-     ALLOWED CODER MODELS (assign each task in `plan.md` one exact `<kind>:<model>` ID from this list, plus a tailored `Expert Persona`):
-     - `pi:xai/grok-4.7` — SuperGrok (500K context/output). Default workhorse for general implementation, backend services, APIs, tests, and multi-file refactoring.
-     - `pi:openai-codex/gpt-6.1-terra` — OpenAI Codex Terra (500K context). Use for complex algorithmic logic, tricky concurrency/state bugs, or subtle edge-case implementation.
-     - `agy:gemini-4-argon-high` — Gemini 4 Argon High (1M context). Use for frontend/UI/UX components, multimodal tasks, or tasks spanning very large files.
-     - `agy:gemini-3.8-flash-high` — Gemini 3.8 Flash High. Use for fast, mechanical, well-scoped edits or boilerplate wiring.
-     - `pi:opencode-go/<verified-free-model>` — Optional free model verified in `pi --list-models` (e.g. `pi:opencode-go/grok-4.7`, `pi:opencode-go/deepseek-v4.1-flash`) for trivial/low-risk mechanical tasks.
+     ALLOWED CODER MODELS: (assign each task in `plan.md` one worker model from this list, and select reasoning effort low/medium/high/max dynamically based on task complexity):
+     - `claude:claude-3-opus` (worker-1) — Senior dev - Very capable for complex, architectural & subtle tasks
+     - `agy:gemini-3.8-flash` (worker-2) — Junior dev - Fast and cost-effective for easy, straightforward & boilerplate tasks
+     - `pi:xai/grok-4.7` (worker-3) — Mid dev - General implementation, backend, APIs, refactoring
      ```
 
 2. **One Temporary Herdr Workspace (`ergo-<run-id>`)**:

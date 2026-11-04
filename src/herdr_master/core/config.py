@@ -2,7 +2,7 @@
 
 import sys
 from pathlib import Path
-from typing import Dict, List, Optional
+from typing import Any, Dict, List, Optional
 
 from pydantic import BaseModel, Field
 
@@ -37,13 +37,20 @@ class ModelsConfig(BaseModel):
             "reviewer": "agy:gemini-4-argon-high",
         }
     )
-    worker_pool: Dict[str, str] = Field(
+    worker_pool: Dict[str, Any] = Field(
         default_factory=lambda: {
-            "general_backend": "pi:xai/grok-4.7",
-            "concurrency_logic": "pi:openai-codex/gpt-6.1-terra",
-            "frontend_multimodal": "agy:gemini-4-argon-high",
-            "mechanical_edits": "agy:gemini-3.8-flash-high",
-            "free_tier": "pi:opencode-go/deepseek-v4.1-flash",
+            "worker-1": {
+                "binding": "claude:claude-3-opus",
+                "description": "Senior dev - Very capable for complex, architectural tasks",
+            },
+            "worker-2": {
+                "binding": "agy:gemini-3.8-flash",
+                "description": "Junior dev - Fast and cost-effective for boilerplate tasks",
+            },
+            "worker-3": {
+                "binding": "pi:xai/grok-4.7",
+                "description": "Mid dev - General implementation, backend, APIs, refactoring",
+            },
         }
     )
 
@@ -109,8 +116,17 @@ def squad_from_project_config(config: HerdrMasterConfig) -> Squad:
 
     pool: List[HarnessBinding] = []
     order = 0
-    for label, slug in config.models.worker_pool.items():
-        binding = HarnessBinding.from_slug(slug, label=label, order=order)
+    for label, val in config.models.worker_pool.items():
+        if isinstance(val, dict):
+            slug_str = val.get("binding") or val.get("slug") or ""
+            desc = val.get("description")
+            binding = HarnessBinding.from_slug(
+                slug_str, label=label, description=desc, order=order
+            )
+        else:
+            binding = HarnessBinding.from_slug(str(val), label=label, order=order)
+        # Workers have no fixed effort; Architect decides dynamically
+        binding.effort = None
         pool.append(binding)
         order += 1
 
@@ -132,10 +148,15 @@ def squad_to_project_config(
     cfg.models.default_squad["architect"] = squad.architect.to_slug()
     cfg.models.default_squad["reviewer"] = squad.reviewer.to_slug()
 
-    pool_dict: Dict[str, str] = {}
+    pool_dict: Dict[str, Any] = {}
     for idx, worker in enumerate(squad.worker_pool):
-        key = worker.label or f"worker_{idx}"
-        pool_dict[key] = worker.to_slug()
+        key = worker.label or f"worker-{idx + 1}"
+        entry: Dict[str, Any] = {
+            "binding": worker.to_slug(include_effort=False),
+        }
+        if worker.description:
+            entry["description"] = worker.description
+        pool_dict[key] = entry
 
     cfg.models.worker_pool = pool_dict
     return cfg
