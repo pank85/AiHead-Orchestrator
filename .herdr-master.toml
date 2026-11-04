@@ -9,22 +9,15 @@ base_directory = ".herdr-worktrees"
 naming_template = "herdm/{job_name}-{timestamp}"
 auto_clean_on_success = true
 
-[models.default_squad]
-scout = "agy:gemini-3.8-flash-high"
-architect = "pi:openai-codex/gpt-6.1-sol:high"
-reviewer = "agy:gemini-4-argon-high:high"
-
-[models.worker_pool.worker-1]
-binding = "claude:claude-3-opus"
-description = "Senior dev - Very capable for complex, architectural & subtle tasks"
-
-[models.worker_pool.worker-2]
-binding = "agy:gemini-3.8-flash"
-description = "Junior dev - Fast and cost-effective for easy, straightforward & boilerplate tasks"
-
-[models.worker_pool.worker-3]
-binding = "pi:xai/grok-4.7"
-description = "Mid dev - General implementation, backend, APIs, refactoring"
+# Model defaults are not stored in this file.
+# The sole product squad is the catalog default in Herdr mode:
+# Scout agy gemini-3.8-flash-medium at effort medium,
+# Architect pi openai-codex/gpt-6.1-sol at thinking max,
+# Reviewer pi xai/grok-4.7 at thinking high,
+# and two workers (agy gemini-3.8-flash, pi xai/grok-4.7) with effort unset.
+# Save an explicit override with save_squad_as_default or the cockpit Save Default
+# action; that writes [models.default_squad] and [models.worker_pool].
+# Absent model fields inherit the catalog. They are not a second default squad.
 
 [tui]
 refresh_rate_ms = 250

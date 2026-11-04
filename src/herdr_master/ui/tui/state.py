@@ -1,13 +1,27 @@
-"""AppState store for Herdr-Master TUI."""
+"""AppState store for Herdr-Master TUI.
 
-from typing import Any, Dict, List, Optional
+Domain state stays usable without project I/O. Catalog helpers below only read
+the in-memory descriptor so live widgets do not keep a second model table.
+"""
+
+from pathlib import Path
+from typing import Any, Dict, List, Optional, Tuple
 
 from pydantic import BaseModel, Field
 
+from herdr_master.core.catalog import (
+    CatalogError,
+    compatibility_presets,
+    describe_herdr_agent,
+    ensure_herdr_routable,
+    get_harness,
+    supported_harnesses,
+    worker_capability,
+    worker_route_note,
+)
 from herdr_master.core.models import (
     EffortLevel,
     HarnessBinding,
-    HarnessKind,
     MasterSession,
     PipelinePhase,
     PipelineRun,
@@ -16,6 +30,174 @@ from herdr_master.core.models import (
     WorkerSession,
     WorkerState,
 )
+from herdr_master.pipeline.squad import describe_agent
+
+
+def harness_select_options(*, mode: str = "herdr") -> List[Tuple[str, str]]:
+    """Harness labels and values from the catalog, not a hand-written table."""
+    options: List[Tuple[str, str]] = []
+    for kind in supported_harnesses(mode=mode):
+        spec = get_harness(kind)
+        options.append((f"{spec.label} ({spec.kind})", spec.kind))
+    return options
+
+
+def effort_select_options(
+    kind: Optional[str] = None,
+    model: Optional[str] = None,
+    *,
+    mode: str = "herdr",
+    include_unset: bool = True,
+) -> List[Tuple[str, str]]:
+    """Efforts the catalog allows for this harness and model."""
+    efforts: List[str] = []
+    text = model.strip() if isinstance(model, str) else ""
+    if kind and text:
+        try:
+            payload = worker_capability(kind, text, mode=mode)
+            efforts = list(payload.get("allowed_efforts") or [])
+        except CatalogError:
+            efforts = []
+    if not efforts and kind:
+        try:
+            spec = get_harness(kind)
+            if spec.herdr.effort_flag or spec.herdr.prompt_effort:
+                efforts = ["low", "medium", "high", "max"]
+        except CatalogError:
+            efforts = []
+    options: List[Tuple[str, str]] = []
+    if include_unset:
+        options.append(("Unset", "none"))
+    for effort in efforts:
+        options.append((effort.capitalize(), effort))
+    if not options:
+        options.append(("Unset", "none"))
+    return options
+
+
+def catalog_worker_template(index: int) -> HarnessBinding:
+    """New worker from the catalog pool template. Effort stays unset."""
+    template = Squad().worker_pool[0]
+    return template.model_copy(
+        update={
+            "label": f"worker-{index + 1}",
+            "effort": None,
+            "enabled": True,
+            "order": index,
+        }
+    )
+
+
+def normalize_worker_order(squad: Squad) -> None:
+    for idx, worker in enumerate(squad.worker_pool):
+        worker.order = idx
+
+
+def project_config_file(project_path: Optional[Path]) -> Optional[Path]:
+    """Return the project toml path. A directory means that directory's file."""
+    if project_path is None:
+        return None
+    path = Path(project_path)
+    if path.suffix == ".toml":
+        return path
+    return path / ".herdr-master.toml"
+
+
+def compatibility_preset_note() -> str:
+    presets = compatibility_presets()
+    if any(item.get("default") for item in presets):
+        return "A compatibility preset is marked default; that is a catalog bug."
+    return "Compatibility presets are not the product default."
+
+
+def squad_source_line(sources: Optional[Dict[str, str]], mode: str) -> str:
+    if not sources:
+        return f"{mode} · catalog"
+    if set(sources.values()) == {"product_default"}:
+        return f"{mode} · product_default"
+    ordered = [
+        f"{key}={sources[key]}"
+        for key in ("scout", "architect", "reviewer", "workers")
+        if key in sources
+    ]
+    return f"{mode} · " + " ".join(ordered)
+
+
+def scout_summary(squad: Squad) -> str:
+    effort = squad.scout.effort.value if squad.scout.effort else "unset"
+    return f"scout {squad.scout.kind.value}:{squad.scout.model}:{effort}"
+
+
+def binding_launch_preview(
+    binding: HarnessBinding,
+    *,
+    role: str,
+    mode: str = "herdr",
+    native_harness: Optional[str] = None,
+) -> str:
+    """Canonical route text. Workers keep effort unset."""
+    if role in {"worker", "coder"}:
+        try:
+            note = worker_route_note(
+                binding.kind.value,
+                binding.model,
+                mode=mode,
+                native_harness=native_harness,
+            )
+        except CatalogError as exc:
+            return str(exc)
+        return f"worker effort unset · {note}"
+    try:
+        described = describe_agent(
+            binding,
+            mode=mode,  # type: ignore[arg-type]
+            role=role,
+            native_harness=native_harness,
+        )
+    except CatalogError as exc:
+        return str(exc)
+    argv = described.get("argv") or []
+    kind = described.get("kind") or binding.kind.value
+    if argv:
+        return f"{kind} " + " ".join(str(part) for part in argv)
+    return f"{kind} {described.get('tool') or role}".strip()
+
+
+def coordinator_route_text(kind: str, model: str, effort: Optional[str]) -> str:
+    described = describe_herdr_agent(kind, model, effort, "master")
+    argv = described.get("argv") or []
+    return f"{described['kind']} " + " ".join(str(part) for part in argv)
+
+
+def validate_binding_for_editor(
+    binding: HarnessBinding,
+    *,
+    role: str,
+    mode: str = "herdr",
+    native_harness: Optional[str] = None,
+) -> Optional[str]:
+    """Return an actionable error. Never invent a model for blank input."""
+    if not binding.kind or not str(binding.model).strip():
+        return f"{role} requires a model. Refusing to invent one."
+    try:
+        if role in {"worker", "coder"}:
+            ensure_herdr_routable(
+                binding.kind.value,
+                binding.model,
+                None,
+                role="coder",
+                require_effort=False,
+            )
+            return None
+        describe_agent(
+            binding,
+            mode=mode,  # type: ignore[arg-type]
+            role=role,
+            native_harness=native_harness,
+        )
+    except CatalogError as exc:
+        return str(exc)
+    return None
 
 
 class AppState(BaseModel):
@@ -41,34 +223,15 @@ class AppState(BaseModel):
 
     @classmethod
     def create_demo_state(cls) -> "AppState":
-        """Generate rich demo state for offline testing and visualization."""
-        squad = Squad(
-            scout=HarnessBinding.from_slug("agy:gemini-3.8-flash-high", label="codebase_recon"),
-            architect=HarnessBinding.from_slug(
-                "pi:openai-codex/gpt-6.1-sol:high", label="plan_design"
-            ),
-            reviewer=HarnessBinding.from_slug("agy:gemini-4-argon-high", label="code_review_gate"),
-            worker_pool=[
-                HarnessBinding.from_slug(
-                    "claude:claude-3-opus",
-                    label="worker-1",
-                    description="Senior dev - Very capable for complex, architectural tasks",
-                    order=0,
-                ),
-                HarnessBinding.from_slug(
-                    "agy:gemini-3.8-flash",
-                    label="worker-2",
-                    description="Junior dev - Fast and cost-effective for boilerplate tasks",
-                    order=1,
-                ),
-                HarnessBinding.from_slug(
-                    "pi:xai/grok-4.7",
-                    label="worker-3",
-                    description="Mid dev - General implementation, backend, APIs, refactoring",
-                    order=2,
-                ),
-            ],
-        )
+        """Offline visualization. Squad models come from the catalog.
+
+        Task text, scrollback, and diffs are labelled demo fixtures, not product defaults.
+        """
+        squad = Squad()
+        pool = squad.worker_pool
+
+        def _bind(index: int) -> HarnessBinding:
+            return pool[index % len(pool)]
 
         tasks = [
             TaskNode(
@@ -77,7 +240,7 @@ class AppState(BaseModel):
                 files=["src/herdr_master/core/slug.py", "src/herdr_master/core/models.py"],
                 dependency="INDEPENDENT",
                 expert_persona="Protocol & Grammar Specialist",
-                binding=squad.worker_pool[0],
+                binding=_bind(0),
                 status=WorkerState.DONE,
                 worker_id="coder-1",
             ),
@@ -87,7 +250,7 @@ class AppState(BaseModel):
                 files=["src/herdr_master/herdr/socket.py", "src/herdr_master/herdr/client.py"],
                 dependency="INDEPENDENT",
                 expert_persona="Async Networking & Protocol Engineer",
-                binding=squad.worker_pool[1],
+                binding=_bind(1),
                 status=WorkerState.WORKING,
                 worker_id="coder-2",
             ),
@@ -100,7 +263,7 @@ class AppState(BaseModel):
                 ],
                 dependency="DEPENDS ON: task-1",
                 expert_persona="TUI & Visual Layout Architect",
-                binding=squad.worker_pool[2],
+                binding=_bind(0),
                 status=WorkerState.SPAWNING,
                 worker_id="coder-3",
             ),
@@ -123,8 +286,8 @@ class AppState(BaseModel):
                 worker_id="coder-1",
                 pane_id="ws-01:p1",
                 tab_id="ws-01:t1",
-                harness=HarnessKind.PI,
-                model="xai/grok-4.7",
+                harness=pool[0].kind,
+                model=pool[0].model,
                 worktree_path=".herdr-worktrees/herdm-coder-1",
                 branch="herdm/run-01/task-1",
                 state=WorkerState.DONE,
@@ -133,8 +296,8 @@ class AppState(BaseModel):
                 worker_id="coder-2",
                 pane_id="ws-01:p2",
                 tab_id="ws-01:t2",
-                harness=HarnessKind.PI,
-                model="openai-codex/gpt-6.1-terra",
+                harness=pool[1].kind,
+                model=pool[1].model,
                 effort=EffortLevel.HIGH,
                 worktree_path=".herdr-worktrees/herdm-coder-2",
                 branch="herdm/run-01/task-2",
@@ -144,8 +307,8 @@ class AppState(BaseModel):
                 worker_id="coder-3",
                 pane_id="ws-01:p3",
                 tab_id="ws-01:t3",
-                harness=HarnessKind.AGY,
-                model="gemini-4-argon-high",
+                harness=pool[0].kind,
+                model=pool[0].model,
                 worktree_path=".herdr-worktrees/herdm-coder-3",
                 branch="herdm/run-01/task-3",
                 state=WorkerState.SPAWNING,
@@ -184,7 +347,7 @@ new file mode 100644
                 herdr_session="default",
                 workspace_id="ws-01",
                 pane_id="p-master",
-                harness=HarnessKind.AGY,
+                harness=squad.scout.kind,
                 role="root-orchestrator",
                 child_workers=["coder-1", "coder-2", "coder-3"],
             )

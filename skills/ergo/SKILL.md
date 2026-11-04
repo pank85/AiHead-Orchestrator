@@ -1,7 +1,7 @@
 ---
 name: ergo
-description: "Run the Ergo Scout -> Architect -> parallel specialist Coders -> Reviewer pipeline with worktree/branch isolation, Approval Gate, and single squash-commit landing (supports --models and --herdr cross-harness mode)."
-argument-hint: "[--herdr] [--models ...] [intent]"
+description: "Run the Ergo Scout -> Architect -> parallel specialist Coders -> Reviewer pipeline with worktree/branch isolation, Approval Gate, and single squash-commit landing (supports --models, --native, and default Herdr mode)."
+argument-hint: "[--native] [--models ...] [intent]"
 slash: false
 metadata:
   opencode/autoinvoke: false
@@ -12,148 +12,97 @@ metadata:
 Run an Ergo pipeline for: `${@:-$ARGUMENTS}` (if no intent or spec path was supplied, ask what to build and stop).
 
 You are the orchestrator. **Never implement code directly in the main conversation.**
-- **Default Mode (Native Subagents)**: Use the active harness's native subagent tool and allowed model table from **§1 (Harness Adapter & Allowed Models)** below. Every subagent call must pass an explicit `model`—never rely on implicit parent inheritance.
-- **`--models` Inline Role & Worker Overrides (Works in BOTH Default `/ergo` and `/ergo --herdr`)**: See **§0 (`--models` Override Syntax)** below.
-- **`--herdr` Cross-Harness Mode (`/ergo --herdr ...`)**: When `--herdr` is passed (or the user asks to mix harnesses over Herdr), run every pipeline role (`scout`, `architect`, `coder-1..N`, `reviewer`) as an interactive Herdr agent tab inside **one temporary Herdr workspace** (`ergo-<run-id>`) on the default Herdr session. Follow **§2 (`--herdr` Cross-Harness Mode)** below.
+- **Default Mode (Herdr Cross-Harness)**: Plain `/ergo` defaults to Herdr mode. The mixed agy/Pi product default squad cannot run through a single host's native subagent tool, so every pipeline role runs as an interactive Herdr agent tab inside one Herdr workspace. `--herdr` is an explicit alias for this default.
+- **Explicit `--native` Mode**: When `--native` is explicitly passed (e.g. `/ergo --native ...`), the pipeline runs using the parent harness's native subagent tool (`invoke_subagent` in `agy`, `subagent` in `pi`/`opencode`, `Agent` in `claude`). There is no alternate native default squad; `--native` requires explicit compatible role/worker overrides or a compatible run snapshot, and any inherited product binding incompatible with the native host is rejected by the resolver.
+- **`--models` Inline Role & Worker Overrides**: Overrides any role (`scout`, `architect`, `reviewer`) or worker pool (`workers` / `coders`). Works in both default Herdr mode and `--native` mode.
 
 ---
 
-## 0. Configuration Hierarchy & Inline Role & Worker Overrides
+## 0. Configuration Hierarchy & Squad Resolution via `herdm catalog`
 
 When resolving squad role models and worker pool bindings, follow this strict priority order:
 1. **Inline CLI / Prompt Overrides (`--models`, `--scout`, `--architect`, `--workers`, `--reviewer`)**: Explicit arguments passed in the invocation command take highest priority.
-2. **Project Configuration (`.herdr-master.toml`)**: If `.herdr-master.toml` exists in the current project root, read `[models.default_squad]` and `[models.worker_pool]`. Use its configured models, generic labels, and capability descriptions for the roles and the `ALLOWED CODER MODELS` block.
-3. **Built-in Harness Defaults**: If neither is present, fall back to the built-in tables in **§1** (for default native subagent mode) or **§2** (for `--herdr` mode).
+2. **Run Snapshot (`--run-squad <path>`)**: If a run squad TOML snapshot path is supplied, its pinned bindings take priority over project defaults.
+3. **Project Configuration (`.herdr-master.toml`)**: If `.herdr-master.toml` exists in the project root, its configured model overrides take priority over product defaults.
+4. **Product Default Squad**: If none of the above are provided, use the authoritative product default squad from the catalog.
 
-The user can override models and effort levels for any role (`scout`, `architect`, `workers`/`coders`, `reviewer`) in **both** plain `/ergo` and `/ergo --herdr` using `--models` (or individual `--scout`, `--architect`, `--workers`/`--coder`, `--reviewer` flags):
+### Authoritative Squad Resolution (No Hand-Maintained Fallback Tables)
+Do NOT maintain or consult hardcoded default model tables. The single authority for squad configuration, roles, and allowed coder models is `herdm catalog`:
 
-### Supported Syntax Examples
-Both compact colon syntax and natural space/comma-separated syntax are accepted:
-```text
-/ergo --models scout:gemini-3.8-flash:medium workers:gemini-3.8-flash:high,gemini-4-argon:high architect:gemini-4-argon:max <intent>
-/ergo --models scout gemini-3.8-flash medium, workers gemini-3.8-pro high, gemini-4-argon high, architect gemini-4-argon max, reviewer claude-opus-5-5 high -- <intent>
-/ergo --scout gpt-6-luna:low --architect gpt-6.1-sol:high --workers xai/grok-4.7:high,gpt-6.1-terra:high <intent>
-```
+1. **Resolve Effective Squad**:
+   Execute:
+   ```bash
+   herdm catalog squad [--mode herdr|native] [--harness <native-host>] [--project .herdr-master.toml] [--models "<spec>"] [--run-squad <path>] --json
+   ```
+   - Default mode is `--mode herdr` (unless `--native` was explicitly passed).
+   - If `--native` is passed, supply `--harness <active-harness>`.
+   - Forward any user-specified overrides (`--models`, `--scout`, `--architect`, `--workers`, `--reviewer`).
+   - If `herdm` is not found in the environment, **STOP and report an actionable installation prerequisite error** (e.g. install `herdm` via `uv` or activate a virtualenv containing `herdr-master`). Never fall back to an embedded table.
 
-### How `--models` Overrides Are Applied
-1. **Role Overrides (`scout`, `architect`, `reviewer`)**:
-   - Any role specified in `--models` overrides that role's default model and effort (`low` → `think`, `medium` → `think hard`, `high` → `think harder`, `max`/`xhigh` → `ultrathink`).
-   - Any role **omitted** from `--models` keeps the active mode's default model/effort.
-2. **Worker Pool Override (`workers` / `coders`)**:
-   - The user may pass **one** model or a **list of models** for `workers` (e.g., `workers: claude-3-opus, gemini-3.8-flash` or `workers: xai/grok-4.7, gpt-6.1-terra`).
-   - Workers in the pool do not carry rigid thinking efforts. The Architect assigns reasoning effort dynamically based on each task's complexity.
-   - When `workers` is provided via `--models`, **replace** the default `ALLOWED CODER MODELS` block pasted into the Architect prompt with the user-specified worker models. The Architect must assign each task in `plan.md` one model from that user-supplied worker list and select the appropriate reasoning effort.
-3. **Resolving Shorthand Model Names per Harness**:
-   - Match human/shorthand names (e.g., `gemini 4 argon high` → `gemini-4-argon-high`, `grok 4.7` → `xai/grok-4.7`, `terra high` → `openai-codex/gpt-6.1-terra:high`, `sol max` → `openai-codex/gpt-6.1-sol:high`) against the active harness's live models (`pi --list-models`, `agy models`, `opencode models`, or Claude models).
-   - **Special note for Antigravity (`agy`) Default Mode**: Native `invoke_subagent` only accepts tier IDs (`flash_lite`, `flash`, `pro`) plus effort trigger phrases (`think` / `think hard` / `think harder` / `ultrathink`) on line 1 of `Prompt`. Map `flash-lite` → `flash_lite`, `flash` → `flash`, and `pro`/`argon`/`opus`/`sonnet` → `pro` (with the requested effort phrase on line 1) — **OR**, if the user requested distinct non-tier `agy models` slugs (e.g. mixing `claude-opus-5-5-high` and `gemini-4-argon-high`), run the run via `--herdr` (`herdr agent start ... --kind agy -- --model <exact-slug>`) so each tab pins the exact CLI model slug.
-   - Display the resolved model + effort table for all 4 roles at the **Approval Gate (Step 4)**.
+2. **Authoritative Product Default Squad (returned by `herdm catalog squad`)**:
+   - **Scout**: `agy:gemini-3.8-flash-medium`, effort `medium` (Herdr argv: `--model gemini-3.8-flash-medium --effort medium --dangerously-skip-permissions`)
+   - **Architect**: `pi:openai-codex/gpt-6.1-sol:max` (Herdr argv: `--provider openai-codex --model gpt-6.1-sol --thinking max`)
+   - **Reviewer**: `pi:xai/grok-4.7:high` (Herdr argv: `--provider xai --model grok-4.7 --thinking high`)
+   - **Worker Pool**: Exactly two ordered routes (pool entries have no fixed effort; the Architect assigns effort dynamically per task):
+     - `agy:gemini-3.8-flash`: simple, mechanical, well-scoped work (per task: `low`, `medium`, or `high`, resolved to exact `gemini-3.8-flash-low`, `gemini-3.8-flash-medium`, or `gemini-3.8-flash-high` with matching `--effort`)
+     - `pi:xai/grok-4.7`: complex, architectural, or subtle work (`--provider xai --model grok-4.7 --thinking <level>`)
+   *Note*: `claude:claude-3-opus` and `agy:gemini-4-argon-high` are NOT defaults anywhere.
 
----
+3. **`ALLOWED CODER MODELS` Block**:
+   Extract `.allowed_coder_models` directly from the `herdm catalog squad --json` output. Paste this block verbatim into the Architect prompt. Do not craft your own model list.
 
-## 1. Native Harness Adapter & Allowed Models (Default Mode)
-
-Identify which harness you are running in (`agy`, `pi`, `claude`, or `opencode`) and apply its native spawn mechanism and allowed model list:
-
-### A. Antigravity (`agy`)
-- **Spawn Mechanism**: `define_subagent` (`EnableSubagentTools: false`; `EnableWriteTools: true` for Scout/Architect/Worker, `false` for Reviewer) + `invoke_subagent(TypeName, Role, Model, Prompt)`.
-- **Role Defaults**:
-  - **Scout** (`ergo-scout`): `Model: "flash"` (standard recon) or `"pro"` (complex recon)
-  - **Architect** (`ergo-architect`): `Model: "pro"`
-  - **Worker** (`ergo-worker`): `Model`: exact tier (`"flash"` or `"pro"`) from `plan.md`, `Role: "<Expert Persona> (<task-name>)"`
-  - **Reviewer** (`ergo-reviewer`): `Model: "pro"`
-- **`ALLOWED CODER MODELS` (paste verbatim into Architect prompt in `agy` default mode)**:
-  ```text
-  ALLOWED CODER MODELS (assign each task in `plan.md` one exact Model tier ID, plus a tailored `Expert Persona`):
-  - `flash` — Gemini Flash tier (`gemini-3.8-flash`); use for mechanical, well-scoped, or straightforward implementation work
-  - `pro` — Gemini Pro / Argon tier (`gemini-4-argon`); use for complex, architectural, or subtle implementation work
-  ```
-
-### B. Pi (`pi`)
-- **Spawn Mechanism**: `pi-subagents` via `subagent({ agent: "<scout|delegate|worker|reviewer>", model: "<id>", task: "<prompt>" })`. Verify model availability with `pi --list-models` if needed.
-- **Role Defaults**:
-  - **Scout**: `agent: "scout"`, `model: "openai-codex/gpt-6-luna"` (`:low` mechanical, `:high` hard)
-  - **Architect**: `agent: "delegate"`, `model: "openai-codex/gpt-6.1-sol:high"`
-  - **Worker**: `agent: "worker"`, `model`: exact ID from `plan.md` (`:low` mechanical, `:high` hard)
-  - **Reviewer**: `agent: "reviewer"`, `model: "openai-codex/gpt-6.1-sol:medium"`
-- **`ALLOWED CODER MODELS` (paste verbatim into Architect prompt in `pi` default mode)**:
-  ```text
-  ALLOWED CODER MODELS (assign each task in `plan.md` one exact model ID in `Provider/Model/Effort`, plus a tailored `Expert Persona`):
-  - `xai/grok-4.7` — SuperGrok (default workhorse for general implementation, backend, APIs, refactoring)
-  - `openai-codex/gpt-6.1-terra` — Codex Terra (use for complex algorithmic logic, tricky concurrency/state bugs, or subtle edge cases)
-  - Any free model available through `opencode-go` (choose an exact model ID reported by `pi --list-models`, for fast mechanical edits)
-  ```
-
-### C. Claude Code (`claude`)
-- **Spawn Mechanism**: `Agent` tool with `subagent_type: "general-purpose"` and explicit `model`. Pass the literal effort trigger phrase on line 1 of the prompt (`low` → `think`, `medium` → `think hard`, `high` → `think harder`, `xhigh` → `ultrathink`).
-- **Role Defaults**:
-  - **Scout**: `sonnet` / `medium` (`haiku` / `low` if familiar area already discussed this session)
-  - **Architect**: `fable` / `xhigh` (or `opus` / `xhigh`)
-  - **Coder**: Architect's per-task choice from `ALLOWED CODER MODELS` below (fallback `sonnet` / `xhigh`)
-  - **Reviewer**: `opus` / `xhigh`
-- **`ALLOWED CODER MODELS` (paste verbatim into Architect prompt in `claude` default mode)**:
-  ```text
-  ALLOWED CODER MODELS (assign each task in `plan.md` one `Model/Effort` pair, plus a tailored `Expert Persona`):
-  - `haiku` / `low` — mechanical renames, boilerplate, trivial edits
-  - `sonnet` / `xhigh` — standard implementation across UI and backend
-  - `opus` / `xhigh` — complex architectural, concurrency, or subtle algorithmic tasks
-  ```
-
-### D. OpenCode (`opencode`)
-- **Spawn Mechanism**: Native `subagent(agent: "general", model: "<provider/model>", description: "<label>", prompt: "<prompt>", background: false)`. At preflight, run `opencode models` and smoke-test selected IDs (`Reply exactly: OK`). Supports `--squad`, `--squad-default`, and `--squad-show` overrides. (When orchestrated by Hermes over Herdr in OpenCode-only mode, use one `hermes` workspace with per-tab `opencode --auto`).
-- **Role Defaults**:
-  - **Scout**: `opencode/grok-build-0.1` (`think`) or familiar/cheap `opencode-go/deepseek-v4.1-flash` (`think`)
-  - **Architect**: `opencode-go/grok-4.7` (`ultrathink`)
-  - **Coder**: Architect's per-task choice from `CODER_MODELS` below
-  - **Reviewer**: `opencode-go/grok-4.7` (`ultrathink`)
-- **`CODER_MODELS` (paste verbatim into Architect prompt in `opencode` default mode)**:
-  ```text
-  CODER_MODELS (assign each task in `plan.md` one exact `Provider/Model/Effort` ID from this closed list, plus a tailored `Expert Persona`):
-  - `opencode/big-pickle` — UI work (`think harder`)
-  - `opencode-go/deepseek-v4.1-flash` — mechanical work (`think`)
-  - `opencode/grok-build-0.1` — Grok Build mechanical/fast work (`think`)
-  - `opencode-go/grok-4.7` — standard (`think harder`) and complex (`ultrathink`) work
-  ```
+4. **Resolving Agent Launch Descriptors**:
+   For each role/task launch, resolve the exact launch arguments or native tool call from:
+   ```bash
+   herdm catalog agent --mode <mode> [--harness <native-host>] --binding <binding> --role <role> --json
+   ```
+   - In Herdr mode, the returned `argv` array is used verbatim in `herdr agent start <name> --kind <kind> --pane <pane-id> -- <argv...>`.
+   - In Native mode, the returned descriptor contains `tool`, `kwargs`, `setup`, `prompt_param`, and optional `effort_prefix`. Use these verbatim.
 
 ---
 
-## 2. `--herdr` Cross-Harness Mode (`/ergo --herdr`)
+## 1. Native Subagent Execution (`--native` Mode Only)
 
-When `/ergo` is invoked with `--herdr` (optionally with role overrides `--scout <kind>:<model>`, `--architect <kind>:<model>`, `--coder <kind>:<model>`, `--reviewer <kind>:<model>`), the pipeline executes all roles as **cross-harness Herdr agent tabs inside one temporary Herdr workspace** (`ergo-<run-id>` on the default Herdr session):
+When `--native` is explicitly passed:
+- Native execution uses the active host's subagent tool as described by `herdm catalog agent --mode native --harness <host> ...`.
+- Native adapters preserve specific tool contracts:
+  - **Antigravity (`agy`)**: `invoke_subagent` accepts tier IDs (`flash_lite`, `flash`, `pro`) and effort phrases (`think`, `think hard`, `think harder`, `ultrathink`) on line 1 of `Prompt`. Exact CLI slugs (e.g. `gemini-3.8-flash-medium`) are rejected in native mode; run via default Herdr mode to use exact CLI slugs.
+  - **Pi (`pi`)**: uses `subagent({ agent, model, task })` with model effort suffixes (e.g. `xai/grok-4.7:high`).
+  - **Claude Code (`claude`)**: uses `Agent` tool with prompt effort phrases on line 1.
+  - **OpenCode (`opencode`)**: uses `subagent` tool with prompt effort phrases on line 1.
+- **Read-Only Reviewer Constraint**:
+  Reviewer is spawned as read-only (in `agy`: `EnableWriteTools: false`; in `pi`: read-only agent). If a native reviewer cannot write its report (`RUN_DIR/review.md` and `RUN_DIR/fixes_<N>.md`) because its tools are read-only, the orchestrator persists the returned report text under the concrete `RUN_DIR` rather than granting source-write permissions.
 
-1. **Default Cross-Harness Squad** (verify slugs via `pi --list-models` and `agy models` before launching; overridable by CLI flags or at the Approval Gate):
-   - **Scout**: `agy:gemini-3.8-flash-high` (or `pi:openai-codex/gpt-6-luna`)
-   - **Architect**: `pi:openai-codex/gpt-6.1-sol` (or `agy:gemini-4-argon-high` / `agy:claude-opus-5-5-high`)
-   - **Reviewer**: `agy:gemini-4-argon-high` (or `pi:openai-codex/gpt-6.1-sol` — whichever model family did not Architect)
-   - **`--herdr` Allowed Coder Models (paste this block verbatim into the Architect prompt instead of the single-harness list)**:
-     ```text
-     ALLOWED CODER MODELS: (assign each task in `plan.md` one worker model from this list, and select reasoning effort low/medium/high/max dynamically based on task complexity):
-     - `claude:claude-3-opus` (worker-1) — Senior dev - Very capable for complex, architectural & subtle tasks
-     - `agy:gemini-3.8-flash` (worker-2) — Junior dev - Fast and cost-effective for easy, straightforward & boilerplate tasks
-     - `pi:xai/grok-4.7` (worker-3) — Mid dev - General implementation, backend, APIs, refactoring
-     ```
+---
 
-2. **One Temporary Herdr Workspace (`ergo-<run-id>`)**:
-   - Use the default Herdr session (`herdr ...`).
-   - Ensure the server is up (`herdr status server`; start `herdr server` in background if down).
-   - Create one workspace for the entire Ergo run rooted at `WORKTREE`:
-     `herdr workspace create --cwd "$WORKTREE" --label "ergo-<run-id>" --no-focus` → record `<WS_ID>`.
+## 2. Herdr Execution & Workspace Adoption Contract (Default Mode)
 
-3. **Spawning Role Tabs Across Harnesses (`--kind agy | pi | claude`)**:
-   - Create one tab per agent (`scout`, `architect`, `coder-1`, `coder-2`, ..., `reviewer`) inside `<WS_ID>`:
-     `herdr tab create --workspace <WS_ID> --cwd "$WORKTREE" --label <role> --no-focus` → record `<PANE_ID>` (the workspace's initial pane may be reused for `scout`).
-   - Start the assigned harness in `<PANE_ID>`:
-     - **`agy`**: `herdr agent start <name> --kind agy --pane <PANE_ID> -- --model <slug> --dangerously-skip-permissions`
-     - **`pi`**: `herdr agent start <name> --kind pi --pane <PANE_ID> -- --provider <provider> --model <model>`
-     - **`claude`**: `herdr agent start <name> --kind claude --pane <PANE_ID> -- --model <model> --dangerously-skip-permissions`
-   - Send the full Spawn Recipe prompt (including `Adopt this expert persona: <Expert Persona>.` at the top of every `coder-N` prompt) with:
-     `herdr agent prompt <PANE_ID> "<prompt>"`
-   - For parallel `INDEPENDENT` tasks, start and prompt all `coder-N` tabs in the same turn, wait on each (`herdr agent wait <PANE_ID> --timeout 600000`), and verify completion via `herdr agent get/read` plus expected files (`RUN_DIR/context.md`, `RUN_DIR/plan.md`, `RUN_DIR/coder_<N>_summary.md`, `RUN_DIR/review.md`).
-   - On Reviewer fix cycles, send the fix prompt to the **existing** `coder-<N>` tab (preserving its specialist persona and model) rather than opening a duplicate tab.
+Plain `/ergo` and master-forwarded Ergo jobs execute in Herdr mode.
 
-4. **Workspace Teardown**:
-   - After Step 7 (Landing) completes—or on early STOP after preserving worktree/branch state—close the temporary Herdr workspace:
-     `herdr workspace close <WS_ID>`
-   - Never close unrelated workspaces.
+### Workspace & Session Adoption (No Duplicate Workspaces, No Blanket Closes)
+- **Bootstrap Context Version 1**:
+  When launched by a parent orchestrator (such as `launch_ergo` or `/herdr-master`), the orchestrator passes a JSON bootstrap context:
+  `{ "schema_version": 1, "entrypoint": "ergo", "intent": "...", "origin_cwd": "...", "session": "...", "workspace_id": "...", "owns_workspace": false, "squad": {...}, "worktree": "...", "run_dir": "..." }`
+- **Adoption & Ownership Rules**:
+  - **Bootstrap `owns_workspace` is the ONLY ownership signal**: Do not set or infer `owns_workspace = false` merely because `workspace_id` is present. Read the bootstrap boolean `owns_workspace` directly.
+  - **Adopt when `workspace_id` is present**: When `workspace_id` is set (via bootstrap context or `HERDR_WORKSPACE_ID`), adopt that workspace directly. Do NOT call `herdr workspace create` again when `workspace_id` is already set.
+  - Only if no `workspace_id` is provided anywhere, create a temporary Herdr workspace `ergo-<run-id>` and mark `owns_workspace = true`.
+  - **Cleanup Rules**:
+    - Close the workspace only when bootstrap `owns_workspace` is true, and close only that specific ID: `herdr workspace close <workspace_id>`.
+    - Adopted workspaces (`owns_workspace == false`) are NEVER closed.
+    - Never close unrelated workspaces or tabs.
+  - **No Recursive Coordinator Kickoff**:
+    Do NOT recursively invoke `herdm ergo` to start another coordinator. The current session IS the orchestrator.
+
+### Spawning Role Tabs
+1. Ensure the Herdr server is accessible (`herdr status server`).
+2. Create one tab per role in the workspace:
+   `herdr tab create --workspace <WS_ID> --cwd "$WORKTREE" --label <role> --no-focus` → record `<PANE_ID>`.
+3. Start the agent using the exact argv resolved from `herdm catalog agent`:
+   `herdr agent start <name> --kind <kind> --pane <PANE_ID> -- <resolved_argv...>`
+4. Send the prompt with `herdr agent prompt <PANE_ID> "<prompt>"`.
+5. For parallel `INDEPENDENT` tasks, start and prompt all coder tabs in the same turn, wait on each (`herdr agent wait <PANE_ID> --timeout 600000`), and verify completion via `herdr agent get/read` plus expected summary files.
+6. On Reviewer fix cycles, send fix prompts to the **existing** coder tabs rather than opening duplicate tabs.
 
 ---
 
@@ -187,30 +136,40 @@ Every agent prompt must be assembled in this order:
 
 Track one checklist item per step and complete in order:
 
-### Step 1: Isolation (`WORKTREE`), Branch (`ergo/<run-id>`), `RUN_DIR` & Preflight
-1. **Project Config Resolution**: Inspect the project root for `.herdr-master.toml`. If present, read `[models.default_squad]` and `[models.worker_pool]` to populate squad roles and the `ALLOWED CODER MODELS` block (unless overridden by `--models`).
-2. **Carryover**: Read `.orchestration/carryover.md` if present. Direct user instructions in the current turn override carryover.
-3. **Worktree / Branch Setup**:
-   - Require a git repo and a clean working tree (`git status --porcelain` empty; if dirty, STOP and ask the user to commit/stash).
-   - If already inside an `ergo/*` worktree (`git rev-parse --git-dir` ≠ `--git-common-dir` and branch matches `ergo/*`) or constrained to an assigned worktree by a parent `/herdr-master` orchestrator, reuse it and keep its branch.
-   - Otherwise, record `ORIGIN_BRANCH=$(git rev-parse --abbrev-ref HEAD)` and create an isolated worktree `WORKTREE=<project_parent>/<repo>-ergo-<run-id>` on branch `ergo/<run-id>`:
-     `git worktree add "$WORKTREE" -b "ergo/<run-id>"`
-     *(Note: In lightweight `pi`/`agy` runs where the user explicitly prefers in-place branch switching without a separate directory, `git switch -c ergo/<run-id>` with `WORKTREE=<repo_root>` is permitted, provided `ORIGIN_BRANCH` is recorded).*
-3. **Resolve `RUN_DIR`**: Create `<WORKTREE>/.orchestration/ergo-<run-id>/` (e.g. `run-<yyyyMMdd-HHmmss>-<4rand>`). Resolve once as an absolute path and use everywhere.
-4. **Unit Tests Question**: Unless the user already stated a preference this turn (or in `pi`/`agy` fast runs where the task prompt already specifies test scope), ask `unitTestsMode ∈ {none, new, update-only}` and forward it to all agents.
-5. **If `--herdr` is active**: Create the single temporary Herdr workspace `ergo-<run-id>` on the default Herdr session per **§2.2**.
+### Step 1: Isolation (`WORKTREE`), Branch (`ergo/<run-id>`), `RUN_DIR`, Snapshot & Preflight
+1. **Adoption or Creation of Worktree/Branch**:
+   - If a parent orchestrator provided `worktree` and `run_dir` (e.g. forwarded by `/herdr-master` or bootstrap context), **adopt** them directly.
+   - Otherwise:
+     - Require a clean working tree (`git status --porcelain` empty; if dirty, STOP and ask user to commit/stash).
+     - If already inside an `ergo/*` worktree (`git rev-parse --git-dir` ≠ `--git-common-dir` and branch matches `ergo/*`), reuse it and keep its branch.
+     - Otherwise, record `ORIGIN_BRANCH=$(git rev-parse --abbrev-ref HEAD)` and create an isolated worktree `WORKTREE=<project_parent>/<repo>-ergo-<run-id>` on branch `ergo/<run-id>`:
+       `git worktree add "$WORKTREE" -b "ergo/<run-id>"`
+     - Create `RUN_DIR=<WORKTREE>/.orchestration/ergo-<run-id>/` as an absolute path.
+2. **Resolve Squad and Write Frozen Snapshot**:
+   - Resolve the squad via `herdm catalog squad [--mode herdr|native] ... --json`.
+   - Write the frozen snapshot to `$RUN_DIR/squad.toml`:
+     ```bash
+     herdm catalog squad --from-json - --write-snapshot "$RUN_DIR/squad.toml" --json <<EOF
+     <resolved-squad-json>
+     EOF
+     ```
+   - Every role receives concrete `WORKTREE`, `RUN_DIR`, the resolved squad's `allowed_coder_models` block, and `unitTestsMode`.
+   - Do NOT create a preliminary snapshot in the canonical checkout outside the assigned worktree.
+3. **Workspace Setup**:
+   - In Herdr mode: if `workspace_id` is set, adopt that workspace. Do not call `herdr workspace create` when `workspace_id` is already set. Only if no `workspace_id` exists anywhere, create a temporary Herdr workspace `ergo-<run-id>` and record `owns_workspace = true`.
+4. **Unit Tests Question**:
+   - Unless stated in the prompt, ask `unitTestsMode ∈ {none, new, update-only}` and forward to all agents.
 
 ### Step 2: Scout — Fast Discovery (NEVER skip)
-- Spawn **Scout** with the confirmed intent, 3–5 specific questions to answer, `WORKTREE`, `RUN_DIR`, and `unitTestsMode`.
-- Wait for `RUN_DIR/context.md`. If missing/empty, retry Scout once. Verify `git status --porcelain` is still clean (Scout is strictly read-only for source).
+- Spawn **Scout** with confirmed intent, 3–5 specific questions to answer, `WORKTREE`, `RUN_DIR`, and `unitTestsMode`.
+- Wait for `RUN_DIR/context.md`. If missing/empty, retry Scout once. Verify `git status --porcelain` is clean (Scout is strictly read-only for source).
 
 ### Step 3: Architect — Design & Resource Allocation (NEVER skip)
-- Spawn **Architect** with confirmed intent/spec, `unitTestsMode`, `RUN_DIR/context.md`, and the **verbatim `ALLOWED CODER MODELS` block** for the active mode (**§1** for default mode, or **§2.1** for `--herdr` mode).
-- *(Optional Dual Plans)*: Only if explicitly requested by the user, spawn two Architects in parallel (`plan.md` and `plan_b.md`) and run a merge pass to produce the final `plan.md` with a short *Rejected alternatives* section.
+- Spawn **Architect** with confirmed intent/spec, `unitTestsMode`, `RUN_DIR/context.md`, and the **verbatim `ALLOWED CODER MODELS` block** from the resolved squad.
 - **Orchestrator Plan Validation**: Read `RUN_DIR/plan.md`. Every task **must** include:
   1. Disjoint **Files** ownership
   2. `INDEPENDENT` or `DEPENDS ON: <task#>`
-  3. A mandatory, domain-specific **Expert Persona** (e.g., `"Senior .NET async/await & EF Core specialist"`, `"React/Tailwind UI accessibility specialist"`)
+  3. A mandatory, domain-specific **Expert Persona**
   4. An explicit **Coder Model** chosen strictly from the pasted `ALLOWED CODER MODELS` block.
   If any task omits an `Expert Persona` or names a model outside the allowed list, **reject the plan and send the Architect back to fix it**. Do not edit `plan.md` yourself to invent models or personas.
 
@@ -220,46 +179,41 @@ Track one checklist item per step and complete in order:
 - **STOP and wait for explicit user approval.** Ask if any task's persona or coder model should be adjusted. No Coder may start before explicit user approval.
 
 ### Step 5: Parallel Specialist Coders (NEVER code in the orchestrator)
-- For each approved task in `plan.md`, make the Coder a task-specific specialist by injecting `Adopt this expert persona: <Expert Persona from plan>.` at the top of its prompt (and in `Role` when using `agy`).
+- For each approved task in `plan.md`, make the Coder a task-specific specialist by injecting `Adopt this expert persona: <Expert Persona from plan>.` at the top of its prompt.
 - Use the exact model approved for that task in `plan.md`.
 - Launch all `INDEPENDENT` tasks **in parallel in a single turn**. Tasks marked `DEPENDS ON` wait until their upstream dependencies finish and read `RUN_DIR/coder_<upstream>_summary.md`.
 - Verify every coder wrote a non-empty `RUN_DIR/coder_<N>_summary.md` (retry once if missing; STOP on second failure).
 
 ### Step 6: Full Reviewer & Scoped Fix Loop (NEVER skip)
 - Spawn one fresh **Reviewer** on the combined diff against the base commit, `RUN_DIR/plan.md`, all `coder_<N>_summary.md` files, and `unitTestsMode`.
-- Output: `RUN_DIR/review.md` (`APPROVED` or `NEEDS FIXES`) and, per coder needing fixes, `RUN_DIR/fixes_<N>.md`. (Render `review.md` to HTML if `~/.claude/lib/render-md.js` exists).
+- Output: `RUN_DIR/review.md` (`APPROVED` or `NEEDS FIXES`) and, per coder needing fixes, `RUN_DIR/fixes_<N>.md`.
+- **Read-Only Persistence**: If the reviewer runs natively with read-only tools and returns its report via output rather than writing files directly, the orchestrator writes the returned report text into `RUN_DIR/review.md` (and `RUN_DIR/fixes_<N>.md`). Never grant write permissions to a read-only role.
 - **Scoped Fix Loop (up to 3–5 cycles)**:
-  - If `NEEDS FIXES`, re-run only the affected Coders (preserving each task's **same Expert Persona and same Coder Model**; in `--herdr` mode, reuse the existing `coder-<N>` tab) with `RUN_DIR/fixes_<N>.md`.
-  - Relaunch the **Reviewer** in **`MODE: fix-verification`** (passing `fixes_*.md`, updated coder summaries, and the explicit list of files named in the findings). It checks only whether each finding is resolved and nothing new broke in those files (escalate to a full review only if a coder touched files outside its finding scope).
+  - If `NEEDS FIXES`, re-run only the affected Coders (preserving each task's same Expert Persona and Coder Model; in Herdr mode, reuse existing tabs) with `RUN_DIR/fixes_<N>.md`.
+  - Relaunch the Reviewer in `MODE: fix-verification`. It checks only whether each finding is resolved and nothing new broke.
   - If critical/major issues remain after the cycle cap, STOP, keep `WORKTREE` and `ergo/<run-id>` intact, and report to the user.
 
 ### Step 7: Land — Sync `<TARGET_BRANCH>` & Single Squash Commit (NEVER run `git reset --hard`)
 Only after the Reviewer verdict is **APPROVED**:
-*(Note: If running as a delegated child session under `/herdr-master` with explicit worktree/branch constraints, commit once on the assigned worktree branch and stop as instructed by `/herdr-master`).* Otherwise:
-1. Delete `RUN_DIR` (after copying `.orchestration/carryover.md` to the canonical checkout if present), then in `WORKTREE` on `ergo/<run-id>`:
+*(Note: If running as a delegated child session under `/herdr-master` with explicit worktree/branch constraints, commit once on the assigned worktree branch and stop as instructed by `/herdr-master`; master alone integrates into `develop`).* Otherwise:
+1. Delete `RUN_DIR` (after copying `.orchestration/carryover.md` to canonical checkout if present), then in `WORKTREE` on `ergo/<run-id>`:
    `git add -A` and create **exactly one** `git commit -m "<one-line summary>"` (body: plan task list).
-2. **Resolve `TARGET_BRANCH`** in the canonical checkout, in this order:
-   - `develop` if `refs/heads/develop` or `refs/remotes/origin/develop` exists (create local `develop` from `origin/develop` if only remote exists)
-   - else `main`
-   - else `master`
-   State which `TARGET_BRANCH` was selected and why.
+2. **Resolve `TARGET_BRANCH`** in the canonical checkout: `develop` > `main` > `master`.
 3. **Sync `<TARGET_BRANCH>` onto `ergo/<run-id>` FIRST (NEVER run `git reset --hard`)**:
-   - Inside `WORKTREE` (on `ergo/<run-id>`), rebase or merge `<TARGET_BRANCH>` (`git rebase <TARGET_BRANCH>` or `git merge <TARGET_BRANCH>`).
-   - If conflicts arise, dispatch the affected **Coder** (with its task `Expert Persona` and model) to resolve the conflicts on `ergo/<run-id>`, run build/tests, and pass a scoped **Reviewer** (`MODE: fix-verification`) check on the resolved files.
-   - **NEVER run `git reset --hard`**. If a conflict is ambiguous or cannot be safely resolved, **STOP**, leave `WORKTREE` and `ergo/<run-id>` untouched, and report the conflicting files to the user.
+   - Inside `WORKTREE` (on `ergo/<run-id>`), rebase or merge `<TARGET_BRANCH>`.
+   - If conflicts arise, dispatch the affected **Coder** to resolve conflicts on `ergo/<run-id>`, run build/tests, and pass a scoped **Reviewer** (`MODE: fix-verification`) check on resolved files.
+   - **NEVER run `git reset --hard`**. If a conflict is ambiguous, STOP and preserve state.
 4. **Squash-Merge in the Canonical Checkout**:
-   - Once `ergo/<run-id>` cleanly incorporates `<TARGET_BRANCH>`, in the canonical checkout (with a clean `git status --porcelain`):
-     `git checkout <TARGET_BRANCH>` → `git merge --squash ergo/<run-id>` → **one** `git commit -m "<summary>"` (body: plan tasks).
-   - Squash only, so no temporary `ergo/*` commit or merge commit ever pollutes `<TARGET_BRANCH>`.
+   - In canonical checkout: `git checkout <TARGET_BRANCH>` → `git merge --squash ergo/<run-id>` → **one** `git commit -m "<summary>"`.
 5. **Cleanup Temporary Traces**:
-   - Remove the worktree (`git worktree remove --force "$WORKTREE"`, if a worktree was created) and delete the temp branch (`git branch -D ergo/<run-id>`).
-   - If `--herdr` mode was used, close the temporary Herdr workspace: `herdr workspace close <WS_ID>`.
-   - Verify `git branch --list 'ergo/*'` is empty and quote `git log --oneline -1 <TARGET_BRANCH>` as landing proof.
-6. **Never push and never open a PR** unless the user explicitly asks after landing.
+   - Remove worktree (`git worktree remove --force "$WORKTREE"`) and delete temp branch (`git branch -D ergo/<run-id>`).
+   - Close the workspace only when bootstrap `owns_workspace` is true, and close only that ID (`herdr workspace close <WS_ID>`). Adopted workspaces (`owns_workspace == false`) are NEVER closed.
+   - Verify `git branch --list 'ergo/*'` is empty.
+6. **Never push and never open a PR** unless explicitly requested.
 
 ### Step 8: Done & Carryover
-- Update `<canonical_root>/.orchestration/carryover.md` with the confirmed intent, `ORIGIN_BRANCH`, `TARGET_BRANCH`, squash commit hash, and standing user constraints.
-- Report what was built, `TARGET_BRANCH`, the squash commit hash from `git log --oneline -1 <TARGET_BRANCH>`, and confirm cleanup of the worktree, `ergo/*` branch, and (if `--herdr`) the temporary Herdr workspace.
+- Update `<canonical_root>/.orchestration/carryover.md` with intent, branches, squash commit SHA, and constraints.
+- Report what was built, `TARGET_BRANCH`, squash commit SHA, and confirm cleanup.
 
 ---
 
@@ -273,6 +227,7 @@ Only after the Reviewer verdict is **APPROVED**:
 - **Disjoint file ownership** — two parallel coders never touch the same file; overlapping tasks must be serialized (`DEPENDS ON`) or repartitioned.
 - **Read-only roles stay read-only** — Scout, Architect, and Reviewer must never modify repository source files.
 - **NEVER run `git reset --hard`** — sync `<TARGET_BRANCH>` inside `ergo/<run-id>` first and resolve conflicts via Coder + Reviewer; if unresolvable, STOP and preserve state.
+- **Adopted workspaces are NEVER closed.** Close only when bootstrap `owns_workspace` is true, and only that workspace ID.
 - **Single squash commit on `<TARGET_BRANCH>` only after `APPROVED`**, never push, never open a PR unless asked.
 
 ---
@@ -319,7 +274,7 @@ Write `RUN_DIR/context.md` with these sections:
      - **Files** (exact paths owned by this task — strictly disjoint from all other parallel tasks)
      - **Dependency**: `INDEPENDENT` or `DEPENDS ON: <task#>`
      - **Expert Persona** (MANDATORY: a specific domain/stack specialist persona tailored to this task, e.g. `"Senior .NET async/await & EF Core specialist"`, `"React/Tailwind UI accessibility & state specialist"`)
-     - **Coder Model / Effort** (MANDATORY: choose **only** an exact ID from the `ALLOWED CODER MODELS` / `CODER_MODELS` block pasted in your prompt, with a brief 1-sentence justification)
+     - **Coder Model / Effort** (MANDATORY: choose **only** an exact ID from the `ALLOWED CODER MODELS` block pasted in your prompt, with a brief 1-sentence justification)
      - **Interfaces** (exact signatures/contracts consumed by other tasks)
      - **Verification** (exact build/test command or behavior check)
    - **Out of scope** — what was deliberately excluded.

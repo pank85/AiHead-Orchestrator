@@ -102,7 +102,7 @@ async def test_launch_ergo_modal_worker_dynamic_effort_and_description():
         assert modal._effort_select.display is False
         assert modal._effort_note.display is True
         assert modal._description_input.display is True
-        assert "Senior dev" in modal._description_input.value
+        assert "Simple, mechanical, well-scoped jobs" in modal._description_input.value
 
         # Select Scout again: returns to standard role editor
         modal._load_agent_into_editor("scout")
@@ -205,6 +205,8 @@ async def test_tui_launch_ergo_outside_herdr_exits_with_attach():
     fake_res = {
         "session": "ergo-worker",
         "workspace_id": "w_test",
+        "pane_id": "w_test:p1",
+        "orchestrator_pane_id": "w_test:p1",
         "scout_pane_id": "w_test:p1",
         "tab_id": "w_test:t1",
     }
@@ -213,7 +215,7 @@ async def test_tui_launch_ergo_outside_herdr_exits_with_attach():
     app.client = mock_client
 
     with (
-        patch("herdr_master.ui.tui.app.resolve_herdr_context", return_value=fake_ctx),
+        patch("herdr_master.ui.tui.app.resolve_launch_context", return_value=fake_ctx),
         patch("herdr_master.ui.tui.app.launch_ergo", new_callable=AsyncMock, return_value=fake_res),
     ):
         async with app.run_test(size=(110, 45)) as pilot:
@@ -251,6 +253,8 @@ async def test_tui_launch_ergo_inside_herdr_exits_with_done():
     fake_res = {
         "session": "default",
         "workspace_id": "w9",
+        "pane_id": "w9:p2",
+        "orchestrator_pane_id": "w9:p2",
         "scout_pane_id": "w9:p2",
         "tab_id": "w9:t2",
     }
@@ -259,7 +263,7 @@ async def test_tui_launch_ergo_inside_herdr_exits_with_done():
     app.client = mock_client
 
     with (
-        patch("herdr_master.ui.tui.app.resolve_herdr_context", return_value=fake_ctx),
+        patch("herdr_master.ui.tui.app.resolve_launch_context", return_value=fake_ctx),
         patch("herdr_master.ui.tui.app.launch_ergo", new_callable=AsyncMock, return_value=fake_res),
     ):
         async with app.run_test(size=(110, 45)) as pilot:

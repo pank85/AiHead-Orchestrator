@@ -7,7 +7,7 @@
 [![Python: 3.10+](https://img.shields.io/badge/python-3.10+-3776AB.svg?logo=python&logoColor=white)](https://www.python.org/downloads/)
 [![Herdr: v0.9.5+](https://img.shields.io/badge/herdr-v0.9.5+-8A2BE2.svg)](https://herdr.dev)
 [![TUI: Textual](https://img.shields.io/badge/TUI-Textual%208.x-00D4AA.svg)](https://textual.textualize.io/)
-[![Tests: 36 passed](https://img.shields.io/badge/tests-36%20passed-success.svg)](#-testing--verification)
+[![Tests: Passing](https://img.shields.io/badge/tests-passing-success.svg)](#-testing--verification)
 [![Code style: ruff](https://img.shields.io/badge/code%20style-ruff-000000.svg)](https://github.com/astral-sh/ruff)
 
 ---
@@ -22,7 +22,7 @@ Whether coordinating multiple background jobs simultaneously or driving a struct
 
 ## ⚡ Standalone Skills & Slash Commands (All 4 Harnesses)
 
-Herdr-Master ships with **first-class, standalone agent skills and slash commands** that can be installed directly into all four supported agent harnesses (**Antigravity**, **Pi**, **Claude Code**, and **OpenCode**). 
+Herdr-Master ships with **first-class, standalone agent skills and slash commands** that can be installed directly into all four supported agent harnesses (**Antigravity**, **Pi**, **Claude Code**, and **OpenCode**).
 
 ### 🎯 The Two Standalone Capabilities
 
@@ -33,43 +33,50 @@ Herdr-Master ships with **first-class, standalone agent skills and slash command
   * It stays alive in your workspace as a long-running supervisor. You can assign jobs interactively throughout your session whenever needed.
 * **Autonomous Delegation & Sandboxing**:
   * For each task you delegate, the Master creates an isolated Git worktree branched from `develop`.
-  * It opens a dedicated Herdr tab with the optimal harness and model for that task.
+  * It opens a dedicated Herdr tab with the optimal harness and model resolved from the catalog.
+  * Default child/bootstrap sessions resolve the product Scout binding (`agy:gemini-3.8-flash-medium:medium`), and final diff reviews resolve the product Reviewer (`pi:xai/grok-4.7:high`).
   * It monitors workers reactively using native async watchers (zero polling loops).
   * It runs a mandatory **Master Final Review Gate** on the cumulative diff, sending remediation requests if needed, and safely lands approved changes via squash merge into `develop`.
   * **Zero `git reset --hard`**: Your main working tree remains untouched and protected.
 
-#### 2. `/ergo [--herdr] [--models ...] [intent]` — Phased Pipeline (Single Major Job)
+#### 2. `/ergo [--native] [--models ...] [intent]` — Phased Pipeline (Single Major Job)
 * **Structured Multi-Stage Execution**:
   * Runs a rigid, high-assurance pipeline: `Scout` (reconnaissance) → `Architect` (system design & work breakdown) → `Parallel Coders` (isolated worktree implementations) → `Reviewer` (blind diff review gate) → `Squash Integration`.
-* **Dual Execution Modes**:
-  * **Native Subagent Mode**: Executes using the parent harness's native subagent tool (`define_subagent` in `agy`, background agents in `pi` / `claude`, or native `subagent` in `opencode`).
-  * **`--herdr` Cross-Harness Mode**: Executes every pipeline role as an interactive Herdr tab in a temporary workspace, letting you mix and match engines (e.g. Gemini Flash for Scout, Grok 4.7 for Architect, Codex & Claude for Coders, and Gemini Argon for Reviewer).
+* **Execution Modes**:
+  * **Default Herdr Cross-Harness Mode**: Plain `/ergo` defaults to Herdr mode. Because the operator's product default squad mixes `agy` and `pi`, all pipeline roles run as interactive Herdr agent tabs inside one Herdr workspace. `--herdr` is an explicit alias for this default.
+  * **Explicit `--native` Mode**: When `--native` is explicitly passed, the pipeline runs using the parent harness's native subagent tool (`invoke_subagent` in `agy`, `subagent` in `pi`/`opencode`, `Agent` in `claude`). Because there is no separate native default squad, `--native` requires compatible role overrides or a compatible snapshot.
+* **Authoritative Product Default Squad**:
+  * **Scout**: `agy:gemini-3.8-flash-medium`, effort `medium`
+  * **Architect**: `pi:openai-codex/gpt-6.1-sol:max`
+  * **Reviewer**: `pi:xai/grok-4.7:high`
+  * **Workers**: `agy:gemini-3.8-flash` (simple/mechanical) and `pi:xai/grok-4.7` (complex/architectural) with dynamic per-task effort.
 
 ---
 
-### 📦 1-Command Installation Across All Harnesses
+### 📦 Installation Across All Harnesses
 
-Install both canonical `/herdr-master` and `/ergo` skills & slash commands across all installed harnesses with a single command:
+Install both canonical `/herdr-master` and `/ergo` skills & slash commands across all supported harnesses:
 
 ```bash
 # Using the herdm CLI:
-herdm install
-# (or: herdm skills install)
+herdm skills install
 
-# Or using the zero-dependency shell script:
+# Or using the local shell script (delegates to this checkout via uv):
 ./scripts/install-skills.sh
 ```
 
+Prerequisites: `uv` or a Python environment with `herdr-master` installed. The installer reads destination templates and canonical sources directly from the catalog.
+
 ### 🗺️ Multi-Harness Integration Matrix
 
-The installer automatically detects and symlinks canonical skill definitions into the native directories of all 4 harnesses:
+The installer detects and symlinks canonical skill definitions into the native directories of all 4 harnesses:
 
 | Harness | Skill Type | Destination Path | Available Command |
 | :--- | :--- | :--- | :--- |
-| **Antigravity (`agy`)** | Native Skill | `~/.gemini/config/skills/herdr-master/SKILL.md`<br/>`~/.gemini/config/skills/ergo/SKILL.md` | `/herdr-master`<br/>`/ergo` |
-| **Pi (`pi`)** | Prompt / Slash Command | `~/.pi/agent/prompts/herdr-master.md`<br/>`~/.pi/agent/prompts/ergo.md` | `/herdr-master`<br/>`/ergo` |
-| **Claude Code (`claude`)** | Custom Slash Command | `~/.claude/commands/herdr-master.md`<br/>`~/.claude/commands/ergo.md` | `/herdr-master`<br/>`/ergo` |
-| **OpenCode (`opencode`)** | Skill & Command | `~/.config/opencode/skills/`<br/>`~/.config/opencode/commands/` | `/herdr-master`<br/>`/ergo` |
+| **Antigravity (`agy`)** | Native Skill | `~/.gemini/antigravity-cli/skills/<skill>/SKILL.md` | `/herdr-master`<br/>`/ergo` |
+| **Pi (`pi`)** | Prompt / Skill | `~/.pi/agent/skills/<skill>/SKILL.md` | `/herdr-master`<br/>`/ergo` |
+| **Claude Code (`claude`)** | Custom Slash Command | `~/.claude/commands/<skill>.md` | `/herdr-master`<br/>`/ergo` |
+| **OpenCode (`opencode`)** | Skill & Command | `~/.config/opencode/skills/<skill>/SKILL.md`<br/>`~/.config/opencode/commands/<skill>.md` | `/herdr-master`<br/>`/ergo` |
 
 ### 🔍 Inspect Installation Status
 
@@ -79,22 +86,12 @@ You can inspect the live status of all installed skill endpoints at any time:
 herdm skills list
 ```
 
-```text
-                👑 Herdr-Master & Ergo Standalone Harness Skills                
-┏━━━━━━━━━━━━━━━━━━━━━━┳━━━━━━━━━━━━━━━━┳━━━━━━━━━┳━━━━━━━━━━━━━━━━━┳━━━━━━━━━━┓
-┃ Harness              ┃ Command / Role ┃ Type    ┃ Installed Path  ┃  Status  ┃
-┡━━━━━━━━━━━━━━━━━━━━━━╇━━━━━━━━━━━━━━━━╇━━━━━━━━━╇━━━━━━━━━━━━━━━━━╇━━━━━━━━━━┩
-│ Antigravity (agy)    │ /herdr-master  │ skill   │ ~/.gemini/...   │ ✓ Active │
-│ Pi (pi)              │ /herdr-master  │ command │ ~/.pi/...       │ ✓ Active │
-│ Claude Code (claude) │ /herdr-master  │ command │ ~/.claude/...   │ ✓ Active │
-│ OpenCode (opencode)  │ /herdr-master  │ skill   │ ~/.config/...   │ ✓ Active │
-│ OpenCode (opencode)  │ /herdr-master  │ command │ ~/.config/...   │ ✓ Active │
-│ Antigravity (agy)    │ /ergo          │ skill   │ ~/.gemini/...   │ ✓ Active │
-│ Pi (pi)              │ /ergo          │ command │ ~/.pi/...       │ ✓ Active │
-│ Claude Code (claude) │ /ergo          │ command │ ~/.claude/...   │ ✓ Active │
-│ OpenCode (opencode)  │ /ergo          │ skill   │ ~/.config/...   │ ✓ Active │
-│ OpenCode (opencode)  │ /ergo          │ command │ ~/.config/...   │ ✓ Active │
-└──────────────────────┴────────────────┴─────────┴─────────────────┴──────────┘
+The status column distinguishes live active symlinks (`✓ Active`) from missing, broken, or stale links.
+
+To inspect the underlying harness catalog, default squad, and endpoint templates programmatically:
+```bash
+herdm catalog show --json
+herdm catalog squad --json
 ```
 
 ---
@@ -139,17 +136,17 @@ Press `[ ⚡ New Ergo Pipeline ]`, `[ ⚙️ Configure Squad ]`, or keys `e` / `
 ┌─ ⚡ ERGO SQUAD TOPOLOGY & PIPELINE LAUNCHER ───────────────────────────────────────────┐
 │                                                                                        │
 │ ┌─ Top 75%: Squad Configuration ─────────────────────────────────────────────────────┐ │
-│ │  Topology Tree (Left Column)      │  Agent Details (Right Column)                  │ │
-│ │                                   │                                                │ │
-│ │  👑 Herdr-Master Root             │  Worker Pool: worker-1 (Position #1)           │ │
-│ │  ├── ● Scout (agy:gemini-flash)   │  Harness:     [ claude ▼ ]                     │ │
-│ │  ├── ● Architect (pi:codex)       │  Model:       [ claude-3-opus                ] │ │
-│ │  ├── 📦 Worker Pool (3 workers)   │  Effort:      (Decided dynamically per task)   │ │
-│ │  │   ├── ↳ worker-1 (claude:opus) │  Name:        [ worker-1                     ] │ │
-│ │  │   ├── ↳ worker-2 (agy:flash)   │  Capability:  [ Senior dev - Complex tasks   ] │ │
-│ │  │   └── ↳ worker-3 (pi:grok)     │                                                │ │
-│ │  └── ● Reviewer (agy:argon)       │  [+ Add Worker]  [- Remove Worker] [↑ Up] [↓]  │ │
-│ └───────────────────────────────────┴────────────────────────────────────────────────┘ │
+│ │  Topology Tree (Left Column)           │  Agent Details (Right Column)              │ │
+│ │                                        │                                            │ │
+│ │  👑 Herdr-Master Root                  │  Worker Pool: worker-1 (Position #1)       │ │
+│ │  ├── ● Scout (agy:gemini-3.8-flash)    │  Harness:     [ agy ▼ ]                    │ │
+│ │  ├── ● Architect (pi:codex/gpt-6.1)    │  Model:       [ gemini-3.8-flash         ] │ │
+│ │  ├── 📦 Worker Pool (2 workers)        │  Effort:      (Decided dynamically per task│ │
+│ │  │   ├── ↳ worker-1 (agy:flash)        │  Name:        [ worker-1                 ] │ │
+│ │  │   └── ↳ worker-2 (pi:xai/grok-4.7)  │  Capability:  [ Junior dev - Fast edits  ] │ │
+│ │  └── ● Reviewer (pi:xai/grok-4.7)      │                                            │ │
+│ │                                        │  [+ Add Worker]  [- Remove] [↑ Up] [↓ Down]│ │
+│ └────────────────────────────────────────┴────────────────────────────────────────────┘ │
 │                                                                                        │
 │ ┌─ Bottom 25%: Execution Deck ───────────────────────────────────────────────────────┐ │
 │ │  Objective Prompt: [ Implement OAuth2 SSO & JWT authentication                  ]  │ │
@@ -162,8 +159,8 @@ Press `[ ⚡ New Ergo Pipeline ]`, `[ ⚙️ Configure Squad ]`, or keys `e` / `
 
 > **Dynamic Worker Capability Model**:
 > Workers in the pool do **not** carry rigid thinking efforts or specific job names. Instead:
-> * Workers are generic pool members (`worker-1`, `worker-2`, `worker-3`).
-> * Each worker carries capability info (e.g. *Senior dev: Very capable for complex, architectural & subtle tasks*, or *Junior dev: Fast, boilerplate & mechanical edits*).
+> * Workers are generic pool members (`worker-1`, `worker-2`).
+> * Each worker carries capability info (e.g. *Junior dev: Fast, boilerplate & mechanical edits*, or *Mid/Senior dev: Complex, architectural & subtle tasks*).
 > * The **Architect** inspects these capability descriptions to allocate the right model to each task and **dynamically determines reasoning effort** (`low`, `medium`, `high`, `max`) based on task complexity.
 
 ---
@@ -181,10 +178,10 @@ graph TD
     end
 
     subgraph ErgoPipeline ["Ergo Multi-Harness Pipeline"]
-        Scout["1. Scout Agent<br/>(agy: gemini-3.8-flash)<br/>Exploration & Context Survey"]
-        Architect["2. Architect Agent<br/>(pi: xai/grok-4.7)<br/>System Design & Work Breakdown"]
-        Pool["3. Parallel Workers<br/>(pi / claude / opencode)<br/>Isolated Git Worktrees"]
-        Reviewer["4. Blind Reviewer<br/>(agy: gemini-4-argon)<br/>Cumulative Diff Review Gate"]
+        Scout["1. Scout Agent<br/>(agy: gemini-3.8-flash-medium:medium)<br/>Exploration & Context Survey"]
+        Architect["2. Architect Agent<br/>(pi: openai-codex/gpt-6.1-sol:max)<br/>System Design & Work Breakdown"]
+        Pool["3. Parallel Workers<br/>(agy: gemini-3.8-flash / pi: xai/grok-4.7)<br/>Dynamic Per-Task Effort"]
+        Reviewer["4. Blind Reviewer<br/>(pi: xai/grok-4.7:high)<br/>Cumulative Diff Review Gate"]
         Squash["5. Integration Landing<br/>Verified Squash Landing to develop"]
 
         Scout --> Architect --> Pool --> Reviewer --> Squash
@@ -211,8 +208,8 @@ Define any agent using the compact slug format: `<harness>:<model>[:<effort>]`
 
 | Harness | Slug Prefix | Example Slugs | Ideal Roles & Strengths |
 | :--- | :--- | :--- | :--- |
-| **Antigravity** | `agy` | `agy:gemini-3.8-flash-high`<br/>`agy:gemini-4-argon-high` | Rapid context survey, deep architectural audit, strict diff reviews |
-| **Pi Agent** | `pi` | `pi:xai/grok-4.7`<br/>`pi:openai-codex/gpt-6.1-terra` | Complex refactoring, fast code synthesis, test authoring |
+| **Antigravity** | `agy` | `agy:gemini-3.8-flash-medium:medium`<br/>`agy:gemini-3.8-flash:high` | Rapid context survey, mechanical and fast implementations |
+| **Pi Agent** | `pi` | `pi:openai-codex/gpt-6.1-sol:max`<br/>`pi:xai/grok-4.7:high` | Deep system architecture, independent review gate, complex algorithms |
 | **Claude Code** | `claude` | `claude:claude-3-7-sonnet`<br/>`claude:claude-3-opus` | Thoughtful implementation, nuanced edge-case analysis |
 | **OpenCode** | `opencode` | `opencode:deepseek-r1`<br/>`opencode:qwen-2.5-coder` | Local models and private open-weights execution |
 
@@ -245,16 +242,18 @@ herdm --help
 
 ### 1. Launch Ergo Pipeline (Single Major Job)
 ```bash
-# Simple launch using default squad configuration
+# Simple launch using authoritative default squad configuration
 herdm ergo "Implement Redis rate limiting middleware"
 
-# Full custom squad across diverse harnesses & models
+# Query the authoritative squad resolution:
+herdm catalog squad --json
+
+# Full custom squad with inline overrides:
 herdm ergo "Add WebSocket notification server" \
-  --scout agy:gemini-3.8-flash-high \
-  --architect pi:xai/grok-4.7 \
-  --workers pi:openai-codex/gpt-6.1-terra,claude:claude-3-7-sonnet \
-  --reviewer agy:gemini-4-argon-high \
-  --workspace-label real-time-notifications
+  --scout agy:gemini-3.8-flash-medium:medium \
+  --architect pi:openai-codex/gpt-6.1-sol:max \
+  --workers agy:gemini-3.8-flash,pi:xai/grok-4.7 \
+  --reviewer pi:xai/grok-4.7:high
 ```
 
 ### 2. Launch Root Herdr Master (Multiple Jobs)
@@ -264,8 +263,6 @@ herdm master start backend-lead
 
 # Or launch with an initial task
 herdm master start backend-lead \
-  --harness agy \
-  --model gemini-4-argon-high \
   --initial-task "Audit microservices and prepare refactoring roadmap"
 ```
 
@@ -278,7 +275,18 @@ herdm tui
 herdm tui --demo
 ```
 
-### 4. Repository Initialization
+### 4. Harness Catalog Queries
+```bash
+# Inspect all harness capabilities and endpoints
+herdm catalog show --json
+
+# Resolve exact launch arguments for any binding:
+herdm catalog agent --mode herdr --binding agy:gemini-3.8-flash-medium:medium --role scout --json
+herdm catalog agent --mode herdr --binding pi:openai-codex/gpt-6.1-sol:max --role architect --json
+herdm catalog agent --mode herdr --binding pi:xai/grok-4.7:high --role reviewer --json
+```
+
+### 5. Repository Initialization
 ```bash
 cd /path/to/my-project
 herdm init --target-branch develop
@@ -291,15 +299,11 @@ herdm init --target-branch develop
 The project includes an automated test suite covering state machines, framing protocols, launcher lifecycles, standalone skills installer, and Textual pilot interactions:
 
 ```bash
-# Run full test suite (36 passed)
+# Run test suite
 uv run pytest tests/
 
 # Code quality check with Ruff
 uv run ruff check .
-```
-
-```text
-============================== 36 passed in 7.10s ==============================
 ```
 
 ---
@@ -309,7 +313,7 @@ uv run ruff check .
 For detailed architectural specifications and design documents, explore the [`ai_docs/`](file:///home/pank/projects/herdr-master/ai_docs/) directory:
 
 * [**00. System Overview & Vision**](file:///home/pank/projects/herdr-master/ai_docs/00_OVERVIEW.md) — Vision, tenets, and principles.
-* [**01. Architecture & Core Specifications**](file:///home/pank/projects/herdr-master/ai_docs/01_ARCHITECTURE_AND_SPECS.md) — System components, worker states, and lifecycle.
+* [**01. Architecture & Core Specifications**](file:///home/pank/projects/herdr-master/ai_docs/01_ARCHITECTURE_AND_SPECP.md) — System components, worker states, and lifecycle.
 * [**02. Inter-Harness Communication Protocol (IHCP)**](file:///home/pank/projects/herdr-master/ai_docs/02_INTER_HARNESS_PROTOCOL.md) — Message envelopes, mailboxes, and PTY injection.
 * [**03. Orchestration Pipelines & Ergo Integration**](file:///home/pank/projects/herdr-master/ai_docs/03_ORCHESTRATION_AND_ERGO_PIPELINE.md) — Phased pipeline execution flow.
 * [**04. CLI & Terminal UI (TUI) Specification**](file:///home/pank/projects/herdr-master/ai_docs/04_CLI_AND_TUI_SPEC.md) — Textual UI widgets, actions, and modal specs.

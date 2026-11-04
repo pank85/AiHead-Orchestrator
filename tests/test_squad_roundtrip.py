@@ -3,11 +3,16 @@
 import tempfile
 from pathlib import Path
 
+import pytest
+
 from herdr_master.core.config import (
+    HerdrMasterConfig,
     load_project_config,
     squad_from_project_config,
+    squad_to_project_config,
 )
 from herdr_master.core.models import HarnessBinding, Squad
+from herdr_master.core.slug import InvalidBindingSlugError
 from herdr_master.pipeline.squad import (
     format_allowed_coder_models,
     load_run_squad,
@@ -110,6 +115,56 @@ def test_save_squad_as_default():
         assert reloaded_squad.worker_pool[1].effort is None
 
 
+def test_save_default_preserves_disabled_worker(tmp_path):
+    """A disabled worker stays disabled after Save Default and stays off the allow-list."""
+    squad = Squad(
+        worker_pool=[
+            HarnessBinding.from_slug(
+                "agy:gemini-3.8-flash",
+                label="worker-1",
+                description="visible simple jobs",
+                enabled=True,
+                order=0,
+            ),
+            HarnessBinding.from_slug(
+                "pi:xai/grok-4.7",
+                label="worker-2",
+                description="hidden complex jobs",
+                enabled=False,
+                order=1,
+            ),
+        ],
+    )
+    exported = squad_to_project_config(squad)
+    assert exported.models.worker_pool["worker-2"]["enabled"] is False
+    assert exported.models.worker_pool["worker-1"]["enabled"] is True
+    assert exported.models.worker_pool["worker-2"]["binding"] == "pi:xai/grok-4.7"
+
+    path = tmp_path / ".herdr-master.toml"
+    save_squad_as_default(squad, path)
+    loaded = squad_from_project_config(load_project_config(path))
+    assert loaded.worker_pool[1].label == "worker-2"
+    assert loaded.worker_pool[1].enabled is False
+    assert loaded.worker_pool[1].description == "hidden complex jobs"
+    block = format_allowed_coder_models(loaded)
+    assert "worker-1" in block
+    assert "visible simple jobs" in block
+    assert "worker-2" not in block
+    assert "hidden complex jobs" not in block
+
+    omitted = squad_from_project_config(HerdrMasterConfig())
+    assert len(omitted.worker_pool) == 2
+    assert all(worker.enabled for worker in omitted.worker_pool)
+
+
+def test_run_snapshot_empty_worker_binding_is_rejected(tmp_path):
+    """An empty snapshot binding fails instead of silently shortening the pool."""
+    path = tmp_path / "squad.toml"
+    path.write_text('[[worker_pool]]\nbinding = ""\nlabel = "bad"\n', encoding="utf-8")
+    with pytest.raises(InvalidBindingSlugError, match="cannot be empty"):
+        load_run_squad(path)
+
+
 def test_squad_validation():
     """Verify validation detects empty pool and duplicates."""
     # Empty pool
@@ -126,6 +181,33 @@ def test_squad_validation():
     )
     dup_errors = validate_squad(duplicate_squad)
     assert any("Duplicate worker model binding" in e for e in dup_errors)
+
+
+def test_save_run_squad_records_resolution_without_breaking_legacy_bindings(tmp_path):
+    """Keyword-only resolution metadata is additive; explicit legacy bindings still round-trip."""
+    squad = Squad(
+        scout=HarnessBinding.from_slug("agy:gemini-3.8-flash-high"),
+        architect=HarnessBinding.from_slug("pi:openai-codex/gpt-6.1-sol:high"),
+        reviewer=HarnessBinding.from_slug("agy:gemini-4-argon-high"),
+        worker_pool=[
+            HarnessBinding.from_slug(
+                "claude:claude-3-opus",
+                label="worker-1",
+                description="Senior dev - Very capable",
+                order=0,
+            )
+        ],
+    )
+    path = tmp_path / "squad.toml"
+    save_run_squad(squad, path)
+    text = path.read_text(encoding="utf-8")
+    assert "[resolution]" in text
+    assert 'mode = "herdr"' in text
+    loaded = load_run_squad(path)
+    assert loaded.scout.to_slug() == squad.scout.to_slug()
+    assert loaded.reviewer.model == "gemini-4-argon-high"
+    assert loaded.worker_pool[0].to_slug() == "claude:claude-3-opus"
+    assert loaded.worker_pool[0].effort is None
 
 
 def test_format_allowed_coder_models():
