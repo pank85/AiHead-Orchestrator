@@ -9,10 +9,10 @@ from textual.binding import Binding
 from textual.containers import Horizontal
 
 from herdr_master.core.context import resolve_herdr_context
-from herdr_master.core.models import MasterSession, PipelinePhase, PipelineRun, WorkerState
-from herdr_master.core.state_machine import WorkerEvent, transition_worker_state
+from herdr_master.core.models import MasterSession, PipelinePhase, PipelineRun
 from herdr_master.herdr.client import HerdrClient
 from herdr_master.herdr.discovery import SessionInventory, discover_clients
+from herdr_master.herdr.snapshot import AgentSnapshot
 from herdr_master.pipeline.launcher import (
     LaunchContextError,
     launch_ergo,
@@ -22,14 +22,12 @@ from herdr_master.pipeline.launcher import (
 from herdr_master.pipeline.squad import resolve_squad
 from herdr_master.ui.tui.messages import TargetSelected
 from herdr_master.ui.tui.modals.config_drawer import ConfigDrawer
-from herdr_master.ui.tui.modals.confirm import ConfirmModal
 from herdr_master.ui.tui.modals.launch_ergo import ErgoLaunchParams, LaunchErgoModal
 from herdr_master.ui.tui.modals.launch_master import LaunchMasterModal, MasterLaunchParams
 from herdr_master.ui.tui.modals.project_folder import (
     initial_project_folder,
     validate_project_folder,
 )
-from herdr_master.ui.tui.modals.prompt_dialog import PromptDialog
 from herdr_master.ui.tui.state import AppState
 from herdr_master.ui.tui.widgets.deck import CenterDeck
 from herdr_master.ui.tui.widgets.footer import ActionFooter
@@ -60,16 +58,7 @@ class HerdrMasterApp(App):
         Binding("e", "new_ergo", "New Ergo"),
         Binding("s", "open_settings", "Settings"),
         Binding("c", "open_settings", "Settings"),
-        Binding("0", "deck_mode(0)", "Workspaces"),
-        Binding("1", "deck_mode(1)", "Output"),
-        Binding("2", "deck_mode(2)", "Diff"),
-        Binding("3", "deck_mode(3)", "Pipeline"),
-        Binding("4", "deck_mode(4)", "Mailbox"),
-        Binding("p", "prompt_agent", "Prompt"),
-        Binding("r", "review_worker", "Review"),
-        Binding("m", "squash_land", "Squash"),
-        Binding("k", "kill_worker", "Kill"),
-        Binding("d", "deck_mode(2)", "Diff"),
+        Binding("o", "open_in_herdr", "Open in Herdr", priority=False),
         Binding("q", "quit", "Quit"),
     ]
 
@@ -206,17 +195,34 @@ class HerdrMasterApp(App):
         finally:
             self._inventory_pending = False
 
-    def on_workspace_browser_agent_selected(self, event: WorkspaceBrowser.AgentSelected) -> None:
+    def action_open_in_herdr(self) -> None:
+        """Open selected workspace or pane in Herdr."""
+        if len(self.screen_stack) > 1:
+            return
+        if self.demo:
+            self.notify("Demo mode: live terminal navigation is disabled.", severity="warning")
+            return
+        try:
+            browser = self.query_one(WorkspaceBrowser)
+            browser.request_open()
+        except Exception:
+            pass
+
+    def on_workspace_browser_open_requested(
+        self, event: WorkspaceBrowser.OpenRequested
+    ) -> None:
         event.stop()
         if not self._navigation_pending:
-            self.run_worker(self._navigate_to_agent(event.target), group="agent-navigation")
+            self.run_worker(self._open_in_herdr(event.target), group="agent-navigation")
 
-    async def _navigate_to_agent(self, target: WorkspaceTarget) -> None:
-        """Focus the exact socket/workspace/tab/pane; never infer a worker from its label."""
+    async def _open_in_herdr(self, target: WorkspaceTarget) -> None:
+        """Focus the exact socket/workspace/tab/pane; hand off safely to Herdr attach."""
         if self.demo:
-            self.notify("Demo only: live mode opens the selected Herdr agent.")
+            self.notify("Demo mode: live terminal navigation is disabled.", severity="warning")
             return
         if self._navigation_pending:
+            return
+        if len(self.screen_stack) > 1:
             return
         self._navigation_pending = True
         try:
@@ -224,32 +230,127 @@ class HerdrMasterApp(App):
                 (
                     item
                     for item in self.app_state.live_sessions
-                    if item.socket_path == target.socket_path
+                    if Path(item.socket_path) == Path(target.socket_path)
                 ),
                 None,
             )
             if not inventory or inventory.error or not inventory.snapshot:
                 self.notify("Session is offline. Wait for it to reconnect.", severity="warning")
                 return
-            agents = workspace_agents(inventory, target.workspace_id)
-            agent = next((item for item in agents if item.pane_id == target.pane_id), None)
-            if not agent:
-                self.notify("This pane has closed. Select a current agent.", severity="warning")
+
+            snapshot = inventory.snapshot
+            ws = next(
+                (w for w in snapshot.workspaces if w.workspace_id == target.workspace_id),
+                None,
+            )
+            if not ws:
+                self.notify("Workspace has closed or no longer exists.", severity="warning")
                 return
+
+            agents = workspace_agents(inventory, target.workspace_id)
+            if not agents:
+                self.notify("Workspace has no open panes to open.", severity="warning")
+                return
+
+            target_pane: Optional[AgentSnapshot] = None
+            target_tab_id: Optional[str] = None
+            if target.pane_id is not None:
+                target_pane = next((p for p in agents if p.pane_id == target.pane_id), None)
+                if not target_pane:
+                    self.notify("This pane has closed. Select a current agent.", severity="warning")
+                    return
+                if target_pane.tab_id:
+                    tab = next((t for t in snapshot.tabs if t.tab_id == target_pane.tab_id), None)
+                    if tab is None:
+                        self.notify(
+                            f"Pane references missing tab '{target_pane.tab_id}'. "
+                            "Cannot open in Herdr.",
+                            severity="warning",
+                        )
+                        return
+                    if tab.workspace_id != target.workspace_id:
+                        self.notify(
+                            f"Pane references tab '{tab.tab_id}' belonging to another workspace "
+                            f"'{tab.workspace_id}'. Cannot open in Herdr.",
+                            severity="warning",
+                        )
+                        return
+                    target_tab_id = tab.tab_id
+                else:
+                    target_tab_id = None
+
+                raw_pane = next((p for p in snapshot.panes if p.pane_id == target.pane_id), None)
+                if raw_pane is not None:
+                    if raw_pane.workspace_id and raw_pane.workspace_id != target.workspace_id:
+                        self.notify(
+                            "Pane workspace ownership is contradictory. Cannot open in Herdr.",
+                            severity="warning",
+                        )
+                        return
+                    if (
+                        raw_pane.tab_id
+                        and target_pane.tab_id
+                        and raw_pane.tab_id != target_pane.tab_id
+                    ):
+                        self.notify(
+                            "Pane tab ownership is contradictory. Cannot open in Herdr.",
+                            severity="warning",
+                        )
+                        return
+
+            context = resolve_herdr_context()
+            same_socket = (
+                context.is_inside_herdr
+                and context.socket_path is not None
+                and Path(context.socket_path) == Path(target.socket_path)
+            )
+
+            if not same_socket:
+                try:
+                    resolved_target_context = resolve_herdr_context(
+                        explicit_session=inventory.session_name
+                    )
+                    target_ctx_socket = (
+                        Path(resolved_target_context.socket_path)
+                        if resolved_target_context.socket_path
+                        else None
+                    )
+                except Exception:
+                    target_ctx_socket = None
+
+                if target_ctx_socket is None or target_ctx_socket != Path(inventory.socket_path):
+                    self.notify(
+                        f"Cannot attach to nonstandard socket for session "
+                        f"'{inventory.session_name}'. Open it through its owning Herdr client.",
+                        severity="warning",
+                    )
+                    return
+
             client = HerdrClient(
-                session=target.session_name, socket_path=target.socket_path, timeout=2.0
+                session=inventory.session_name,
+                socket_path=target.socket_path,
+                timeout=2.0,
             )
             await client.focus_workspace(target.workspace_id)
-            if agent.tab_id:
-                await client.focus_tab(agent.tab_id)
-            await client.focus_pane(agent.pane_id)
-            context = resolve_herdr_context()
-            if not context.is_inside_herdr or context.socket_path != target.socket_path:
-                self.exit(result={"action": "attach", "session": target.session_name})
+            if target.pane_id is not None and target_pane is not None:
+                if target_tab_id is not None:
+                    await client.focus_tab(target_tab_id)
+                await client.focus_pane(target_pane.pane_id)
+
+            if not same_socket:
+                self.exit(result={"action": "attach", "session": inventory.session_name})
             else:
-                self.notify(f"Focused {agent.name or agent.agent or agent.pane_id}")
+                if target.pane_id is None:
+                    self.notify(f"Focused workspace {ws.label or ws.workspace_id}")
+                else:
+                    pane_name = (
+                        target_pane.name or target_pane.agent or target_pane.pane_id
+                        if target_pane
+                        else target.pane_id
+                    )
+                    self.notify(f"Focused {pane_name}")
         except Exception as exc:
-            self.notify(f"Could not open agent: {exc}", severity="error")
+            self.notify(f"Could not open in Herdr: {exc}", severity="error")
         finally:
             self._navigation_pending = False
 
@@ -379,7 +480,12 @@ class HerdrMasterApp(App):
             pane_id="p-master",
             harness=params.harness,
             role="root-orchestrator",
-            metadata={"model": params.model, "effort": params.effort, "demo": True},
+            metadata={
+                "model": params.model,
+                "effort": params.effort,
+                "demo": True,
+                "socket_path": str(Path("/demo/herdr.sock")),
+            },
         )
         self.app_state.masters[master.session_id] = master
         self.app_state.selected_target_id = master.session_id
@@ -400,6 +506,7 @@ class HerdrMasterApp(App):
                 "project_path": str(
                     params.project_path or initial_project_folder(self.project_path)
                 ),
+                "socket_path": str(result.get("socket") or "").strip(),
             },
         )
         self.app_state.masters[master.session_id] = master
@@ -465,7 +572,6 @@ class HerdrMasterApp(App):
                         "project_path": str(project_path),
                     },
                 )
-                self.app_state.active_deck_mode = 3
                 self._update_all_widgets()
                 self.notify(f"Ergo orchestrator pane {pane}", severity="information")
                 self._exit_launch(ctx, str(session_name), workspace_id)
@@ -512,11 +618,6 @@ class HerdrMasterApp(App):
     ) -> None:
         self.action_open_settings()
 
-    def action_deck_mode(self, mode: int) -> None:
-        """Switch center deck view mode (0..4)."""
-        self.app_state.active_deck_mode = mode
-        self._deck.switch_mode(mode)
-
     def action_open_config(self) -> None:
         """Open the configuration drawer modal."""
         target = self.app_state.selected_target_id or "scout"
@@ -542,114 +643,6 @@ class HerdrMasterApp(App):
                 project_path=self.project_path,
             ),
             _on_drawer_closed,
-        )
-
-    def action_prompt_agent(self) -> None:
-        """Prompt the currently selected agent."""
-        target = self.app_state.selected_target_id or "active-agent"
-
-        def _on_prompt_submitted(prompt_text: Optional[str]):
-            if prompt_text:
-                self.notify(f"Dispatched prompt to {target}", severity="information")
-                current = self.app_state.output_scrollback.get(target, "")
-                self.app_state.output_scrollback[target] = (
-                    f"{current}\n> {prompt_text}\n[Processing...]"
-                )
-                self._deck.update_state(self.app_state)
-
-        self.push_screen(PromptDialog(target_name=target), _on_prompt_submitted)
-
-    def action_review_worker(self) -> None:
-        """Trigger master review on selected worker."""
-        target = self.app_state.selected_target_id
-        if not target or target not in self.app_state.workers:
-            self.notify("Select an active worker to review", severity="warning")
-            return
-
-        worker = self.app_state.workers[target]
-        if worker.state not in (WorkerState.DONE, WorkerState.NEEDS_REVIEW):
-            self.notify(
-                f"Worker {target} is {worker.state.value}. Review requires DONE or NEEDS_REVIEW.",
-                severity="warning",
-            )
-            return
-
-        def _on_confirm_review(confirmed: bool):
-            if confirmed:
-                try:
-                    worker.state = transition_worker_state(
-                        worker.state,
-                        WorkerEvent.REVIEW_APPROVED,
-                    )
-                    self.notify(
-                        f"Worker {target} marked APPROVED for landing.", severity="information"
-                    )
-                    self._update_all_widgets()
-                except Exception as exc:
-                    self.notify(f"Review transition error: {exc}", severity="error")
-
-        self.push_screen(
-            ConfirmModal(
-                title=f"Review Worker {target}",
-                message=f"Approve worktree changes on branch '{worker.branch}'?",
-            ),
-            _on_confirm_review,
-        )
-
-    def action_squash_land(self) -> None:
-        """Initiate serial squash merge onto develop branch."""
-        approved_workers = [
-            worker
-            for worker in self.app_state.workers.values()
-            if worker.state == WorkerState.APPROVED
-        ]
-        if not approved_workers:
-            self.notify("No workers in APPROVED state ready for landing.", severity="warning")
-            return
-
-        def _on_confirm_squash(confirmed: bool):
-            if confirmed:
-                for worker in approved_workers:
-                    worker.state = WorkerState.LANDED
-                self.notify(
-                    f"Successfully landed {len(approved_workers)} worker(s) onto develop.",
-                    severity="information",
-                )
-                self._update_all_widgets()
-
-        self.push_screen(
-            ConfirmModal(
-                title="Confirm Squash Landing",
-                message=(
-                    f"Squash land {len(approved_workers)} approved worker branch(es) "
-                    f"to '{self.app_state.target_branch}'?"
-                ),
-            ),
-            _on_confirm_squash,
-        )
-
-    def action_kill_worker(self) -> None:
-        """Terminate selected worker tab."""
-        target = self.app_state.selected_target_id
-        if not target or target not in self.app_state.workers:
-            self.notify("Select a worker to kill", severity="warning")
-            return
-
-        def _on_confirm_kill(confirmed: bool):
-            if confirmed:
-                self.app_state.workers[target].state = WorkerState.FAILED
-                self.notify(
-                    f"Worker {target} terminated. Worktree preserved.",
-                    severity="warning",
-                )
-                self._update_all_widgets()
-
-        self.push_screen(
-            ConfirmModal(
-                title=f"Kill Worker {target}",
-                message=f"Close tab for {target}? Uncommitted worktrees will be preserved.",
-            ),
-            _on_confirm_kill,
         )
 
     def on_target_selected(self, message: TargetSelected) -> None:

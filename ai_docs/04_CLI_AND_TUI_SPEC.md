@@ -104,29 +104,18 @@ The TUI provides a visual command center inspired by Herdr's lean, high-density 
 +----------------------------------------------------------------------------------------------------+
 | HERDR-MASTER v0.1.0  | Session: default | WS: ws-main | Target: develop [CLEAN] | Agents: 4 Active | 14:30 |
 +----------------------------------------------------------------------------------------------------+
-| MASTERS & WORKERS                  | ACTIVE VIEW: [1] Output  [2] Diff  [3] Pipeline DAG  [4] Mailbox      |
-|------------------------------------|---------------------------------------------------------------|
-| ▼ [Root] Master (agy: argon)       | [worker-backend (pi: grok-4.7)]                               |
-|   ├─ ● Scout [DONE]                |                                                               |
-|   ├─ ● Architect [DONE]            | $ pytest tests/test_cache.py                                  |
-|   ├─ ▲ worker-backend [WORKING]    | ========================= test session starts =============== |
-|   │    wt: .herdr-wt/wt-backend    | collected 14 items                                            |
-|   │    br: herdm/task-backend      | tests/test_cache.py ..............                     [100%] |
-|   │    model: pi:xai/grok-4.7      |                                                               |
-|   ├─ ◆ worker-ui [NEEDS_REVIEW]    | 14 passed in 0.42s                                            |
-|   │    wt: .herdr-wt/wt-ui         |                                                               |
-|   │    br: herdm/task-ui           | Commit created: 4e91f0a feat(cache): redis pool manager       |
-|   │    model: agy:gemini-4-argon   | Status: Turn settled (idle)                                   |
-|   └─ ⚪ Reviewer [STANDBY]          |                                                               |
-|                                    |                                                               |
-|------------------------------------|---------------------------------------------------------------|
-| RECENT EVENTS & LOGS               | WORKER ACTIONS / REVIEW                                       |
-|------------------------------------|---------------------------------------------------------------|
-| [14:28:10] worker-backend started  | Diff: +142 lines / -18 lines (3 files changed)                |
-| [14:29:40] worker-ui created 4e91  | Review Gate: [p] Send Prompt  [r] Trigger Review              |
-| [14:29:55] Watcher w-01 triggered  |              [m] Squash Land to develop   [k] Kill Worker     |
+| [ New Master ]               [ New Ergo ]               [ Squad Settings ]                         |
+| [ Open in Herdr [o] ]  Workspace: project-a (default) · 2 panes                                    |
+| Open switches to Herdr; another-session/outside-Herdr attach replaces this cockpit. Run `herdm tui` |
+| 2/2 sessions online · 3 workspaces · 4 agents · Click row to select; [o] to open                   |
+| ▼ ● running [Master] project-a · default · 2 panes                                                 |
+|   ├── ● running  Builder · Implement · w1:p1 · /projects/project-a                                 |
+|   └── ○ idle     Reviewer · Review · w1:p2 · /projects/project-a                                  |
+| ▶ ○ idle  project-b · default · 1 pane                                                             |
+| ▶ ● running [Ergo] backend · ergo-backend · 1 pane                                                 |
+|                                                                                                    |
 +----------------------------------------------------------------------------------------------------+
-| [Tab] Focus  [j/k] Navigate  [p] Prompt  [r] Review  [m] Squash-Merge  [d] Show Diff  [q] Quit     |
+| [n] New Master  [e] New Ergo  [s/c] Settings  [o] Open in Herdr  [q] Quit                          |
 +----------------------------------------------------------------------------------------------------+
 ```
 
@@ -134,49 +123,47 @@ The TUI provides a visual command center inspired by Herdr's lean, high-density 
 
 ## 3. Visual Components & Styling
 
-### 1. Header Bar (`HeaderWidget`)
+### 1. Header Bar (`HeaderBar`)
 - Product branding (`HERDR-MASTER`) with accent color (cyan/magenta).
-- Connected Herdr session name (`hermes`, `default`).
+- Connected Herdr session name (`default`, etc.).
 - Active workspace ID and label.
-- Git integration target branch status (`develop [CLEAN]` or `develop [BEHIND 2]`).
+- Git integration target branch status (`develop [CLEAN]`).
 - Active agent count and live system clock.
 
-### 2. Hierarchy Tree (`HierarchyTreeWidget`)
-Interactive tree displaying:
-- Root Master node.
-- Nested Sub-Masters (if present).
-- Leaf Worker nodes with status icons and colors:
-  - `● [cyan]` `WORKING`: Agent actively executing tools / processing.
-  - `● [green]` `IDLE`: Ready for new prompt.
-  - `▲ [amber]` `BLOCKED`: Waiting for user decision or approval dialog.
-  - `◆ [magenta]` `NEEDS_REVIEW`: Turn complete, diff waiting for Master review.
-  - `✔ [blue]` `APPROVED`: Passed Master review, ready to squash land.
-  - `✔ [dim]` `LANDED`: Successfully squashed into `develop`, awaiting cleanup.
-  - `✖ [red]` `FAILED`: Stalled, error, or cancelled.
+### 2. Quick Launch Bar (`QuickLaunchBar`)
+- Single-row toolbar with keyboard/mouse launchers:
+  - `[ New Master ]`: Opens the Launch Herdr Master dialog (`n`).
+  - `[ New Ergo ]`: Opens the Squad Settings & Ergo Pipeline Launcher dialog (`e`).
+  - `[ Squad Settings ]`: Configures project squad defaults (`s` or `c`).
 
-### 3. Multi-View Main Deck (`DeckWidget`)
-Tabbed view switcher toggled with numbers `1..4` or mouse click:
-- **Tab 1: Live Output Streamer**:
-  - Connects to `herdr agent read <worker>` or socket stream.
-  - ANSI terminal color rendering via Rich.
-  - Auto-scrolls with pause-on-scroll capability.
-- **Tab 2: Interactive Diff Viewer**:
-  - Displays `git diff develop...<worker-branch>` with side-by-side or unified view.
-  - Highlights modified files, syntax coloration, and added/deleted lines.
-- **Tab 3: Pipeline DAG Tracker**:
-  - Step-by-step progress cards (`Scout` -> `Architect` -> `Coders` -> `Reviewer` -> `Landing`).
-  - Progress percentage, elapsed time, and status checkpoints.
-- **Tab 4: Inter-Harness Mailbox**:
-  - Displays structured IHCP JSON messages sent between agents.
-  - Allows inspecting clarification queries and approval requests.
+### 3. Open in Herdr Strip & Boundary Help
+- Visible button `#btn-open-herdr` labeled **Open in Herdr [o]**.
+- Live selection summary showing the currently highlighted workspace or pane.
+- Explicit handoff guidance: *Open switches to Herdr; another-session/outside-Herdr attach replaces this cockpit. Run `herdm tui` to return.*
 
-### 4. Interactive Action & Bottom Bar (`FooterWidget`)
-- Single-letter hotkeys for instant operator intervention:
-  - `p`: Open floating prompt dialog to send instructions to the selected worker.
-  - `r`: Trigger an immediate Master Review Gate on the selected worker's branch.
-  - `m`: Trigger serial squash-landing into `develop` (with confirmation prompt).
-  - `k`: Gracefully terminate the selected worker and clean up worktree.
-  - `d`: Jump directly to Diff view.
-  - `Tab` / `Shift+Tab`: Cycle focus between Tree and Main Deck.
-  - `j` / `k` (or Up/Down arrows): Navigate items.
-  - `q`: Exit TUI (leaves background agents running untouched).
+### 4. Workspace Tree (`WorkspaceBrowser`)
+Interactive full-width tree displaying live Herdr sessions, workspaces, and panes:
+- Polled every 3 seconds across discovered UNIX sockets without blocking UI interaction.
+- Status icons:
+  - `● [green]` `running`: Active execution in progress.
+  - `○ [dim]` `idle`: Turn settled / waiting for prompt.
+  - `! [amber]` `blocked`: Waiting on external condition.
+  - `✓ [blue]` `done`: Execution complete.
+  - `? [dim]` `unknown`: Unrecognized status.
+- Socket-scoped identity badges:
+  - `[Master]`: Master coordinator detected in workspace.
+  - `[Ergo]`: Ergo orchestrator detected in workspace.
+  - Badges are identity indicators derived from snapshot evidence and live launch records, not an authoritative Protocol 22 role registry. Custom-named Masters launched elsewhere or surviving a cockpit restart may be unidentifiable, and absence of a badge does not prove absence.
+- Selection behavior:
+  - Clicking, arrowing, and Enter expand/collapse or select rows.
+  - Selection alone never executes focus RPCs or leaves the cockpit.
+  - Pressing `o` or clicking **Open in Herdr** focuses the exact workspace (preserving its active terminal) or exact leaf pane. Same-socket focus stays open; other-socket attach hands off cleanly.
+
+### 5. Action Footer (`ActionFooter`)
+- Main cockpit action hints:
+  - `[n]`: New Master launcher modal.
+  - `[e]`: New Ergo launcher modal.
+  - `[s/c]`: Squad settings modal.
+  - `[o]`: Open selected workspace/pane in Herdr.
+  - `[q]`: Quit cockpit.
+- Resize adaptation: automatically computes shorter hints at narrower widths (preserving Open and Quit visibility down to 40 columns).

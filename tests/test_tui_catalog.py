@@ -190,11 +190,19 @@ async def test_partial_override_and_custom_pool_reach_launch(tmp_path: Path):
 
 
 @pytest.mark.asyncio
-async def test_demo_squad_uses_catalog_and_keeps_output_fixtures():
+async def test_demo_squad_uses_catalog_and_truthful_inventory():
     app = HerdrMasterApp(demo=True)
     _assert_operator_squad(app.app_state.squad)
     assert app.app_state.squad == Squad()
-    assert "Unit tests passed" in app.app_state.output_scrollback["coder-1"]
+    assert app.app_state.inventory_demo is True
+    assert len(app.app_state.live_sessions) == 1
+    demo_session = app.app_state.live_sessions[0]
+    assert demo_session.session_name == "demo"
+    assert demo_session.socket_path == Path("/demo/herdr.sock")
+    agent_names = {a.name for a in demo_session.snapshot.agents}
+    assert "master-coordinator" in agent_names
+    assert "ergo-orchestrator" in agent_names
+    assert "coder-1" in agent_names
     assert "claude-3-opus" not in str(app.app_state.workers)
     assert "gemini-4-argon" not in str(app.app_state.workers)
     async with app.run_test(size=(80, 24)) as pilot:

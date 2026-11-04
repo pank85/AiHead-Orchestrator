@@ -105,18 +105,17 @@ herdm tui
 ```
 
 ### 1. Main Cockpit Screen (Full-Width Landing View)
-The default **[0] Workspaces** view is a full-width control panel. It discovers the
+The default workspaces view is a full-width control panel. It discovers the
 current socket, the default session, and named local sessions under
 `~/.config/herdr/sessions/`, refreshing every three seconds without blocking input.
 
 - Click a workspace to expand its agents and terminal panes; arrow keys and Enter work too.
 - Status icons distinguish **● running**, **! blocked**, **○ idle**, **✓ done**, and **? unknown**.
-- Click an agent to focus its workspace, tab, and exact pane. Within the current Herdr
-  session the cockpit stays open; outside Herdr (or when switching sessions), the CLI
-  attaches to that session after focusing the agent.
+- Role indicators **[Master]** and **[Ergo]** appear adjacent to workspace names when evidenced in session contents. Badges are identity indicators derived from snapshot evidence and live launch records, not an authoritative Protocol 22 role registry; custom-named Masters launched elsewhere or surviving a cockpit restart may be unidentifiable, and absence of a badge does not prove absence.
+- Selection alone never navigates or exits the cockpit. Press **[o]** or click **Open in Herdr [o]** to open the selected workspace or pane.
+- Within the current Herdr session the cockpit stays open; outside Herdr (or when switching sessions), the CLI attaches to that session after focusing the target. Run `herdm tui` to return.
 - Offline sessions are marked explicitly; retained snapshots are marked **stale** and
   cannot be navigated to. Demo mode is labeled and never controls live panes.
-- **[3] Pipeline** retains the compact role summaries, worker pool, and task table.
 - **New Master** and **New Ergo** both offer a **Project folder** field and **Browse…**
   directory picker. Type a path (including `~`) or select a folder; each launch opens
   a fresh workspace with that project as its working directory. The cockpit stays
@@ -127,16 +126,17 @@ current socket, the default session, and named local sessions under
   selecting another valid project lets you continue.
 
 ```text
- [0] Workspaces  [1] Output  [2] Diff  [3] Pipeline  [4] Mailbox
  [ New Master ]           [ New Ergo ]           [ Squad Settings ]
- 2/2 sessions online · 3 workspaces · 4 agents
- ▼ ● running  project-a · default · 2 panes
+ [ Open in Herdr [o] ]  Workspace: project-a (default) · 2 panes
+ Open switches to Herdr; another-session/outside-Herdr attach replaces this cockpit. Run `herdm tui` to return.
+ 2/2 sessions online · 3 workspaces · 4 agents · Click row to select; [o] to open
+ ▼ ● running [Master] project-a · default · 2 panes
    ├── ● running  Builder · Implement · w1:p1 · /projects/project-a
    └── ○ idle     Reviewer · Review · w1:p2 · /projects/project-a
  ▶ ○ idle  project-b · default · 1 pane
- ▶ ● running  backend · ergo-backend · 1 pane
+ ▶ ● running [Ergo] backend · ergo-backend · 1 pane
 
- [n] New Master  [e] New Ergo  [s/c] Settings  [0-4] Views  [q] Quit
+ [n] New Master  [e] New Ergo  [s/c] Settings  [o] Open in Herdr  [q] Quit
 ```
 
 ---

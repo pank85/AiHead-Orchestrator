@@ -5,7 +5,7 @@ the in-memory descriptor so live widgets do not keep a second model table.
 """
 
 from pathlib import Path
-from typing import Any, Dict, List, Optional, Tuple
+from typing import Dict, List, Optional, Tuple
 
 from pydantic import BaseModel, Field
 
@@ -31,7 +31,12 @@ from herdr_master.core.models import (
     WorkerState,
 )
 from herdr_master.herdr.discovery import SessionInventory
-from herdr_master.herdr.snapshot import AgentSnapshot, SessionSnapshot, WorkspaceSnapshot
+from herdr_master.herdr.snapshot import (
+    AgentSnapshot,
+    SessionSnapshot,
+    TabSnapshot,
+    WorkspaceSnapshot,
+)
 from herdr_master.pipeline.squad import describe_agent
 
 
@@ -212,7 +217,6 @@ class AppState(BaseModel):
     branch_status: str = "CLEAN"
     socket_connected: bool = True
     active_agents_count: int = 0
-    active_deck_mode: int = 0  # 0: Workspaces, 1: Output, 2: Diff, 3: Pipeline, 4: Mailbox
     live_sessions: List[SessionInventory] = Field(default_factory=list)
     inventory_demo: bool = False
     selected_target_id: Optional[str] = "scout"
@@ -221,9 +225,6 @@ class AppState(BaseModel):
     pipeline_run: Optional[PipelineRun] = None
     masters: Dict[str, MasterSession] = Field(default_factory=dict)
     workers: Dict[str, WorkerSession] = Field(default_factory=dict)
-    output_scrollback: Dict[str, str] = Field(default_factory=dict)
-    diff_content: Dict[str, str] = Field(default_factory=dict)
-    mailbox_envelopes: List[Dict[str, Any]] = Field(default_factory=list)
 
     @classmethod
     def create_demo_state(cls) -> "AppState":
@@ -263,7 +264,7 @@ class AppState(BaseModel):
                 description="Textual TUI Cockpit & Ergo pipeline view",
                 files=[
                     "src/herdr_master/ui/tui/app.py",
-                    "src/herdr_master/ui/tui/widgets/pipeline_view.py",
+                    "src/herdr_master/ui/tui/widgets/workspaces.py",
                 ],
                 dependency="DEPENDS ON: task-1",
                 expert_persona="TUI & Visual Layout Architect",
@@ -318,54 +319,93 @@ class AppState(BaseModel):
                 state=WorkerState.SPAWNING,
             ),
         }
-
-        output_scrollback = {
-            "coder-1": (
-                "\x1b[32m✓\x1b[0m Unit tests passed: 17 passed in 0.45s\n"
-                "\x1b[34m[INFO]\x1b[0m Worktree committed: a9b42c1 feat(core): slug parser\n"
-                "Status: Turn settled (idle)"
-            ),
-            "coder-2": (
-                "[2026-11-03 14:55:10] Connecting to Unix socket\n"
-                "[2026-11-03 14:55:12] Handshake complete: Protocol 22 acknowledged.\n"
-                "Streaming events..."
-            ),
-            "coder-3": "[2026-11-03 14:56:00] Initializing git worktree for task-3...",
-        }
-
-        diff_content = {
-            "coder-1": """diff --git a/src/herdr_master/core/slug.py b/src/herdr_master/core/slug.py
-new file mode 100644
---- /dev/null
-+++ b/src/herdr_master/core/slug.py
-@@ -0,0 +1,45 @@
-+def parse_binding(raw: str):
-+    # Implement binding grammar: kind:model_ref[:effort]
-+    ...
-""",
-        }
-
         masters = {
             "master-main": MasterSession(
                 session_id="master-main",
-                herdr_session="default",
+                herdr_session="demo",
                 workspace_id="ws-01",
-                pane_id="p-master",
+                pane_id="ws-01:p-master",
                 harness=squad.scout.kind,
                 role="root-orchestrator",
+                metadata={"socket_path": str(Path("/demo/herdr.sock")), "demo": True},
                 child_workers=["coder-1", "coder-2", "coder-3"],
             )
         }
 
+        tabs = [
+            TabSnapshot(tab_id="ws-01:t-master", workspace_id="ws-01", label="Master"),
+            TabSnapshot(tab_id="ws-01:t-ergo", workspace_id="ws-01", label="Ergo"),
+            TabSnapshot(tab_id="ws-01:t1", workspace_id="ws-01", label="Task 1"),
+            TabSnapshot(tab_id="ws-01:t2", workspace_id="ws-01", label="Task 2"),
+            TabSnapshot(tab_id="ws-01:t3", workspace_id="ws-01", label="Task 3"),
+            TabSnapshot(tab_id="ws-01:t-shell", workspace_id="ws-01", label="Shell"),
+        ]
+
+        demo_agents = [
+            AgentSnapshot(
+                pane_id="ws-01:p-master",
+                workspace_id="ws-01",
+                tab_id="ws-01:t-master",
+                agent=squad.scout.kind.value,
+                name="master-coordinator",
+                agent_status="working",
+                cwd=".herdr-worktrees/master",
+            ),
+            AgentSnapshot(
+                pane_id="ws-01:p-ergo",
+                workspace_id="ws-01",
+                tab_id="ws-01:t-ergo",
+                agent=squad.scout.kind.value,
+                name="ergo-orchestrator",
+                agent_status="working",
+                cwd=".herdr-worktrees/ergo",
+            ),
+            AgentSnapshot(
+                pane_id="ws-01:p1",
+                workspace_id="ws-01",
+                tab_id="ws-01:t1",
+                agent=pool[0].kind.value,
+                name="coder-1",
+                agent_status="idle",
+                cwd=".herdr-worktrees/herdm-coder-1",
+            ),
+            AgentSnapshot(
+                pane_id="ws-01:p2",
+                workspace_id="ws-01",
+                tab_id="ws-01:t2",
+                agent=pool[1].kind.value,
+                name="coder-2",
+                agent_status="working",
+                cwd=".herdr-worktrees/herdm-coder-2",
+            ),
+            AgentSnapshot(
+                pane_id="ws-01:p3",
+                workspace_id="ws-01",
+                tab_id="ws-01:t3",
+                agent=pool[0].kind.value,
+                name="coder-3",
+                agent_status="working",
+                cwd=".herdr-worktrees/herdm-coder-3",
+            ),
+            AgentSnapshot(
+                pane_id="ws-01:p-shell",
+                workspace_id="ws-01",
+                tab_id="ws-01:t-shell",
+                agent=None,
+                name=None,
+                agent_status="terminal",
+                cwd="/projects/project-demo",
+            ),
+        ]
+
         return cls(
-            session_name="default",
-            workspace_label="ergo-20261103",
+            session_name="demo",
+            workspace_label="project-demo",
             workspace_id="ws-01",
             target_branch="develop",
             branch_status="CLEAN",
             socket_connected=True,
-            active_agents_count=3,
-            active_deck_mode=0,
+            active_agents_count=5,
             inventory_demo=True,
             live_sessions=[
                 SessionInventory(
@@ -375,23 +415,11 @@ new file mode 100644
                         protocol=22,
                         workspaces=[
                             WorkspaceSnapshot(
-                                workspace_id="ws-01", label="ergo-20261103", agent_status="working"
+                                workspace_id="ws-01", label="project-demo", agent_status="working"
                             )
                         ],
-                        agents=[
-                            AgentSnapshot(
-                                pane_id=worker.pane_id,
-                                workspace_id="ws-01",
-                                tab_id=worker.tab_id,
-                                agent=worker.harness.value,
-                                name=worker.worker_id,
-                                agent_status="working"
-                                if worker.state == WorkerState.WORKING
-                                else "idle",
-                                cwd=worker.worktree_path,
-                            )
-                            for worker in workers.values()
-                        ],
+                        tabs=tabs,
+                        agents=demo_agents,
                     ),
                 )
             ],
@@ -400,6 +428,4 @@ new file mode 100644
             pipeline_run=run,
             masters=masters,
             workers=workers,
-            output_scrollback=output_scrollback,
-            diff_content=diff_content,
         )
