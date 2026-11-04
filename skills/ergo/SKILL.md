@@ -18,7 +18,12 @@ You are the orchestrator. **Never implement code directly in the main conversati
 
 ---
 
-## 0. `--models` Inline Role & Worker Overrides (Default `/ergo` & `/ergo --herdr`)
+## 0. Configuration Hierarchy & Inline Role & Worker Overrides
+
+When resolving squad role models and worker pool bindings, follow this strict priority order:
+1. **Inline CLI / Prompt Overrides (`--models`, `--scout`, `--architect`, `--workers`, `--reviewer`)**: Explicit arguments passed in the invocation command take highest priority.
+2. **Project Configuration (`.herdr-master.toml`)**: If `.herdr-master.toml` exists in the current project root, read `[models.default_squad]` and `[models.worker_pool]`. Use its configured models, generic labels, and capability descriptions for the roles and the `ALLOWED CODER MODELS` block.
+3. **Built-in Harness Defaults**: If neither is present, fall back to the built-in tables in **§1** (for default native subagent mode) or **§2** (for `--herdr` mode).
 
 The user can override models and effort levels for any role (`scout`, `architect`, `workers`/`coders`, `reviewer`) in **both** plain `/ergo` and `/ergo --herdr` using `--models` (or individual `--scout`, `--architect`, `--workers`/`--coder`, `--reviewer` flags):
 
@@ -183,8 +188,9 @@ Every agent prompt must be assembled in this order:
 Track one checklist item per step and complete in order:
 
 ### Step 1: Isolation (`WORKTREE`), Branch (`ergo/<run-id>`), `RUN_DIR` & Preflight
-1. **Carryover**: Read `.orchestration/carryover.md` if present. Direct user instructions in the current turn override carryover.
-2. **Worktree / Branch Setup**:
+1. **Project Config Resolution**: Inspect the project root for `.herdr-master.toml`. If present, read `[models.default_squad]` and `[models.worker_pool]` to populate squad roles and the `ALLOWED CODER MODELS` block (unless overridden by `--models`).
+2. **Carryover**: Read `.orchestration/carryover.md` if present. Direct user instructions in the current turn override carryover.
+3. **Worktree / Branch Setup**:
    - Require a git repo and a clean working tree (`git status --porcelain` empty; if dirty, STOP and ask the user to commit/stash).
    - If already inside an `ergo/*` worktree (`git rev-parse --git-dir` ≠ `--git-common-dir` and branch matches `ergo/*`) or constrained to an assigned worktree by a parent `/herdr-master` orchestrator, reuse it and keep its branch.
    - Otherwise, record `ORIGIN_BRANCH=$(git rev-parse --abbrev-ref HEAD)` and create an isolated worktree `WORKTREE=<project_parent>/<repo>-ergo-<run-id>` on branch `ergo/<run-id>`:
