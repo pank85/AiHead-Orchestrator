@@ -6,7 +6,7 @@ from rich.text import Text
 from herdr_master.ui.tui.app import HerdrMasterApp
 from herdr_master.ui.tui.widgets.footer import ActionFooter
 from herdr_master.ui.tui.widgets.quick_launch import QuickLaunchBar
-from herdr_master.ui.tui.widgets.workspaces import WorkspaceBrowser
+from herdr_master.ui.tui.widgets.workspaces import WorkspaceBrowser, WorkspaceTarget
 
 
 @pytest.mark.asyncio
@@ -354,3 +354,207 @@ async def test_compact_workspace_long_text_and_scroll_retention():
         assert tree.cursor_node.data.pane_id == "p18"
         assert browser._selected_target.pane_id == "p18"
         assert tree.scroll_y > 0
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("size", [(40, 24), (60, 24), (80, 24), (110, 32)])
+async def test_compact_layout_with_live_pane_and_composer(size):
+    """Verify geometry across terminal sizes with live view and composer active.
+
+    At 40x24, 60x24, and 80x24: stacked browser (12 rows, >=4 tree rows), readable
+    output rows (>=3), visible Send/Cancel/Follow controls, and Open/footer controls.
+    At 110x32: horizontal split (browser width >=48, tree rows >=10).
+    """
+    from pathlib import Path
+
+    from herdr_master.herdr.discovery import SessionInventory
+    from herdr_master.herdr.snapshot import SessionSnapshot
+    from herdr_master.ui.tui.live_pane import PaneFrame, PaneLease
+    from herdr_master.ui.tui.widgets.deck import CenterDeck
+    from herdr_master.ui.tui.widgets.live_output import LivePaneView
+
+    app = HerdrMasterApp(demo=True)
+    app.app_state.inventory_demo = False
+    sock = Path("/tmp/compact.sock")
+    sess = SessionInventory(
+        session_name="demo-session",
+        socket_path=sock,
+        snapshot=SessionSnapshot(
+            protocol=22,
+            workspaces=[{"workspace_id": "w1", "label": "Main"}],
+            tabs=[{"tab_id": "t1", "workspace_id": "w1"}],
+            panes=[{"pane_id": "p1", "tab_id": "t1", "agent": "pi"}],
+            agents=[{"pane_id": "p1", "name": "Agent", "agent_status": "working"}],
+        ),
+    )
+    app.app_state.live_sessions = [sess]
+
+    async with app.run_test(size=size) as pilot:
+        await pilot.pause()
+        deck = app.query_one(CenterDeck)
+        browser = app.query_one(WorkspaceBrowser)
+        live_pane = app.query_one(LivePaneView)
+
+        # 1. No pane selected initially: full-width landing view
+        assert not live_pane.has_active_pane
+        assert live_pane.display is False
+        assert browser._tree.size.height >= 10
+
+        # A long identity must not alter the compact geometry.
+        target = WorkspaceTarget(
+            "demo-session-with-a-very-long-name", sock, "workspace-with-a-long-id",
+            "tab-with-a-long-id", "pane-with-a-long-id",
+        )
+        lease = PaneLease((str(sock), target.workspace_id, target.pane_id), 1, "term-1")
+        frame = PaneFrame(
+            lease=lease,
+            target=target,
+            phase="live",
+            agent_status="working",
+            text_ansi="Line 1\nLine 2\nLine 3\nLine 4\nLine 5\n",
+            error=None,
+            can_reply=True,
+        )
+        deck.update_live_frame(frame)
+        await pilot.pause()
+
+        assert live_pane.display is True
+        tree = browser._tree
+        output = live_pane.query_one("#live-pane-output")
+
+        if size[0] >= 110:
+            assert deck.has_class("-horizontal")
+            assert browser.region.width >= 48
+            assert tree.size.height >= 10
+        else:
+            assert deck.has_class("-vertical")
+            assert browser.region.height == 12
+            assert tree.size.height >= 4
+
+        assert output.content_region.height >= 3
+
+        # 3. Reveal composer by clicking Reply
+        btn_reply = live_pane.query_one("#btn-reply")
+        assert not btn_reply.disabled
+        await pilot.click("#btn-reply")
+        await pilot.pause()
+
+        assert live_pane.has_class("-reply-active")
+        ta = live_pane.query_one("#reply-text")
+        assert ta.display is True
+        assert ta.region.height == 2
+        assert app.focused is ta
+        assert "pane-with-a-long-id" in live_pane.query_one("#live-pane-identity").render().plain
+
+        btn_send = live_pane.query_one("#btn-send-reply")
+        btn_cancel = live_pane.query_one("#btn-cancel-reply")
+        btn_follow = live_pane.query_one("#btn-follow-output")
+        btn_target = live_pane.query_one("#btn-target-details")
+
+        assert btn_send.display is True
+        assert btn_cancel.display is True
+        assert btn_follow.display is True
+        assert btn_target.display is True
+
+        # All buttons fit within the available terminal width
+        assert btn_send.region.right <= size[0]
+        assert btn_cancel.region.right <= size[0]
+        assert btn_follow.region.right <= size[0]
+        assert btn_target.region.right <= live_pane.content_region.right
+        for button in (btn_send, btn_cancel, btn_follow, btn_target):
+            assert button.content_region.width >= len(str(button.label))
+            assert button.region.bottom <= live_pane.region.bottom
+
+        # In stacked live mode with composer, check minimum readable heights
+        if size[0] < 110:
+            assert tree.size.height >= 4
+            assert output.content_region.height >= 3
+
+        # Open in Herdr button and footer remain visible and properly bounded
+        open_btn = browser.query_one("#btn-open-herdr")
+        assert open_btn.region.right <= size[0]
+        footer = app.query_one(ActionFooter)
+        assert footer.region.bottom <= size[1]
+
+
+@pytest.mark.asyncio
+async def test_compact_layout_live_pane_resize_110_40_110():
+    """Verify live pane and composer maintain stability and constraints during
+    110 -> 40 -> 110 resize.
+    """
+    from pathlib import Path
+
+    from herdr_master.herdr.discovery import SessionInventory
+    from herdr_master.herdr.snapshot import SessionSnapshot
+    from herdr_master.ui.tui.live_pane import PaneFrame, PaneLease
+    from herdr_master.ui.tui.widgets.deck import CenterDeck
+    from herdr_master.ui.tui.widgets.live_output import LivePaneView
+
+    app = HerdrMasterApp(demo=True)
+    app.app_state.inventory_demo = False
+    sock = Path("/tmp/compact.sock")
+    sess = SessionInventory(
+        session_name="demo-session",
+        socket_path=sock,
+        snapshot=SessionSnapshot(
+            protocol=22,
+            workspaces=[{"workspace_id": "w1", "label": "Main"}],
+            tabs=[{"tab_id": "t1", "workspace_id": "w1"}],
+            panes=[{"pane_id": "p1", "tab_id": "t1", "agent": "pi"}],
+            agents=[{"pane_id": "p1", "name": "Agent", "agent_status": "working"}],
+        ),
+    )
+    app.app_state.live_sessions = [sess]
+
+    async with app.run_test(size=(110, 32)) as pilot:
+        await pilot.pause()
+        deck = app.query_one(CenterDeck)
+        browser = app.query_one(WorkspaceBrowser)
+        live_pane = app.query_one(LivePaneView)
+
+        target = WorkspaceTarget("demo-session", sock, "w1", "t1", "p1")
+        lease = PaneLease((str(sock), "w1", "p1"), 1, "term-1")
+        frame = PaneFrame(
+            lease=lease,
+            target=target,
+            phase="live",
+            agent_status="working",
+            text_ansi="Line 1\nLine 2\nLine 3\n",
+            error=None,
+            can_reply=True,
+        )
+        deck.update_live_frame(frame)
+        await pilot.pause()
+
+        await pilot.click("#btn-reply")
+        await pilot.pause()
+        ta = live_pane.query_one("#reply-text")
+        assert app.focused is ta
+        await pilot.press("x")
+
+        assert deck.has_class("-horizontal")
+        assert browser.region.width >= 48
+        assert browser._tree.size.height >= 10
+
+        # Resize to narrow 40x24
+        await pilot.resize_terminal(40, 24)
+        await pilot.pause()
+
+        assert deck.has_class("-vertical")
+        assert browser.region.height == 12
+        assert browser._tree.size.height >= 4
+        output = live_pane.query_one("#live-pane-output")
+        assert output.content_region.height >= 3
+        assert app.focused is ta
+        assert ta.text == "x"
+        assert live_pane.query_one("#btn-target-details").region.right <= 40
+
+        # Resize back to wide 110x32
+        await pilot.resize_terminal(110, 32)
+        await pilot.pause()
+
+        assert deck.has_class("-horizontal")
+        assert browser.region.width >= 48
+        assert browser._tree.size.height >= 10
+        assert app.focused is ta
+        assert ta.text == "x"

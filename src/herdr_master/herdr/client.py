@@ -5,8 +5,9 @@ from pathlib import Path
 from typing import Any, Dict, List, Optional, Union
 
 from herdr_master.core.context import resolve_herdr_context
+from herdr_master.herdr.protocol import parse_pane_read_result, parse_prompt_result
 from herdr_master.herdr.snapshot import SessionSnapshot
-from herdr_master.herdr.socket import HerdrRPCError, send_rpc
+from herdr_master.herdr.socket import HerdrConnectionError, HerdrRPCError, send_rpc
 from herdr_master.herdr.subscribe import HerdrSubscription
 
 
@@ -161,8 +162,13 @@ class HerdrClient:
         prompt: str,
         wait: Optional[Any] = None,
         timeout_ms: Optional[int] = None,
+        *,
+        max_attempts: int = 20,
     ) -> Dict[str, Any]:
         """Send bracketed prompt text to an agent."""
+        if max_attempts < 1:
+            raise ValueError(f"max_attempts must be at least 1, got {max_attempts}")
+
         params: Dict[str, Any] = {
             "target": target,
             "text": prompt,
@@ -176,13 +182,15 @@ class HerdrClient:
             rpc_timeout = 30.0
 
         last_err: Optional[Exception] = None
-        for attempt in range(20):
+        for attempt in range(max_attempts):
             try:
                 resp = await self._rpc("agent.prompt", params, timeout=rpc_timeout)
-                return resp.get("result", {})
+                result = resp.get("result")
+                parse_prompt_result(result)
+                return result
             except HerdrRPCError as err:
                 last_err = err
-                if attempt < 19 and (
+                if attempt < max_attempts - 1 and (
                     err.code
                     in (
                         "agent_target_not_found",
@@ -224,18 +232,25 @@ class HerdrClient:
         pane_id: str,
         format: str = "ansi",
         lines: Optional[int] = None,
+        source: str = "recent",
     ) -> Dict[str, Any]:
-        """Read scrollback directly from a pane."""
+        """Read a validated Protocol 22 scrollback record from the requested pane."""
         strip_ansi = False if format == "ansi" else True
         params: Dict[str, Any] = {
             "pane_id": pane_id,
+            "source": source,
             "format": format,
             "strip_ansi": strip_ansi,
         }
         if lines is not None:
             params["lines"] = lines
         resp = await self._rpc("pane.read", params)
-        return resp.get("result", {})
+        result = resp.get("result")
+        read = parse_pane_read_result(result)
+        if read.pane_id != pane_id or read.source != source or read.format != format:
+            raise HerdrConnectionError("pane.read response does not match request")
+        # Preserve the existing unwrapped return shape, including extension fields.
+        return result["read"]
 
     async def get_agent(self, agent_name_or_pane: str) -> Dict[str, Any]:
         """Get agent details."""

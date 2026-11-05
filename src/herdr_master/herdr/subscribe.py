@@ -3,10 +3,11 @@
 import asyncio
 import json
 import uuid
+from collections import deque
 from pathlib import Path
 from typing import Any, AsyncIterator, Dict, List, Optional, Union
 
-from herdr_master.herdr.socket import HerdrConnectionError, HerdrRPCError, NDJSONBuffer
+from herdr_master.herdr.socket import HerdrConnectionError, NDJSONBuffer, validate_rpc_response
 
 
 class HerdrSubscription:
@@ -32,11 +33,14 @@ class HerdrSubscription:
         self._reader: Optional[asyncio.StreamReader] = None
         self._writer: Optional[asyncio.StreamWriter] = None
         self._buffer = NDJSONBuffer()
+        self._pending_events: deque[Dict[str, Any]] = deque()
 
     async def connect(self) -> Dict[str, Any]:
         """Establish connection and initiate events.subscribe."""
         if self._subscribed:
             raise RuntimeError("Socket already subscribed. Reconnect to change subscriptions.")
+        if self._closed:
+            raise RuntimeError("Subscription is closed. Reconnect to change subscriptions.")
 
         if not self.socket_path.exists():
             raise HerdrConnectionError(f"Herdr socket does not exist at {self.socket_path}")
@@ -76,25 +80,25 @@ class HerdrSubscription:
                 messages = self._buffer.feed(chunk)
                 if messages:
                     start_frame = messages.pop(0)
-                    # If any extra messages arrived in the same chunk, keep them in buffer
+                    if messages:
+                        self._pending_events.extend(messages)
                     break
 
             if start_frame is None:
                 await self.close()
                 raise HerdrConnectionError("Connection closed before subscription was acknowledged")
 
-            if "error" in start_frame and start_frame["error"] is not None:
-                await self.close()
-                err = start_frame["error"]
-                code = (
-                    err.get("code", "UNKNOWN_ERROR") if isinstance(err, dict) else "UNKNOWN_ERROR"
-                )
-                msg = err.get("message", str(err)) if isinstance(err, dict) else str(err)
-                raise HerdrRPCError(code=code, message=msg)
+            validate_rpc_response(start_frame, req_id)
+            result = start_frame.get("result")
+            if not isinstance(result, dict) or result.get("type") != "subscription_started":
+                raise HerdrConnectionError("Invalid subscription acknowledgement")
 
             self._subscribed = True
             return start_frame
 
+        except asyncio.CancelledError:
+            await self.close()
+            raise
         except asyncio.TimeoutError as exc:
             await self.close()
             raise HerdrConnectionError("Timeout awaiting subscription acknowledgement") from exc
@@ -106,6 +110,8 @@ class HerdrSubscription:
         """Reject second subscribe on active connection."""
         if self._subscribed:
             raise RuntimeError("Socket already subscribed. Reconnect to change subscriptions.")
+        if self._closed:
+            raise RuntimeError("Subscription is closed. Reconnect to change subscriptions.")
         await self.connect()
 
     async def events(self) -> AsyncIterator[Dict[str, Any]]:
@@ -114,7 +120,12 @@ class HerdrSubscription:
             raise RuntimeError("Must call connect() before reading events")
 
         try:
+            while self._pending_events and not self._closed:
+                yield self._pending_events.popleft()
+
             while not self._closed:
+                if self._reader is None:
+                    break
                 chunk = await self._reader.read(4096)
                 if not chunk:
                     # Connection closed by server
@@ -131,12 +142,14 @@ class HerdrSubscription:
         """Close the socket connection cleanly."""
         self._closed = True
         self._subscribed = False
+        self._pending_events.clear()
+        self._buffer.clear()
         if self._writer is not None:
+            writer = self._writer
+            self._writer = None
+            self._reader = None
             try:
-                self._writer.close()
-                await self._writer.wait_closed()
+                writer.close()
+                await writer.wait_closed()
             except Exception:
                 pass
-            finally:
-                self._writer = None
-                self._reader = None

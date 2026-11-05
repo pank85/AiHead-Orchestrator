@@ -76,6 +76,7 @@ async def test_resize_preserves_prompt_squad_and_project(tmp_path):
         # Hidden options remain reachable through the settings scroller.
         modal._description_input.scroll_visible(immediate=True)
         await pilot.pause()
+        await pilot.pause()
         assert_inside(modal._description_input, modal.query_one(".editor-fields"))
 
 

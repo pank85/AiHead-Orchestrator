@@ -3,6 +3,7 @@
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Optional
+from unicodedata import category
 
 from rich.text import Text
 from textual.app import ComposeResult
@@ -16,6 +17,25 @@ from herdr_master.herdr.discovery import SessionInventory
 from herdr_master.herdr.snapshot import AgentSnapshot, SessionSnapshot, TabSnapshot
 from herdr_master.ui.tui.state import AppState
 from herdr_master.ui.tui.widgets.quick_launch import QuickLaunchBar
+
+
+def safe_display(value: object) -> str:
+    """Represent untrusted identifiers literally, including invisible controls."""
+    result = []
+    for char in str(value):
+        code = ord(char)
+        if char == "\\":
+            result.append("\\\\")
+        elif category(char) in ("Cc", "Cf", "Cs", "Zl", "Zp"):
+            if code <= 0xff:
+                result.append(f"\\x{code:02x}")
+            elif code <= 0xffff:
+                result.append(f"\\u{code:04x}")
+            else:
+                result.append(f"\\U{code:08x}")
+        else:
+            result.append(char)
+    return "".join(result)
 
 
 @dataclass(frozen=True)
@@ -292,6 +312,13 @@ class WorkspaceBrowser(Vertical):
             super().__init__()
             self.target = target
 
+    class SelectionChanged(Message):
+        """Accepted selection changed in the workspace tree."""
+
+        def __init__(self, target: Optional[WorkspaceTarget]) -> None:
+            super().__init__()
+            self.target = target
+
     def __init__(self, app_state: AppState, **kwargs) -> None:
         super().__init__(**kwargs)
         self.app_state = app_state
@@ -301,6 +328,7 @@ class WorkspaceBrowser(Vertical):
         self._workspace_nodes = {}
         self._pane_nodes = {}
         self._selected_target: Optional[WorkspaceTarget] = None
+        self._last_emitted_target: Optional[WorkspaceTarget] = None
         self._selected_target_disappeared: bool = False
         self._operator_navigating: bool = False
 
@@ -373,7 +401,7 @@ class WorkspaceBrowser(Vertical):
         if not inventory or inventory.error or not inventory.snapshot:
             btn.disabled = True
             btn.tooltip = "Session is offline. Wait for reconnection."
-            sel_static.update(Text(f"Offline · {target.session_name}", style="red"))
+            sel_static.update(Text(f"Offline · {safe_display(target.session_name)}", style="red"))
             return
 
         ws = next(
@@ -393,14 +421,17 @@ class WorkspaceBrowser(Vertical):
                 btn.disabled = True
                 btn.tooltip = "Workspace has no open panes to open."
                 sel_static.update(
-                    Text(f"Workspace {ws.label or ws.workspace_id} · empty (0 panes)", style="dim")
+                    Text(
+                        f"Workspace {safe_display(ws.label or ws.workspace_id)} · empty (0 panes)",
+                        style="dim",
+                    )
                 )
             else:
                 btn.disabled = False
                 btn.tooltip = OPEN_BOUNDARY_HELP
-                ws_title = ws.label or ws.workspace_id
+                ws_title = safe_display(ws.label or ws.workspace_id)
                 pane_word = "pane" if len(panes) == 1 else "panes"
-                sess = inventory.session_name
+                sess = safe_display(inventory.session_name)
                 sel_static.update(
                     Text(
                         f"Workspace: {ws_title} ({sess}) · {len(panes)} {pane_word}",
@@ -413,7 +444,7 @@ class WorkspaceBrowser(Vertical):
             if not agent_item:
                 btn.disabled = True
                 btn.tooltip = "Pane has closed. Select a current agent."
-                sel_static.update(Text(f"Pane {target.pane_id} closed", style="dim"))
+                sel_static.update(Text(f"Pane {safe_display(target.pane_id)} closed", style="dim"))
             else:
                 if agent_item.tab_id:
                     tab = next(
@@ -424,16 +455,16 @@ class WorkspaceBrowser(Vertical):
                         btn.disabled = True
                         btn.tooltip = "Pane tab ownership is mismatched or missing."
                         sel_static.update(
-                            Text(f"Pane {target.pane_id} tab invalid", style="yellow")
+                            Text(f"Pane {safe_display(target.pane_id)} tab invalid", style="yellow")
                         )
                         return
                 btn.disabled = False
                 btn.tooltip = OPEN_BOUNDARY_HELP
-                pane_name = agent_item.name or agent_item.agent or "Terminal"
-                ws_title = ws.label or ws.workspace_id
+                pane_name = safe_display(agent_item.name or agent_item.agent or "Terminal")
+                ws_title = safe_display(ws.label or ws.workspace_id)
                 sel_static.update(
                     Text(
-                        f"Pane: {pane_name} ({agent_item.pane_id}) · {ws_title}",
+                        f"Pane: {pane_name} ({safe_display(agent_item.pane_id)}) · {ws_title}",
                         style="bold white",
                     )
                 )
@@ -528,6 +559,12 @@ class WorkspaceBrowser(Vertical):
         ):
             self._operator_navigating = True
 
+    def _notify_selection_if_changed(self) -> None:
+        current = self._selected_target
+        if current != self._last_emitted_target:
+            self._last_emitted_target = current
+            self.post_message(self.SelectionChanged(current))
+
     def _reselect_current_if_navigating(self) -> None:
         if (
             self._operator_navigating
@@ -539,6 +576,7 @@ class WorkspaceBrowser(Vertical):
                 self._selected_target = node.data
                 self._selected_target_disappeared = False
                 self._update_open_strip()
+                self._notify_selection_if_changed()
         self._operator_navigating = False
 
     def on_tree_node_highlighted(self, event: Tree.NodeHighlighted[WorkspaceTarget]) -> None:
@@ -553,6 +591,7 @@ class WorkspaceBrowser(Vertical):
         else:
             self._selected_target = None
         self._update_open_strip()
+        self._notify_selection_if_changed()
 
     def on_tree_node_selected(self, event: Tree.NodeSelected[WorkspaceTarget]) -> None:
         event.stop()
@@ -564,6 +603,7 @@ class WorkspaceBrowser(Vertical):
             self._selected_target = None
             self._selected_target_disappeared = False
         self._update_open_strip()
+        self._notify_selection_if_changed()
 
     def on_button_pressed(self, event: Button.Pressed) -> None:
         if event.button.id == "btn-open-herdr":
@@ -587,8 +627,9 @@ class WorkspaceBrowser(Vertical):
                 key = (socket_key, "")
                 seen_workspaces.add(key)
                 label = Text(
-                    f"{'× offline' if inventory.error else '○ empty'} · {inventory.session_name}"
-                    f" · {inventory.error or 'No open workspaces'}",
+                    f"{'× offline' if inventory.error else '○ empty'} · "
+                    f"{safe_display(inventory.session_name)} · "
+                    f"{safe_display(inventory.error or 'No open workspaces')}",
                     style="dim",
                 )
                 if key not in self._workspace_nodes:
@@ -623,12 +664,16 @@ class WorkspaceBrowser(Vertical):
                 for role in roles:
                     role_style = "dim" if inventory.error else ROLE_STYLES.get(role, "bold cyan")
                     label.append(f" [{role}]", style=role_style)
-                ws_name = workspace.label or workspace.workspace_id
+                ws_name = safe_display(workspace.label or workspace.workspace_id)
                 label.append(f"  {ws_name}" if not roles else f" {ws_name}", style="bold white")
                 pane_word = "pane" if len(agents) == 1 else "panes"
                 label.append(
-                    f" · {inventory.session_name} · {len(agents)} {pane_word}", style="dim"
+                    f" · {safe_display(inventory.session_name)} · {len(agents)} {pane_word}",
+                    style="dim",
                 )
+                blocked_count = sum(agent.agent_status == "blocked" for agent in agents)
+                if not inventory.error and blocked_count > 0 and status != "blocked":
+                    label.append(f" · ! {blocked_count} blocked", style="yellow")
                 if inventory.error:
                     label.append(" · stale", style="red")
                 target = WorkspaceTarget(
@@ -650,11 +695,14 @@ class WorkspaceBrowser(Vertical):
                         if inventory.error
                         else status_label(agent.agent_status)
                     )
-                    label.append(f"  {agent.name or agent.agent or 'Terminal'}", style="bold")
-                    label.append(f" · {tab.label if tab and tab.label else agent.tab_id or 'tab'}")
-                    label.append(f" · {agent.pane_id}", style="dim")
+                    label.append(
+                        f"  {safe_display(agent.name or agent.agent or 'Terminal')}", style="bold"
+                    )
+                    tab_name = tab.label if tab and tab.label else agent.tab_id or "tab"
+                    label.append(f" · {safe_display(tab_name)}")
+                    label.append(f" · {safe_display(agent.pane_id)}", style="dim")
                     if agent.cwd:
-                        label.append(f" · {agent.cwd}", style="dim")
+                        label.append(f" · {safe_display(agent.cwd)}", style="dim")
                     target = WorkspaceTarget(
                         inventory.session_name,
                         inventory.socket_path,
@@ -685,19 +733,23 @@ class WorkspaceBrowser(Vertical):
                 if pane_key not in seen_panes:
                     self._selected_target = None
                     self._selected_target_disappeared = True
+                    self._notify_selection_if_changed()
                 else:
                     node = self._pane_nodes.get(pane_key)
                     if node is not None and node.data is not None:
                         self._selected_target = node.data
+                        self._last_emitted_target = node.data
             else:
                 ws_key = (target_socket, self._selected_target.workspace_id)
                 if ws_key not in seen_workspaces:
                     self._selected_target = None
                     self._selected_target_disappeared = True
+                    self._notify_selection_if_changed()
                 else:
                     node = self._workspace_nodes.get(ws_key)
                     if node is not None and node.data is not None:
                         self._selected_target = node.data
+                        self._last_emitted_target = node.data
         prefix = "DEMO · " if app_state.inventory_demo else ""
         if not inventories:
             summary = "No session data yet. Waiting for Herdr…"

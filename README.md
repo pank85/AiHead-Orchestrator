@@ -146,9 +146,9 @@ current socket, the default session, and named local sessions under
 `~/.config/herdr/sessions/`, refreshing every three seconds without blocking input.
 
 - Click a workspace to expand its agents and terminal panes; arrow keys and Enter work too.
-- Status icons distinguish **● running**, **! blocked**, **○ idle**, **✓ done**, and **? unknown**.
+- Status icons distinguish **● running**, **! blocked**, **○ idle**, **✓ done**, **? unknown**, and ordinary terminals. A mixed workspace also shows its blocked count. Blocked means the **reason is unknown—inspect output**; Protocol 22 does not confirm whether user input is required. Neither an old question nor an agent's readiness proves it is waiting for you.
 - Role indicators **[Master]** and **[Ergo]** appear adjacent to workspace names when evidenced in session contents. Badges are identity indicators derived from snapshot evidence and live launch records, not an authoritative Protocol 22 role registry; custom-named Masters launched elsewhere or surviving a cockpit restart may be unidentifiable, and absence of a badge does not prove absence.
-- Selection alone never navigates or exits the cockpit. Press **[o]** or click **Open in Herdr [o]** to open the selected workspace or pane.
+- Selecting a specific pane starts a **read-only** live output view; selecting a workspace does not select one of its panes. Selection never sends text, navigates, or exits the cockpit. Press **[o]** or click **Open in Herdr [o]** to navigate explicitly.
 - Within the current Herdr session the cockpit stays open; outside Herdr (or when switching sessions), the CLI attaches to that session after focusing the target. Run `herdm tui` to return.
 - Offline sessions are marked explicitly; retained snapshots are marked **stale** and
   cannot be navigated to. Demo mode is labeled and never controls live panes.
@@ -174,6 +174,28 @@ current socket, the default session, and named local sessions under
 
  [n] New Master  [e] New Ergo  [s/c] Settings  [o] Open in Herdr  [q] Quit
 ```
+
+**Live output and replies.** Selecting a pane opens a panel beside the browser at
+110 columns or wider, or below it on narrower terminals. Scroll up to pause the
+visible bounded snapshot; **Follow** resumes at the newest output. The header
+identifies the selected session, workspace, tab, and pane; **Target** opens the
+complete socket and lease identity and status legend, with keyboard scrolling and
+Escape to close. Invisible control characters in identifiers are shown as escapes.
+A stale or unavailable target is labeled and cannot receive
+replies. Pane changes never substitute another pane for the chosen target.
+
+Choose **Reply**, enter ordinary text (Enter inserts a line), then choose **Send**.
+The draft is pinned to the exact socket/workspace/pane and its observed lease, not
+the current cursor. If the target changes or disappears, the original draft remains
+visible and cannot be sent elsewhere; **Cancel** discards it. The cockpit uses one
+`agent.prompt` attempt and does not infer an approval. **Accepted** means the RPC was
+accepted, not that the agent answered; **rejected** leaves the draft in place.
+**Uncertain** means delivery may have occurred: inspect the original pane before
+manually deciding whether to retry. Cancellation cannot retract text already sent.
+Native permission, approval, or key dialogs may require **Open in Herdr** and are
+never automatically approved. Server-side close/reuse can still race validation:
+there is no atomic conditional prompt RPC, and a missing terminal ID cannot prove a
+pane incarnation.
 
 ---
 

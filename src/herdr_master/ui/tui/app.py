@@ -1,12 +1,14 @@
 """Textual Terminal User Interface (TUI) Application for Herdr-Master."""
 
 import asyncio
+from dataclasses import replace
 from pathlib import Path
-from typing import Optional
+from typing import Callable, Optional
 
 from textual.app import App, ComposeResult
 from textual.binding import Binding
 from textual.containers import Horizontal
+from textual.widgets import TextArea
 
 from herdr_master.core.context import resolve_herdr_context
 from herdr_master.core.models import MasterSession, PipelinePhase, PipelineRun
@@ -20,6 +22,14 @@ from herdr_master.pipeline.launcher import (
     resolve_launch_context,
 )
 from herdr_master.pipeline.squad import resolve_squad
+from herdr_master.ui.tui.live_pane import (
+    LivePaneController,
+    LiveTargetError,
+    PaneFrame,
+    ReplyRequest,
+    ReplyResult,
+    resolve_live_pane,
+)
 from herdr_master.ui.tui.messages import TargetSelected
 from herdr_master.ui.tui.modals.config_drawer import ConfigDrawer
 from herdr_master.ui.tui.modals.launch_ergo import ErgoLaunchParams, LaunchErgoModal
@@ -32,10 +42,12 @@ from herdr_master.ui.tui.state import AppState
 from herdr_master.ui.tui.widgets.deck import CenterDeck
 from herdr_master.ui.tui.widgets.footer import ActionFooter
 from herdr_master.ui.tui.widgets.header_bar import HeaderBar
+from herdr_master.ui.tui.widgets.live_output import LivePaneView
 from herdr_master.ui.tui.widgets.quick_launch import QuickLaunchBar
 from herdr_master.ui.tui.widgets.workspaces import (
     WorkspaceBrowser,
     WorkspaceTarget,
+    safe_display,
     workspace_agents,
 )
 
@@ -78,6 +90,9 @@ class HerdrMasterApp(App):
         session: Optional[str] = None,
         demo: bool = False,
         project_path: Optional[Path] = None,
+        *,
+        live_controller: Optional[LivePaneController] = None,
+        live_client_factory: Optional[Callable[[str, Path], HerdrClient]] = None,
         **kwargs,
     ) -> None:
         super().__init__(**kwargs)
@@ -105,6 +120,129 @@ class HerdrMasterApp(App):
         self._header = HeaderBar(self.app_state)
         self._deck = CenterDeck(self.app_state)
         self._footer = ActionFooter()
+        self._client_factory = live_client_factory or self._default_live_client_factory
+        self._live_controller: Optional[LivePaneController] = live_controller
+        self._live_desired_target: Optional[WorkspaceTarget] = None
+        self._live_closed = False
+        self._live_revision = 0
+        self._live_ready = True
+        self._live_transition = False
+        self._live_inventory_blocked = False
+        self._live_buffered_frame: Optional[PaneFrame] = None
+        self._last_live_frame: Optional[PaneFrame] = None
+        self._live_lock = asyncio.Lock()
+        self._live_submit_task: Optional[asyncio.Task] = None
+        self._live_submit_pending = False
+        if self._live_controller is None:
+            self._live_controller = LivePaneController(
+                publish=self._on_live_pane_frame,
+                client_factory=self._client_factory,
+            )
+
+    def _default_live_client_factory(self, session_name: str, socket_path: Path) -> HerdrClient:
+        return HerdrClient(session=session_name, socket_path=Path(socket_path))
+
+    @staticmethod
+    def _live_key(target: Optional[WorkspaceTarget]) -> Optional[tuple[str, str, str]]:
+        if target is None or target.pane_id is None:
+            return None
+        return (str(target.socket_path), target.workspace_id, target.pane_id)
+
+    def _on_live_pane_frame(self, frame: PaneFrame) -> None:
+        if self._live_closed:
+            return
+        previous = self._last_live_frame
+        if (
+            previous is not None
+            and previous.lease is not None
+            and self._live_key(frame.target) == previous.lease.key
+            and frame.lease != previous.lease
+        ):
+            # Revocation must interrupt a held preflight immediately; after
+            # dispatch the controller classifies cancellation as uncertain.
+            self._cancel_live_submit()
+        if frame.lease is not None and frame.reply_eligible is False:
+            # can_reply is already false for any in-flight send; this separate
+            # eligibility signal distinguishes a real readiness/agent loss.
+            self._cancel_live_submit()
+        if self._live_transition:
+            self._live_buffered_frame = frame
+            return
+        if (
+            not self._live_ready
+            or self._live_inventory_blocked
+            or self._live_key(frame.target) != self._live_key(self._live_desired_target)
+        ):
+            return
+        self._last_live_frame = frame
+        self._deck.update_live_frame(frame)
+
+    def _cancel_live_submit(self) -> None:
+        task = self._live_submit_task
+        if task is not None and not task.done() and task is not asyncio.current_task():
+            task.cancel()
+
+    def _guard_live_inventory(self) -> None:
+        """Invalidate a draft/send before a slow controller reconciliation can yield."""
+        frame = self._last_live_frame
+        target = self._live_desired_target
+        if not frame or not frame.lease or self._live_key(target) != frame.lease.key:
+            return
+        try:
+            resolved = resolve_live_pane(target, self.app_state.live_sessions)
+            incarnation_changed = (
+                frame.lease.terminal_id is not None
+                and frame.lease.terminal_id != resolved.terminal_id
+            )
+            if incarnation_changed:
+                raise LiveTargetError("Terminal incarnation changed")
+        except LiveTargetError as exc:
+            self._cancel_live_submit()
+            self._live_inventory_blocked = True
+            unavailable = replace(
+                frame, lease=None, phase="stale", error=str(exc), can_reply=False
+            )
+            self._last_live_frame = unavailable
+            self._deck.update_live_frame(unavailable)
+            return
+        if not resolved.is_agent or resolved.interactive_ready is False:
+            self._cancel_live_submit()
+            self._live_inventory_blocked = True
+            self._last_live_frame = replace(frame, can_reply=False)
+            self._deck.update_live_frame(self._last_live_frame)
+
+    async def _run_live_update(
+        self, revision: int, target: Optional[WorkspaceTarget], *, select: bool
+    ) -> None:
+        if self._live_controller is None or self._live_closed:
+            return
+        async with self._live_lock:
+            if (
+                self._live_closed
+                or revision != self._live_revision
+                or (not select and not self._live_ready)
+            ):
+                return
+            self._live_transition = True
+            self._live_buffered_frame = None
+            try:
+                if select:
+                    await self._live_controller.select(
+                        target, self.app_state.live_sessions, enabled=not self.demo
+                    )
+                else:
+                    await self._live_controller.reconcile(
+                        self.app_state.live_sessions, enabled=not self.demo
+                    )
+            finally:
+                self._live_transition = False
+                buffered = self._live_buffered_frame
+                self._live_buffered_frame = None
+                if not self._live_closed and revision == self._live_revision:
+                    self._live_ready = True
+                    self._live_inventory_blocked = False
+                    if buffered is not None:
+                        self._on_live_pane_frame(buffered)
 
     def _load_live_state(self) -> AppState:
         """Resolve the project squad. Invalid settings must not become a silent default."""
@@ -192,12 +330,133 @@ class HerdrMasterApp(App):
                     self.app_state.workspace_id = workspace.workspace_id
                     self.app_state.workspace_label = workspace.label or workspace.workspace_id
             self._update_all_widgets()
+            await self._reconcile_live_inventory()
         finally:
             self._inventory_pending = False
 
+    async def _reconcile_live_inventory(self) -> None:
+        self._guard_live_inventory()
+        if not self._live_ready:
+            # A selection can be waiting for old watcher teardown with an older
+            # inventory. Supersede it and resolve the desired target again before
+            # allowing its frames or a reply to become current.
+            self._live_revision += 1
+            await self._run_live_update(
+                self._live_revision, self._live_desired_target, select=True
+            )
+        else:
+            await self._run_live_update(
+                self._live_revision, self._live_desired_target, select=False
+            )
+
+    async def _close_live_controller(self) -> None:
+        """Fence pending selections before closing, including during slow teardown."""
+        self._live_closed = True
+        self._live_revision += 1
+        self._live_ready = False
+        task = self._live_submit_task
+        self._cancel_live_submit()
+        if task is not None and task is not asyncio.current_task():
+            try:
+                await task
+            except asyncio.CancelledError:
+                pass
+        async with self._live_lock:
+            if self._live_controller is not None:
+                await self._live_controller.close()
+
+    async def on_unmount(self) -> None:
+        await self._close_live_controller()
+
+    async def action_quit(self) -> None:
+        if len(self.screen_stack) > 1 or isinstance(self.focused, TextArea):
+            return
+        await self._close_live_controller()
+        self.exit()
+
+    def on_workspace_browser_selection_changed(
+        self, event: WorkspaceBrowser.SelectionChanged
+    ) -> None:
+        if self._live_closed:
+            return
+        target = event.target
+        if self._live_key(target) != self._live_key(self._live_desired_target):
+            self._live_revision += 1
+            self._live_ready = False
+            self._live_inventory_blocked = False
+            self._cancel_live_submit()
+            # Invalidate the old lease and output synchronously, before watcher teardown.
+            frame = PaneFrame(
+                lease=None,
+                target=target,
+                phase="loading" if self._live_key(target) else "empty",
+                agent_status="unknown",
+                text_ansi="",
+                error=None,
+                can_reply=False,
+            )
+            self._last_live_frame = frame
+            self._deck.update_live_frame(frame)
+        self._live_desired_target = target
+        if self._live_controller is not None:
+            self.run_worker(
+                self._run_live_update(self._live_revision, target, select=True),
+                group="live-pane-select",
+            )
+
+    def on_live_pane_view_reply_requested(
+        self, event: LivePaneView.ReplyRequested
+    ) -> None:
+        if self._live_submit_pending:
+            return
+        self._live_submit_pending = True
+        self.run_worker(
+            self._submit_live_pane_reply(event.request),
+            group="live-pane-submit",
+        )
+
+    async def _submit_live_pane_reply(self, request: ReplyRequest) -> None:
+        self._live_submit_task = asyncio.current_task()
+        try:
+            if (
+                self._live_controller is None
+                or self._live_closed
+                or not self._live_ready
+                or self._live_inventory_blocked
+                or self._live_key(self._live_desired_target) != request.lease.key
+                or self._last_live_frame is None
+                or self._last_live_frame.lease != request.lease
+                or not self._last_live_frame.can_reply
+            ):
+                result = ReplyResult(request.lease, "rejected", "Target changed before dispatch")
+            else:
+                try:
+                    result = await self._live_controller.submit(request)
+                except asyncio.CancelledError:
+                    # The controller converts cancellation after dispatch to uncertain;
+                    # only cancellation during preflight reaches this handler.
+                    result = ReplyResult(
+                        request.lease, "rejected", "Target changed before dispatch"
+                    )
+            self._deck.apply_reply_result(result)
+            socket, workspace, pane = request.lease.key
+            self.notify(
+                f"{result.outcome.capitalize()}: {safe_display(result.message)}\n"
+                f"Socket: {safe_display(socket)} · workspace: {safe_display(workspace)}"
+                f" · pane: {safe_display(pane)}",
+                severity="information" if result.outcome == "accepted" else "warning",
+                timeout=10,
+                markup=False,
+            )
+            if result.outcome == "accepted" and not self._live_closed:
+                self._schedule_inventory_refresh()
+        finally:
+            self._live_submit_task = None
+            self._live_submit_pending = False
+
     def action_open_in_herdr(self) -> None:
         """Open selected workspace or pane in Herdr."""
-        if len(self.screen_stack) > 1:
+        if len(self.screen_stack) > 1 or isinstance(self.focused, TextArea):
             return
         if self.demo:
             self.notify("Demo mode: live terminal navigation is disabled.", severity="warning")
@@ -338,6 +597,7 @@ class HerdrMasterApp(App):
                 await client.focus_pane(target_pane.pane_id)
 
             if not same_socket:
+                await self._close_live_controller()
                 self.exit(result={"action": "attach", "session": inventory.session_name})
             else:
                 if target.pane_id is None:
@@ -419,6 +679,8 @@ class HerdrMasterApp(App):
 
     def action_new_master(self) -> None:
         """Open the Launch Herdr Master dialog."""
+        if len(self.screen_stack) > 1 or isinstance(self.focused, TextArea):
+            return
 
         async def _on_master_launch(params: MasterLaunchParams) -> None:
             try:
@@ -515,10 +777,14 @@ class HerdrMasterApp(App):
 
     def action_new_ergo(self) -> None:
         """Open the 2-column Squad Settings & Ergo Pipeline Launcher."""
+        if len(self.screen_stack) > 1 or isinstance(self.focused, TextArea):
+            return
         self.action_open_settings()
 
     def action_open_settings(self) -> None:
         """Open the 2-column Squad Settings & Ergo Pipeline Launcher dialog."""
+        if len(self.screen_stack) > 1 or isinstance(self.focused, TextArea):
+            return
 
         async def _on_ergo_launch(params: ErgoLaunchParams) -> None:
             try:

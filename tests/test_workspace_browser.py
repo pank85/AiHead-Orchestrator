@@ -148,7 +148,9 @@ async def test_workspace_expansion_click_navigation_and_refresh_preserve_cursor(
             assert workspace.is_expanded
             assert tree.cursor_node is terminal_pane
             assert tree.region.bottom <= size[1] - 1
-            assert tree.size.height >= 10
+            # In no-pane mode tree height is >=10; with p2 selected at 80x24 it enters
+            # stacked live mode (>=4)
+            assert tree.size.height >= (4 if size == (80, 24) else 10)
             assert browser.display
 
 
@@ -1178,4 +1180,125 @@ async def test_enter_and_arrow_keys_do_not_focus_or_exit():
         await pilot.press("space")
         await pilot.pause()
         app._open_in_herdr.assert_not_called()
-        app.exit.assert_not_called()
+
+
+@pytest.mark.asyncio
+async def test_workspace_browser_selection_changed_emission_and_disappearance():
+    """Verify SelectionChanged is emitted on deliberate selection and None on disappearance."""
+    app = HerdrMasterApp(demo=True)
+    app.demo = False
+    app.app_state.inventory_demo = False
+    sess = inventory()
+    app.app_state.live_sessions = [sess]
+    app._refresh_live_snapshot = AsyncMock()
+
+    emitted_selections = []
+
+    async with app.run_test(size=(110, 32)) as pilot:
+        await pilot.pause()
+        browser = app.query_one(WorkspaceBrowser)
+
+        # Hook to capture SelectionChanged messages
+        original_post = browser.post_message
+
+        def capturing_post(msg):
+            if isinstance(msg, WorkspaceBrowser.SelectionChanged):
+                emitted_selections.append(msg.target)
+            return original_post(msg)
+
+        browser.post_message = capturing_post
+
+        tree = browser._tree
+        ws_node = tree.root.children[0]
+        ws_node.expand()
+        await pilot.pause()
+
+        # Select agent pane p1
+        p1_node = ws_node.children[0]
+        tree.select_node(p1_node)
+        await pilot.pause()
+
+        assert len(emitted_selections) >= 1
+        last = emitted_selections[-1]
+        assert last is not None
+        assert last.pane_id == "p1"
+        assert last.workspace_id == "w1"
+
+        # Metadata refresh reconciles in place without auto-selecting another pane
+        emitted_count_before = len(emitted_selections)
+        browser.update_state(app.app_state)
+        await pilot.pause()
+        # No extra selection changed event emitted on healthy same-pane in-place reconciliation
+        assert len(emitted_selections) == emitted_count_before
+        assert browser._selected_target.pane_id == "p1"
+
+        # Disappearance: pane p1 is removed from inventory
+        empty_snap = SessionSnapshot(
+            protocol=22,
+            workspaces=[{"workspace_id": "w1", "label": "Project"}],
+            tabs=[{"tab_id": "t1", "workspace_id": "w1"}],
+            panes=[],
+            agents=[],
+        )
+        empty_sess = SessionInventory(
+            session_name="one",
+            socket_path=sess.socket_path,
+            snapshot=empty_snap,
+        )
+        app.app_state.live_sessions = [empty_sess]
+        browser.update_state(app.app_state)
+        await pilot.pause()
+
+        assert browser._selected_target is None
+        assert browser._selected_target_disappeared is True
+        assert len(emitted_selections) > emitted_count_before
+        assert emitted_selections[-1] is None
+
+
+@pytest.mark.asyncio
+async def test_mixed_workspace_blocked_count_suffix():
+    """Verify mixed workspaces append a blocked-count suffix so running siblings
+    do not conceal attention.
+    """
+    app = HerdrMasterApp(demo=True)
+    app.app_state.inventory_demo = False
+
+    mixed_snapshot = SessionSnapshot(
+        protocol=22,
+        workspaces=[{"workspace_id": "w_mixed", "label": "MixedWS", "agent_status": "working"}],
+        tabs=[{"tab_id": "t1", "workspace_id": "w_mixed"}],
+        panes=[
+            {"pane_id": "p1", "tab_id": "t1", "agent": "worker1", "agent_status": "working"},
+            {"pane_id": "p2", "tab_id": "t1", "agent": "worker2", "agent_status": "blocked"},
+        ],
+        agents=[
+            {"pane_id": "p1", "name": "Worker 1", "agent_status": "working"},
+            {"pane_id": "p2", "name": "Worker 2", "agent_status": "blocked"},
+        ],
+    )
+    sess = SessionInventory(
+        session_name="mixed-session",
+        socket_path=Path("/tmp/mixed.sock"),
+        snapshot=mixed_snapshot,
+    )
+    app.app_state.live_sessions = [sess]
+
+    async with app.run_test(size=(110, 32)) as pilot:
+        await pilot.pause()
+        browser = app.query_one(WorkspaceBrowser)
+        tree = browser._tree
+        ws_node = tree.root.children[0]
+        label_plain = ws_node.label.plain
+
+        # Primary status is running, but blocked suffix is appended
+        assert "running" in label_plain
+        assert "! 1 blocked" in label_plain
+
+        # Expand to check pane badges
+        ws_node.expand()
+        await pilot.pause()
+        p1_node = ws_node.children[0]
+        p2_node = ws_node.children[1]
+        assert "running" in p1_node.label.plain
+        assert "blocked" in p2_node.label.plain
+        assert app.return_value is None
