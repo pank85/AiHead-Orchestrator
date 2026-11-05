@@ -59,6 +59,25 @@ class NDJSONBuffer:
         return bytes(self._buffer)
 
 
+def validate_rpc_response(response: Dict[str, Any], request_id: str) -> None:
+    """Require a matching Protocol 22 response envelope, or raise an error."""
+    if response.get("id") != request_id:
+        raise HerdrConnectionError("Invalid RPC response: mismatched request id")
+    err = response.get("error")
+    if err is not None:
+        if (
+            not isinstance(err, dict)
+            or not isinstance(err.get("code"), str)
+            or not err["code"]
+            or not isinstance(err.get("message"), str)
+            or response.get("result") is not None
+        ):
+            raise HerdrConnectionError("Invalid RPC response: malformed error envelope")
+        raise HerdrRPCError(code=err["code"], message=err["message"])
+    if "result" not in response:
+        raise HerdrConnectionError("Invalid RPC response: missing result or error")
+
+
 async def send_rpc(
     socket_path: Union[str, Path],
     method: str,
@@ -112,16 +131,8 @@ async def send_rpc(
         if response is None:
             raise HerdrConnectionError("Connection closed before response received")
 
-        if "error" in response and response["error"] is not None:
-            err = response["error"]
-            if isinstance(err, dict):
-                code = err.get("code", "UNKNOWN_ERROR")
-                message = err.get("message", str(err))
-            else:
-                code = "UNKNOWN_ERROR"
-                message = str(err)
-            raise HerdrRPCError(code=code, message=message)
-
+        # Neither success nor rejection is evidence unless it answers this request.
+        validate_rpc_response(response, request_id)
         return response
 
     except asyncio.TimeoutError as exc:

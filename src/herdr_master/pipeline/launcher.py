@@ -1,14 +1,34 @@
 """Orchestration launcher for Herdr Master and Ergo Pipeline sessions."""
 
+from __future__ import annotations
+
 import asyncio
 import json
 import os
+from dataclasses import dataclass
 from pathlib import Path
 from typing import Any, Dict, List, Optional
 
-from herdr_master.core.context import resolve_herdr_context
-from herdr_master.core.models import HarnessKind, Squad
+from herdr_master.core.catalog import (
+    CatalogError,
+    build_agent_args,
+    default_squad_data,
+    describe_herdr_agent,
+    get_harness,
+    normalize_effort,
+)
+from herdr_master.core.context import HerdrContext, resolve_herdr_context
+from herdr_master.core.models import EffortLevel, HarnessBinding, HarnessKind, Squad
 from herdr_master.herdr.client import HerdrClient
+from herdr_master.pipeline.bootstrap import build_bootstrap_prompt
+from herdr_master.pipeline.squad import format_allowed_coder_models
+
+# Herdr agent names are RPC identifiers, not display labels: [a-z][a-z0-9_-]{0,31}.
+ORCHESTRATOR_NAME = "ergo-orchestrator"
+
+
+class LaunchContextError(RuntimeError):
+    """Explicit session cannot adopt the inherited workspace."""
 
 
 def ensure_agy_trusted(cwd: str) -> None:
@@ -17,17 +37,17 @@ def ensure_agy_trusted(cwd: str) -> None:
     if not settings_path.exists():
         return
     try:
-        with open(settings_path, "r", encoding="utf-8") as f:
-            data = json.load(f)
+        with open(settings_path, "r", encoding="utf-8") as handle:
+            data = json.load(handle)
         trusted = data.get("trustedWorkspaces", [])
         resolved_cwd = str(Path(cwd).resolve())
         if resolved_cwd not in trusted:
             trusted.append(resolved_cwd)
             data["trustedWorkspaces"] = trusted
-            with open(settings_path, "w", encoding="utf-8") as f:
-                json.dump(data, f, indent=2)
+            with open(settings_path, "w", encoding="utf-8") as handle:
+                json.dump(data, handle, indent=2)
     except Exception:
-        pass
+        return
 
 
 async def ensure_herdr_server(socket_path: Path, session_name: str = "default") -> None:
@@ -43,7 +63,6 @@ async def ensure_herdr_server(socket_path: Path, session_name: str = "default") 
             except Exception:
                 pass
 
-    # Start headless herdr server (named session or default)
     cmd = (
         ["herdr", "server"]
         if session_name == "default"
@@ -83,8 +102,8 @@ async def _auto_confirm_trust(
             pane_out = await client.read_pane(pane_id)
             text = pane_out.get("text", "").lower()
             if any(
-                k in text
-                for k in ["trust", "permission", "confirm", "proceed", "[y/n]", "allow"]
+                key in text
+                for key in ["trust", "permission", "confirm", "proceed", "[y/n]", "allow"]
             ):
                 await client.send_keys(pane_id, "enter")
                 await asyncio.sleep(0.5)
@@ -92,163 +111,429 @@ async def _auto_confirm_trust(
             pass
 
 
-def _build_agent_args(harness: str, model: str) -> List[str]:
-    """Construct canonical harness arguments."""
-    if harness == "agy":
-        return ["--model", model, "--effort", "high", "--dangerously-skip-permissions"]
-    elif harness == "pi":
-        if "/" in model:
-            prov, mod = model.split("/", 1)
-            return ["--provider", prov, "--model", mod, "--thinking", "high"]
-        return ["--model", model, "--thinking", "high"]
-    elif harness == "claude":
-        return ["--model", model, "--dangerously-skip-permissions"]
-    elif harness == "opencode":
-        return ["--model", model]
-    return ["--model", model]
+def resolve_launch_context(session: str | None = None) -> HerdrContext:
+    """Adopt the inherited session, or fail before a different server is used.
 
-
-async def launch_master(
-    client: HerdrClient,
-    name: str = "master-coordinator",
-    harness: HarnessKind = HarnessKind.AGY,
-    model: str = "gemini-3.8-flash-high",
-    initial_task: Optional[str] = None,
-    cwd: Optional[str] = None,
-    session: Optional[str] = None,
-) -> Dict[str, Any]:
-    """Launch a Herdr Master session.
-
-    Rules:
-    1. Outside Herdr:
-       - Uses an isolated dedicated session so other Herdr workspaces are hidden.
-       - Ensures Herdr daemon is active for this session.
-       - Creates a workspace and runs master in its root pane.
-    2. Inside Herdr:
-       - If workspace has no other tabs (tab_count <= 1), works in this workspace.
-       - Creates a focused tab for the master and runs it.
-    3. Guarantees:
-       - Auto-focuses the workspace and tab so the user sees the active tabs.
-       - Registers cwd in agy trustedWorkspaces to avoid blocking.
-       - Auto-handles interactive trust prompts so the agent never hangs.
-       - Sends `/herdr-master` prompt as soon as the agent is ready.
+    Omitted ``session`` preserves the inherited socket and session name. An
+    explicit different session inside an inherited workspace is refused so a
+    workspace id is not reused on another server. This wraps
+    :func:`resolve_herdr_context`; it does not reimplement environment lookup.
     """
-    ctx = resolve_herdr_context(explicit_session=client.session or session)
-    target_cwd = cwd or os.getcwd()
-
-    target_ws_id: Optional[str] = None
-    target_pane_id: Optional[str] = None
-    target_tab_id: Optional[str] = None
-    active_client = client
-
-    if not ctx.is_inside_herdr:
-        # Isolated dedicated session outside Herdr so unrelated workspaces are hidden
-        session_name = (
-            session
-            if session and session != "default"
-            else f"master-{name}"
+    inherited = resolve_herdr_context(explicit_session=None)
+    selected = session.strip() if isinstance(session, str) else None
+    if not selected:
+        return inherited
+    if inherited.is_inside_herdr and selected != inherited.session_name:
+        workspace = inherited.workspace_id or "(none)"
+        raise LaunchContextError(
+            f"Refusing session '{selected}' inside inherited workspace {workspace} "
+            f"on session '{inherited.session_name}' (socket {inherited.socket_path}). "
+            "Selecting a different session would reuse this workspace id on another "
+            "server. Omit --session to adopt the inherited session and socket."
         )
-        target_socket = Path.home() / ".config" / "herdr" / "sessions" / session_name / "herdr.sock"
-        await ensure_herdr_server(target_socket, session_name=session_name)
-        active_client = HerdrClient(session=session_name, socket_path=target_socket)
+    if inherited.is_inside_herdr and selected == inherited.session_name:
+        return inherited
+    return resolve_herdr_context(explicit_session=selected)
 
-        snap = await active_client.get_snapshot()
-        if not snap.workspaces:
-            ws_res = await active_client.create_workspace(
-                label=name,
-                focus=True,
-                cwd=target_cwd,
-            )
-            target_ws_id = ws_res.get("workspace", {}).get("workspace_id")
-            target_pane_id = ws_res.get("root_pane", {}).get("pane_id")
-            target_tab_id = (
-                ws_res.get("tab", {}).get("tab_id")
-                or ws_res.get("root_pane", {}).get("tab_id")
-            )
-        else:
-            target_ws_id = snap.workspaces[0].workspace_id
-            tab_res = await active_client.create_tab(
-                workspace_id=target_ws_id,
-                label=name,
-                focus=True,
-                cwd=target_cwd,
-            )
-            target_pane_id = tab_res.get("root_pane", {}).get("pane_id") or tab_res.get("pane_id")
-            target_tab_id = tab_res.get("tab", {}).get("tab_id")
-    else:
-        session_name = ctx.session_name
-        target_ws_id = ctx.workspace_id
-        snap = await active_client.get_snapshot()
-        existing_tabs = [
-            t.tab_id
-            for t in snap.tabs
-            if t.workspace_id == target_ws_id
-        ]
-        tab_res = await active_client.create_tab(
-            workspace_id=ctx.workspace_id,
-            label=name,
-            focus=True,
-            cwd=target_cwd,
+
+def _effort_text(effort: EffortLevel | str | None) -> str | None:
+    if effort is None:
+        return None
+    if isinstance(effort, EffortLevel):
+        return effort.value
+    return str(effort)
+
+
+def _kind_name(harness: HarnessKind | str | None) -> str | None:
+    if harness is None:
+        return None
+    if isinstance(harness, HarnessKind):
+        return harness.value
+    text = str(harness).strip()
+    return text or None
+
+
+def resolve_coordinator_binding(
+    harness: HarnessKind | str | None = None,
+    model: str | None = None,
+    effort: EffortLevel | str | None = None,
+) -> tuple[HarnessKind, str, EffortLevel | None]:
+    """Resolve a master coordinator from the catalog Scout unless overridden.
+
+    A different harness has no product binding and requires an explicit model.
+    """
+    product = default_squad_data()["scout"]
+    product_kind = str(product["kind"])
+    product_model = str(product["model"])
+    product_effort = str(product["effort"])
+    kind_name = _kind_name(harness)
+    model_text = model.strip() if isinstance(model, str) else None
+    if model is not None and not model_text:
+        raise CatalogError("--model is empty. Refusing to invent a model.")
+    if kind_name is None and model_text is None and effort is None:
+        return HarnessKind(product_kind), product_model, EffortLevel(product_effort)
+
+    spec = get_harness(kind_name or product_kind)
+    if not spec.supports_herdr:
+        raise CatalogError(
+            f"Harness '{spec.kind}' cannot launch a Herdr coordinator. "
+            "Choose a harness with Herdr support and pass --model."
         )
-        target_pane_id = tab_res.get("root_pane", {}).get("pane_id") or tab_res.get("pane_id")
-        target_tab_id = tab_res.get("tab", {}).get("tab_id")
+    if model_text is None:
+        if spec.kind != product_kind:
+            raise CatalogError(
+                f"Harness {spec.kind} has no product coordinator binding. "
+                "Pass an explicit --model. Refusing to invent a per-harness default."
+            )
+        model_text = product_model
+    effort_text = normalize_effort(_effort_text(effort))
+    if effort_text is None and spec.kind == product_kind and model_text == product_model:
+        effort_text = product_effort
+    effort_level = EffortLevel(effort_text) if effort_text else None
+    return HarnessKind(spec.kind), model_text, effort_level
 
-    if not target_pane_id:
-        raise RuntimeError(f"Could not allocate pane in workspace {target_ws_id}")
 
-    harness_str = harness.value if isinstance(harness, HarnessKind) else str(harness)
-    if harness_str == "agy":
-        ensure_agy_trusted(target_cwd)
+def _build_agent_args(
+    harness: str,
+    model: str,
+    effort: EffortLevel | None = None,
+) -> list[str]:
+    """Catalog argv with ``--kind <kind> --`` prepended.
 
-    args = _build_agent_args(harness_str, model)
+    The catalog returns only the post-``--`` tail. Callers that start an agent
+    pass this full list as ``args`` and the same kind as ``kind``.
+    """
+    kind = get_harness(harness).kind
+    effort_text = effort.value if isinstance(effort, EffortLevel) else effort
+    tail = build_agent_args(kind, model, effort_text)
+    return ["--kind", kind, "--", *tail]
 
-    stop_event = asyncio.Event()
-    watcher_task = asyncio.create_task(
-        _auto_confirm_trust(active_client, target_pane_id, stop_event)
+
+def _host_launch(kind: str, model: str, effort: EffortLevel | None, role: str) -> dict[str, Any]:
+    effort_text = effort.value if isinstance(effort, EffortLevel) else effort
+    descriptor = describe_herdr_agent(kind, model, effort_text, role)
+    descriptor["launch_args"] = ["--kind", descriptor["kind"], "--", *descriptor["argv"]]
+    return descriptor
+
+
+def _binding_payload(binding: HarnessBinding) -> dict[str, Any]:
+    return {
+        "kind": binding.kind.value,
+        "model": binding.model,
+        "effort": binding.effort.value if binding.effort else None,
+        "label": binding.label,
+        "description": binding.description,
+        "enabled": binding.enabled,
+        "order": binding.order,
+    }
+
+
+def _squad_payload(squad: Squad) -> dict[str, Any]:
+    return {
+        "scout": _binding_payload(squad.scout),
+        "architect": _binding_payload(squad.architect),
+        "reviewer": _binding_payload(squad.reviewer),
+        "worker_pool": [_binding_payload(worker) for worker in squad.worker_pool],
+    }
+
+
+def _with_prompt_prefix(prompt: str, descriptor: dict[str, Any]) -> str:
+    prefix = descriptor.get("prompt_prefix")
+    if not prefix:
+        return prompt
+    return f"{prefix}\n\n{prompt}"
+
+
+def _isolated_session_name(session: str | None, fallback: str) -> str:
+    if session and session != "default":
+        return session
+    return fallback
+
+
+def _session_socket(session_name: str) -> Path:
+    root = Path.home() / ".config" / "herdr"
+    if session_name == "default":
+        return root / "herdr.sock"
+    return root / "sessions" / session_name / "herdr.sock"
+
+
+def _adopt_client(client: HerdrClient, ctx: HerdrContext) -> HerdrClient:
+    sock = getattr(client, "socket_path", None)
+    if isinstance(sock, Path) and sock != Path(ctx.socket_path):
+        return HerdrClient(session=ctx.session_name, socket_path=ctx.socket_path)
+    return client
+
+
+@dataclass
+class _Allocated:
+    client: HerdrClient
+    session_name: str
+    socket_path: Path
+    workspace_id: Optional[str]
+    pane_id: Optional[str]
+    tab_id: Optional[str]
+    owns_workspace: bool
+
+
+def _pane_id(payload: dict[str, Any]) -> Optional[str]:
+    root = payload.get("root_pane") if isinstance(payload.get("root_pane"), dict) else {}
+    return root.get("pane_id") or payload.get("pane_id")
+
+
+def _tab_id(payload: dict[str, Any]) -> Optional[str]:
+    tab = payload.get("tab") if isinstance(payload.get("tab"), dict) else {}
+    root = payload.get("root_pane") if isinstance(payload.get("root_pane"), dict) else {}
+    return tab.get("tab_id") or root.get("tab_id")
+
+
+async def _create_owned_workspace(
+    active: HerdrClient,
+    *,
+    session_name: str,
+    socket_path: Path,
+    workspace_label: str,
+    cwd: str,
+    focus: bool,
+) -> _Allocated:
+    created = await active.create_workspace(
+        label=workspace_label,
+        focus=focus,
+        cwd=cwd,
+    )
+    return _Allocated(
+        client=active,
+        session_name=session_name,
+        socket_path=socket_path,
+        workspace_id=(created.get("workspace") or {}).get("workspace_id"),
+        pane_id=_pane_id(created),
+        tab_id=_tab_id(created),
+        owns_workspace=True,
     )
 
+
+async def _allocate_launch_target(
+    client: HerdrClient,
+    ctx: HerdrContext,
+    *,
+    session: str | None,
+    isolated_name: str,
+    tab_label: str,
+    workspace_label: str,
+    cwd: str,
+    fresh_workspace: bool = False,
+    focus: bool = True,
+) -> _Allocated:
+    """Adopt an inside workspace, or provision an isolated outside session.
+
+    Inside launches never close existing tabs. ``owns_workspace`` is true only
+    for a workspace this call created. Reusing ``snap.workspaces[0]`` does not
+    mark that workspace owned. ``fresh_workspace`` creates a new workspace in
+    the current session and leaves the caller's workspace untouched. Failures
+    propagate to the caller.
+    """
+    if fresh_workspace and ctx.is_inside_herdr:
+        active = _adopt_client(client, ctx)
+        return await _create_owned_workspace(
+            active,
+            session_name=str(ctx.session_name),
+            socket_path=Path(ctx.socket_path),
+            workspace_label=workspace_label,
+            cwd=cwd,
+            focus=focus,
+        )
+
+    if ctx.is_inside_herdr:
+        active = _adopt_client(client, ctx)
+        tab_res = await active.create_tab(
+            workspace_id=ctx.workspace_id,
+            label=tab_label,
+            focus=focus,
+            cwd=cwd,
+        )
+        return _Allocated(
+            client=active,
+            session_name=str(ctx.session_name),
+            socket_path=Path(ctx.socket_path),
+            workspace_id=ctx.workspace_id,
+            pane_id=_pane_id(tab_res),
+            tab_id=_tab_id(tab_res),
+            owns_workspace=False,
+        )
+
+    session_name = _isolated_session_name(session, isolated_name)
+    socket_path = _session_socket(session_name)
+    await ensure_herdr_server(socket_path, session_name=session_name)
+    active = HerdrClient(session=session_name, socket_path=socket_path)
+    snap = await active.get_snapshot()
+    if fresh_workspace or not snap.workspaces:
+        return await _create_owned_workspace(
+            active,
+            session_name=session_name,
+            socket_path=socket_path,
+            workspace_label=workspace_label,
+            cwd=cwd,
+            focus=focus,
+        )
+    workspace_id = snap.workspaces[0].workspace_id
+    tab_res = await active.create_tab(
+        workspace_id=workspace_id,
+        label=tab_label,
+        focus=focus,
+        cwd=cwd,
+    )
+    return _Allocated(
+        client=active,
+        session_name=session_name,
+        socket_path=socket_path,
+        workspace_id=workspace_id,
+        pane_id=_pane_id(tab_res),
+        tab_id=_tab_id(tab_res),
+        owns_workspace=False,
+    )
+
+
+async def _start_and_prompt(
+    allocated: _Allocated,
+    *,
+    name: str,
+    kind: str,
+    args: List[str],
+    prompt: str,
+    cwd: str,
+    focus: bool = True,
+) -> None:
+    """Start one agent and deliver one prompt. Do not retry or delete resources.
+
+    ``args`` is the agent argv after ``--``. ``kind`` is a separate RPC field.
+    """
+    if kind == "agy":
+        ensure_agy_trusted(cwd)
+    stop_event = asyncio.Event()
+    watcher = asyncio.create_task(
+        _auto_confirm_trust(allocated.client, allocated.pane_id or "", stop_event)
+    )
     try:
-        await active_client.start_agent(
+        await allocated.client.start_agent(
             name=name,
-            kind=harness_str,
-            pane_id=target_pane_id,
+            kind=kind,
+            pane_id=allocated.pane_id or "",
             args=args,
             timeout_ms=30000,
         )
     finally:
         stop_event.set()
-        watcher_task.cancel()
-
-    # Prompt the master
-    prompt_cmd = f"/herdr-master {initial_task}" if initial_task else "/herdr-master"
-    await active_client.prompt_agent(target_pane_id, prompt_cmd)
-
-    # Focus the workspace and tab so the user sees the active tabs!
+        watcher.cancel()
+        try:
+            await watcher
+        except asyncio.CancelledError:
+            pass
+    await allocated.client.prompt_agent(allocated.pane_id or "", prompt)
+    if not focus:
+        return
     try:
-        if target_ws_id:
-            await active_client.focus_workspace(target_ws_id)
-        if target_tab_id:
-            await active_client.focus_tab(target_tab_id)
+        if allocated.workspace_id:
+            await allocated.client.focus_workspace(allocated.workspace_id)
+        if allocated.tab_id:
+            await allocated.client.focus_tab(allocated.tab_id)
     except Exception:
-        pass
+        return
 
-    # Once work has started, close the rest of the tabs of this workspace
-    if ctx.is_inside_herdr and existing_tabs:
-        for old_tab_id in existing_tabs:
-            if old_tab_id != target_tab_id:
-                try:
-                    await active_client.close_tab(old_tab_id)
-                except Exception:
-                    pass
 
+def _handoff_context(
+    *,
+    entrypoint: str,
+    intent: str | None,
+    allocated: _Allocated,
+    cwd: str,
+    squad: Squad | None = None,
+) -> dict[str, Any]:
+    context: dict[str, Any] = {
+        "entrypoint": entrypoint,
+        "intent": intent,
+        "origin_cwd": cwd,
+        "session": allocated.session_name,
+        "socket": str(allocated.socket_path),
+        "workspace_id": allocated.workspace_id,
+        "pane_id": allocated.pane_id,
+        "tab_id": allocated.tab_id,
+        "owns_workspace": allocated.owns_workspace,
+    }
+    if squad is not None:
+        context["squad"] = _squad_payload(squad)
+        context["allowed_coder_models"] = format_allowed_coder_models(squad)
+    return context
+
+
+async def launch_master(
+    client: HerdrClient,
+    name: str = "master-coordinator",
+    harness: HarnessKind | None = None,
+    model: str | None = None,
+    initial_task: str | None = None,
+    cwd: str | None = None,
+    session: str | None = None,
+    *,
+    effort: EffortLevel | None = None,
+    fresh_workspace: bool = False,
+    focus: bool = True,
+) -> Dict[str, Any]:
+    """Launch a Herdr Master coordinator with the canonical skill body.
+
+    No-override calls use the catalog Scout medium route. Inside Herdr, the
+    inherited workspace is adopted and existing tabs are left open unless
+    ``fresh_workspace`` is set. Outside Herdr, an isolated session is
+    provisioned and marked owned.
+    """
+    kind, model_slug, effort_level = resolve_coordinator_binding(harness, model, effort)
+    descriptor = _host_launch(kind.value, model_slug, effort_level, "master")
+    ctx = resolve_launch_context(session)
+    target_cwd = str(Path(cwd or os.getcwd()).resolve())
+    allocated = await _allocate_launch_target(
+        client,
+        ctx,
+        session=session,
+        isolated_name=f"master-{name}",
+        tab_label=name,
+        workspace_label=name,
+        cwd=target_cwd,
+        fresh_workspace=fresh_workspace,
+        focus=focus,
+    )
+    if not allocated.pane_id:
+        raise RuntimeError(f"Could not allocate pane in workspace {allocated.workspace_id}")
+    prompt = _with_prompt_prefix(
+        build_bootstrap_prompt(
+            "herdr-master",
+            _handoff_context(
+                entrypoint="herdr-master",
+                intent=initial_task,
+                allocated=allocated,
+                cwd=target_cwd,
+            ),
+        ),
+        descriptor,
+    )
+    await _start_and_prompt(
+        allocated,
+        name=name,
+        kind=descriptor["kind"],
+        args=descriptor["argv"],
+        prompt=prompt,
+        cwd=target_cwd,
+        focus=focus,
+    )
     return {
-        "session": session_name,
-        "workspace_id": target_ws_id,
-        "pane_id": target_pane_id,
-        "tab_id": target_tab_id,
+        "session": allocated.session_name,
+        "socket": str(allocated.socket_path),
+        "workspace_id": allocated.workspace_id,
+        "pane_id": allocated.pane_id,
+        "tab_id": allocated.tab_id,
         "agent_name": name,
-        "harness": harness_str,
-        "model": model,
+        "owns_workspace": allocated.owns_workspace,
+        "origin_cwd": target_cwd,
+        "harness": descriptor["kind"],
+        "model": model_slug,
+        "effort": effort_level.value if effort_level else None,
     }
 
 
@@ -257,140 +542,77 @@ async def launch_ergo(
     intent: str,
     workspace_label: str,
     squad: Squad,
-    cwd: Optional[str] = None,
-    session: Optional[str] = None,
+    cwd: str | None = None,
+    session: str | None = None,
+    *,
+    fresh_workspace: bool = False,
+    focus: bool = True,
 ) -> Dict[str, Any]:
-    """Launch an Ergo multi-role pipeline workspace.
+    """Hand an Ergo job to the canonical skill via the Scout binding.
 
-    Rules:
-    1. Outside Herdr:
-       - Uses an isolated dedicated session so other Herdr workspaces are hidden.
-       - Ensures Herdr daemon is active for this session.
-       - Creates a dedicated workspace for the Ergo pipeline.
-    2. Inside Herdr:
-       - If workspace has no other tabs (tab_count <= 1), works in this workspace.
-       - If workspace already has multiple tabs, creates a dedicated workspace.
-    3. Guarantees:
-       - Focuses workspace and Scout tab so the user sees all pipeline tabs.
-       - Launches Scout agent, handles trust prompts, and dispatches feature objective.
+    The bootstrap host is named Ergo orchestrator, not Scout. Python does not
+    run later phases and does not close adopted tabs or unrelated workspaces.
+    ``scout_pane_id`` remains as a deprecated alias of ``pane_id``.
     """
-    ctx = resolve_herdr_context(explicit_session=client.session or session)
-    target_cwd = cwd or os.getcwd()
-
-    target_ws_id: Optional[str] = None
-    scout_pane_id: Optional[str] = None
-    scout_tab_id: Optional[str] = None
-    active_client = client
-
-    if not ctx.is_inside_herdr:
-        # Isolated dedicated session outside Herdr so unrelated workspaces are hidden
-        session_name = (
-            session
-            if session and session != "default"
-            else workspace_label
-        )
-        target_socket = Path.home() / ".config" / "herdr" / "sessions" / session_name / "herdr.sock"
-        await ensure_herdr_server(target_socket, session_name=session_name)
-        active_client = HerdrClient(session=session_name, socket_path=target_socket)
-
-        snap = await active_client.get_snapshot()
-        if not snap.workspaces:
-            ws_res = await active_client.create_workspace(
-                label=workspace_label,
-                focus=True,
-                cwd=target_cwd,
-            )
-            scout_ws_id = ws_res.get("workspace", {}).get("workspace_id")
-            target_ws_id = scout_ws_id
-            scout_pane_id = ws_res.get("root_pane", {}).get("pane_id")
-            scout_tab_id = (
-                ws_res.get("tab", {}).get("tab_id")
-                or ws_res.get("root_pane", {}).get("tab_id")
-            )
-        else:
-            target_ws_id = snap.workspaces[0].workspace_id
-            tab_res = await active_client.create_tab(
-                workspace_id=target_ws_id,
-                label="scout",
-                focus=True,
-                cwd=target_cwd,
-            )
-            scout_pane_id = tab_res.get("root_pane", {}).get("pane_id") or tab_res.get("pane_id")
-            scout_tab_id = tab_res.get("tab", {}).get("tab_id")
-    else:
-        session_name = ctx.session_name
-        target_ws_id = ctx.workspace_id
-        snap = await active_client.get_snapshot()
-        existing_tabs = [
-            t.tab_id
-            for t in snap.tabs
-            if t.workspace_id == target_ws_id
-        ]
-        tab_res = await active_client.create_tab(
-            workspace_id=target_ws_id,
-            label="scout",
-            focus=True,
-            cwd=target_cwd,
-        )
-        scout_pane_id = tab_res.get("root_pane", {}).get("pane_id") or tab_res.get("pane_id")
-        scout_tab_id = tab_res.get("tab", {}).get("tab_id")
-
-    if not scout_pane_id:
-        raise RuntimeError(f"Could not allocate Scout pane in workspace {target_ws_id}")
-
-    scout_kind = squad.scout.kind.value
-    scout_model = squad.scout.model
-    if scout_kind == "agy":
-        ensure_agy_trusted(target_cwd)
-
-    args = _build_agent_args(scout_kind, scout_model)
-
-    stop_event = asyncio.Event()
-    watcher_task = asyncio.create_task(
-        _auto_confirm_trust(active_client, scout_pane_id, stop_event)
+    scout_effort = squad.scout.effort
+    descriptor = _host_launch(
+        squad.scout.kind.value,
+        squad.scout.model,
+        scout_effort,
+        "scout",
     )
-
-    try:
-        await active_client.start_agent(
-            name="scout",
-            kind=scout_kind,
-            pane_id=scout_pane_id,
-            args=args,
-            timeout_ms=30000,
-        )
-    finally:
-        stop_event.set()
-        watcher_task.cancel()
-
-    # Prompt Scout
-    prompt_cmd = (
-        f"Perform reconnaissance on the following objective: {intent}. "
-        "Document existing architecture, dependencies, and entrypoints into RUN_DIR/context.md."
+    ctx = resolve_launch_context(session)
+    target_cwd = str(Path(cwd or os.getcwd()).resolve())
+    allocated = await _allocate_launch_target(
+        client,
+        ctx,
+        session=session,
+        isolated_name=workspace_label,
+        tab_label=ORCHESTRATOR_NAME,
+        workspace_label=workspace_label,
+        cwd=target_cwd,
+        fresh_workspace=fresh_workspace,
+        focus=focus,
     )
-    await active_client.prompt_agent(scout_pane_id, prompt_cmd)
-
-    # Focus the workspace and tab so the user sees the active tabs!
-    try:
-        if target_ws_id:
-            await active_client.focus_workspace(target_ws_id)
-        if scout_tab_id:
-            await active_client.focus_tab(scout_tab_id)
-    except Exception:
-        pass
-
-    # Once work has started, close the rest of the tabs of this workspace
-    if ctx.is_inside_herdr and existing_tabs:
-        for old_tab_id in existing_tabs:
-            if old_tab_id != scout_tab_id:
-                try:
-                    await active_client.close_tab(old_tab_id)
-                except Exception:
-                    pass
-
+    if not allocated.pane_id:
+        raise RuntimeError(
+            f"Could not allocate orchestrator pane in workspace {allocated.workspace_id}"
+        )
+    prompt = _with_prompt_prefix(
+        build_bootstrap_prompt(
+            "ergo",
+            _handoff_context(
+                entrypoint="ergo",
+                intent=intent,
+                allocated=allocated,
+                cwd=target_cwd,
+                squad=squad,
+            ),
+        ),
+        descriptor,
+    )
+    await _start_and_prompt(
+        allocated,
+        name=ORCHESTRATOR_NAME,
+        kind=descriptor["kind"],
+        args=descriptor["argv"],
+        prompt=prompt,
+        cwd=target_cwd,
+        focus=focus,
+    )
     return {
-        "session": session_name,
-        "workspace_id": target_ws_id,
-        "scout_pane_id": scout_pane_id,
-        "tab_id": scout_tab_id,
+        "session": allocated.session_name,
+        "socket": str(allocated.socket_path),
+        "workspace_id": allocated.workspace_id,
+        "pane_id": allocated.pane_id,
+        "orchestrator_pane_id": allocated.pane_id,
+        "scout_pane_id": allocated.pane_id,
+        "tab_id": allocated.tab_id,
+        "agent_name": ORCHESTRATOR_NAME,
+        "owns_workspace": allocated.owns_workspace,
+        "origin_cwd": target_cwd,
         "intent": intent,
+        "harness": descriptor["kind"],
+        "model": squad.scout.model,
+        "effort": scout_effort.value if scout_effort else None,
     }

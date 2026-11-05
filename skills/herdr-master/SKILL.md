@@ -15,25 +15,37 @@ Initial task, if supplied: `${@:-$ARGUMENTS}`
 
 ---
 
-## 1. Harness Adapter (Child Launch Defaults & Async Watchers)
+## 1. Harness Adapter & Catalog Resolution (Child Launch Defaults & Async Watchers)
 
-Identify which harness you are running in (`agy`, `pi`, `claude`, or `opencode`) for default child session kind (unless the user explicitly requests a specific `--kind` or cross-harness model) and for your native async watcher wakeup mechanism:
+Identify which harness you are running in (`agy`, `pi`, `claude`, or `opencode`). Do not consult hand-maintained model tables; query the catalog via `herdm catalog squad` and `herdm catalog agent`:
 
-| Parent Harness | Default Child `herdr agent start` Command | Native Async Watcher Mechanism (wakes orchestrator on completion) |
-| :--- | :--- | :--- |
-| **Antigravity (`agy`)** | `herdr agent start <name> --kind agy --pane <pane-id> [-- --model <slug> --effort <level>]` *(verify slug via `agy models`)* | `define_subagent` (`herdr-watcher`, `Model: "flash_lite"` or `"flash"`, `EnableSubagentTools: false`) + `invoke_subagent`, **or** `run_command` (`herdr agent wait <target> --timeout <ms>`, `WaitMsBeforeAsync: 500`). |
-| **Pi (`pi`)** | `herdr agent start <name> --kind pi --pane <pane-id> -- --provider <PI_PROVIDER> --model <PI_MODEL>` *(verify via `pi --list-models`)* | `subagents_enable` (if needed) + `subagent` with a read-only agent and `async: true` running `herdr agent wait <target> --timeout <ms>`. |
-| **Claude Code (`claude`)** | `herdr agent start <name> --kind claude --pane <pane-id> [-- --model <model>]` | `Agent` (`subagent_type: "general-purpose"`, `model: "haiku"`, `run_in_background: true`) **or** `Bash` (`run_in_background: true`) running `herdr agent wait <target> --timeout <ms>`. |
-| **OpenCode (`opencode`)** | `herdr pane run <pane-id> "opencode --auto"` *(or `herdr agent start <name> --kind <requested-kind> --pane <pane-id> ...`)* | `subagent(agent: "general", model: "<fast-model>", background: true, ...)` running `herdr agent wait <target> --timeout <ms>`. |
+1. **Child Launch Routing**:
+   - Default child sessions derive their binding from the catalog's product default Scout: kind `agy`, model `gemini-3.8-flash-medium`, effort `medium` (`herdm catalog agent --mode herdr --binding agy:gemini-3.8-flash-medium:medium --role scout --json` → `--kind agy -- --model gemini-3.8-flash-medium --effort medium --dangerously-skip-permissions`).
+   - `/herdr-master` must not substitute its parent harness for the product Scout/bootstrap binding or the XAI Grok reviewer.
+   - For user-requested harnesses or models, resolve exact arguments via:
+     `herdm catalog agent --mode herdr --binding <kind:model[:effort]> --role coder --json`
+   - If a requested model or route is unavailable or cannot be resolved, ask the user rather than silently switching models.
 
-> **Cross-Harness Delegation**: Even when running inside `pi`, `agy`, `claude`, or `opencode`, the user may ask `/herdr-master` to spawn children using **any** supported Herdr harness (`--kind agy`, `--kind pi`, `--kind claude`, `--kind opencode`, `--kind codex`) and model. Respect any explicitly requested harness/model after verifying that the model ID exists. If a requested model or route is unavailable or cannot be verified, ask the user rather than silently switching models or incurring unexpected cost.
+2. **Native Async Watcher Mechanism (Wakes Orchestrator on Completion)**:
+   Obtain your active harness's native watcher mechanism from the catalog via:
+   `herdm catalog agent --mode native --harness <parent-harness> --binding <binding> --role watcher --json`
+   - **Antigravity (`agy`)**: `define_subagent` (`herdr-watcher`, `Model: "flash_lite"` or `"flash"`, `EnableSubagentTools: false`) + `invoke_subagent`, **or** `run_command` (`herdr agent wait <target> --timeout <ms>`, `WaitMsBeforeAsync: 500`).
+   - **Pi (`pi`)**: `subagents_enable` (if needed) + `subagent` with a read-only agent and `async: true` running `herdr agent wait <target> --timeout <ms>`.
+   - **Claude Code (`claude`)**: `Agent` (`subagent_type: "general-purpose"`, `run_in_background: true`) **or** `Bash` (`run_in_background: true`) running `herdr agent wait <target> --timeout <ms>`.
+   - **OpenCode (`opencode`)**: `subagent(agent: "general", background: true, ...)` running `herdr agent wait <target> --timeout <ms>`.
+   *Rule*: The watcher's sole task is to wait on the target and report completion. The watcher must never send input or start a coordinator.
 
 ---
 
 ## 2. Scope and Setup
 
 - First verify `HERDR_ENV=1` and that `HERDR_WORKSPACE_ID`, `HERDR_PANE_ID`, and the current working directory are available in the environment. If not, explain that this command must run in a Herdr pane and stop; never control an unrelated focused workspace or create a server.
-- Read the current Herdr instructions with `herdr --skill`, inspect the relevant live CLI help, and discover current workspace/pane/agent state. The installed CLI and returned JSON are authoritative. Keep this session in the current workspace; do not create another workspace.
+- **Workspace Adoption & Ownership**:
+  - The bootstrap boolean `owns_workspace` is the ONLY ownership signal. Do not assume or set `owns_workspace = false` merely because `workspace_id` is present.
+  - When `workspace_id` is set (via bootstrap context or `HERDR_WORKSPACE_ID`), adopt that workspace directly. Do NOT call `herdr workspace create` again.
+  - Keep this session in the adopted workspace; do not create another workspace.
+  - Cleanup rule: Close the workspace only when bootstrap `owns_workspace` is true (`herdr workspace close "$HERDR_WORKSPACE_ID"`), and close only that ID. Adopted workspaces (`owns_workspace == false`) are NEVER closed.
+- Read the current Herdr instructions with `herdr --skill`, inspect the relevant live CLI help, and discover current workspace/pane/agent state. The installed CLI and returned JSON are authoritative.
 - If no initial task is supplied with `/herdr-master`, briefly explain that orchestration is active and ask the user for the first job. Do not create idle agents speculatively.
 - Choose the current project directory unless the user specifies another. For repository work verify the Git root, target branch, `HEAD`, working-tree/index state, and existing worktrees before dispatch; record them per job. The target integration branch is `develop`: if `develop` does not exist in the target repository, create it first (from the current `HEAD`/default branch) and base the job worktree on `develop`. If the cwd contains multiple repositories and the target repository is ambiguous, ask.
 
@@ -44,7 +56,20 @@ Identify which harness you are running in (`agy`, `pi`, `claude`, or `opencode`)
 - For each repository job create a distinct Git branch and isolated worktree based on `develop` `HEAD` (creating `develop` first if it does not exist); use unique names and paths, and never reuse, overwrite, or remove an existing worktree or branch. The user authorizes creation of `develop` (when missing), these worktrees, and child commits as part of this workflow. For non-repository work ask how to isolate it. If the target has uncommitted changes, do not assume they are present in the child: preserve them and ask if the job depends on them.
 - Create a new Herdr tab in `HERDR_WORKSPACE_ID` with the worktree as its absolute cwd and `--no-focus` (`herdr tab create --workspace "$HERDR_WORKSPACE_ID" --cwd "$WORKTREE" --label "<job-name>" --no-focus`); use the returned root pane ID. Start a uniquely named agent in that shell pane per **§1**. Never prompt this orchestrator's own pane, reuse a user-owned agent, or alter existing panes.
 - Provide a self-contained prompt: objective, context, constraints, ownership/files, target (`develop`) and worktree branch, acceptance criteria, and verification. Each child works only in its assigned worktree, commits its own completed work there, and reports the commit SHA, base, tests, changes, and blockers. No child may merge into `develop`, push, deploy, delete branches/worktrees, or modify other worktrees. Keep separate writers in separate worktrees; account for semantic conflicts between parallel jobs.
-- **Forwarding `/ergo` to Child Sessions**: Whenever the user includes `/ergo` (or `/ergo --herdr` / `/ergo --models ...`) in a job request, always forward `/ergo` to the child session opened for that job (and also instruct the child to use `/ergo` when a complex task warrants its multi-stage planning/review workflow). Inspect the unified `/ergo` skill (`~/projects/dotfiles/ergo/SKILL.md`) first and explicitly constrain it to the assigned worktree and branch: its planning/approval, specialist `Expert Persona` assignment, and review gates remain in force, but its normal canonical-checkout landing, `git reset --hard`, branch/worktree deletion, and cleanup are forbidden in the child. The child must stop after its own reviewed commit on its assigned worktree branch; the master alone integrates into `develop`. If `/ergo` cannot comply, stop and ask rather than bypassing these boundaries. Do not authorize push, deployment, or other consequential actions merely by launching it.
+- **Forwarding `/ergo` to Child Sessions**:
+  Whenever the user includes `/ergo` (or `/ergo --herdr` / `/ergo --models ...`) in a job request, always forward `/ergo` to the child session opened for that job (and instruct the child to use `/ergo` when a complex task warrants its multi-stage planning/review workflow). Resolve the canonical `/ergo` skill path from the catalog via `herdm catalog show --json` (or `get_skill_source('ergo')`), rather than looking in obsolete paths or static locations. Explicitly constrain it to the assigned worktree, branch, and adopted workspace:
+  - Planning/approval, specialist `Expert Persona` assignment, and review gates remain in force.
+  - Normal canonical-checkout landing, `git reset --hard`, branch/worktree deletion, and workspace cleanup are forbidden in the child.
+  - The child adopts the assigned worktree, branch, and workspace (`owns_workspace = false`). Adopted workspaces are not created or closed.
+  - The child must stop after its own reviewed commit on its assigned worktree branch; the master alone integrates into `develop`.
+  - Do NOT recursively invoke `herdm ergo` to start another coordinator.
+- **Forwarding `/orchestration` to Child Sessions (pipeline per job, one tab each)**:
+  When the user asks to run a job "with orchestration" (or includes `/orchestration`), dispatch it exactly like any other job — one new tab, one isolated worktree — but prompt the child with `/orchestration <task>` instead of plain work, so that tab runs the full Scout → Architect → parallel Coders → blind Reviewer pipeline with its harness's own native subagents. No nested workspace, no `herdm` inside the child.
+  - Resolve the canonical `/orchestration` skill from the catalog (`herdm catalog show --json` → `skill_sources.orchestration`) rather than any static or obsolete path.
+  - Constrain the child to the assigned worktree, branch, and adopted workspace (`owns_workspace = false`). The child adopts all three and must not create or close a workspace, delete its branch or worktree, squash-merge into `develop`, push, deploy, or recursively start another master.
+  - The child stops after its single reviewed commit on its assigned branch. **The master alone** runs the Master Final Review Gate and performs the serial squash-merge into `develop`.
+  - The plan approval gate still applies end to end: relay the child's `plan.md` summary to the user and wait for explicit approval before any Coder starts, exactly as for a forwarded `/ergo`.
+  - Report the child's commit SHA, the Reviewer verdict, tests, and the `develop` squash SHA in the usual job report.
 - Record for each job its name, tab/pane ID, scope, status, and important decisions. Report launches and progress concisely. Submit with `herdr agent prompt`; establish that work actually starts by observing state/output. A timeout or stalled response does not prove non-delivery: inspect before retrying, never blindly duplicate work.
 - **Async Monitoring (No Polling Loops)**: Monitor only agents created by this orchestration. After confirming a child is working, launch one bounded **async watcher** for that child using your harness's native async mechanism in **§1**; the user authorizes this monitoring delegation:
   - Pass the exact Herdr session/socket environment variables (`HERDR_ENV`, `HERDR_WORKSPACE_ID`, etc.), child name or pane ID, and an explicit timeout.
@@ -61,7 +86,7 @@ Identify which harness you are running in (`agy`, `pi`, `claude`, or `opencode`)
 
 - **Master Final Review Gate (MANDATORY before every squash-merge)**:
   1. After a child reports completion, confirm it is no longer writing, then inspect its worktree branch, exact commit(s), base (`develop`), full diff (`git diff develop...<child-branch>`), and test results.
-  2. Perform a **thorough final review** of the child's changes before any integration (checking requirements completeness, project pattern conformance, cross-job semantic conflicts with other active/landed jobs, logic/boundary/async/SQL/security bugs, and unintended file edits). You may run this final review directly as the master coordinator or spawn a dedicated read-only Reviewer subagent/tab (`agy:gemini-4-argon-high`, `pi:openai-codex/gpt-6.1-sol`, or `claude:opus`) on the child's worktree diff.
+  2. Perform a **thorough final review** of the child's changes before any integration (checking requirements completeness, project pattern conformance, cross-job semantic conflicts with other active/landed jobs, logic/boundary/async/SQL/security bugs, and unintended file edits). You may run this final review directly as the master coordinator or spawn a dedicated read-only Reviewer tab using the product default Reviewer binding: `pi:xai/grok-4.7:high` (`herdm catalog agent --mode herdr --binding pi:xai/grok-4.7:high --role reviewer --json` → `--kind pi -- --provider xai --model grok-4.7 --thinking high`) on the child's worktree diff.
   3. **If the Master Final Review finds issues (`NEEDS FIXES`)**: Do **not** merge into `develop` and do **not** close the child tab yet. Send the concrete review findings back to the existing child session (`herdr agent prompt <child-pane-id> "<review findings & fix instructions>"`), re-arm its async watcher, and wait for the child to fix, re-test, and commit the fixes on `<child-branch>`, then re-run the Master Final Review until it passes (`APPROVED`).
 - **Serial Squash-Merge into `develop` (only after Master Final Review = `APPROVED`)**:
   - The user authorizes the master to squash-merge the approved child branch into `develop` (creating `develop` first if it does not exist), not to push or deploy.
@@ -70,7 +95,8 @@ Identify which harness you are running in (`agy`, `pi`, `claude`, or `opencode`)
   - When clean and approved, integrate serially with `git merge --squash <child-branch>`, verify the staged diff contains only the intended work, run relevant tests, and create one squash commit on `develop`. If conflicts or validation failures arise, preserve all work and report/ask before any destructive recovery; **never use `git reset --hard`**.
 - Only after a successful squash commit and verification, perform the authorized cleanup:
   1. Confirm the exact child tab, session, worktree, and temporary branch are the ones created for this job, the child and any nested work have stopped, no new user work is in progress, the worktree/index are clean, all intended work is included in the target squash commit, and the branch is not used by another worktree.
-  2. Close only the completed child's Herdr tab/session (never the workspace, Herdr server, or orchestrator).
+  2. Close only the completed child's Herdr tab/session (never unrelated tabs or unowned workspaces).
   3. Remove the clean job worktree using normal `git worktree remove` (do not force-remove worktrees).
   4. Delete only its temporary branch after explicitly verifying the squash landed on `develop`.
+  5. Close the orchestrator's workspace only if bootstrap `owns_workspace` is true (`herdr workspace close "$HERDR_WORKSPACE_ID"`), closing only that ID. Adopted workspaces (`owns_workspace == false`) are NEVER closed.
 - Report child SHA, `develop` squash SHA, tests, cleanup, and any remaining issues. Do not call a task complete solely on agent state. If identity, ownership, activity, cleanliness, integration, or branch use is uncertain, or any cleanup step fails, stop cleanup and ask the user; preserve everything remaining. Never close or delete user-owned or unrelated resources.

@@ -9,7 +9,7 @@ platforms = ["linux", "macos"]
 id = "cockpit"
 title = "Herdr-Master Cockpit"
 placement = "tab"
-command = ["/home/pank/projects/herdr-master/.venv/bin/herdm", "tui"]
+command = ["herdm", "tui"]
 platforms = ["linux", "macos"]
 
 [[actions]]
@@ -23,5 +23,5 @@ platforms = ["linux", "macos"]
 id = "new-workspace"
 title = "New Herdr-Master Workspace"
 contexts = ["workspace"]
-command = ["/home/pank/projects/herdr-master/scripts/launch-workspace.sh"]
+command = ["herdm", "workspace"]
 platforms = ["linux", "macos"]

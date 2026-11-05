@@ -90,27 +90,28 @@ def test_invalid_slugs():
 
 
 def test_squad_defaults_and_validation():
-    """Squad defaults load correct bindings and detect reviewer model family conflicts."""
+    """Squad defaults load the catalog product bindings and still detect family conflicts."""
     squad = Squad()
-    assert squad.scout.to_slug() == "agy:gemini-3.8-flash-high"
-    assert squad.architect.to_slug() == "pi:openai-codex/gpt-6.1-sol:high"
-    assert squad.reviewer.to_slug() == "agy:gemini-4-argon-high"
-    assert len(squad.worker_pool) == 3
+    assert squad.scout.model == "gemini-3.8-flash-medium"
+    assert squad.scout.effort == EffortLevel.MEDIUM
+    assert squad.scout.to_slug() == "agy:gemini-3.8-flash-medium:medium"
+    assert squad.architect.model == "openai-codex/gpt-6.1-sol"
+    assert squad.architect.effort == EffortLevel.MAX
+    assert squad.architect.to_slug() == "pi:openai-codex/gpt-6.1-sol:max"
+    assert squad.reviewer.model == "xai/grok-4.7"
+    assert squad.reviewer.effort == EffortLevel.HIGH
+    assert squad.reviewer.to_slug() == "pi:xai/grok-4.7:high"
+    assert len(squad.worker_pool) == 2
     assert squad.worker_pool[0].label == "worker-1"
-    assert squad.worker_pool[0].to_slug() == "claude:claude-3-opus"
+    assert squad.worker_pool[0].to_slug() == "agy:gemini-3.8-flash"
     assert squad.worker_pool[0].effort is None
-    assert "Senior dev" in (squad.worker_pool[0].description or "")
-
     assert squad.worker_pool[1].label == "worker-2"
-    assert squad.worker_pool[1].to_slug() == "agy:gemini-3.8-flash"
+    assert squad.worker_pool[1].to_slug() == "pi:xai/grok-4.7"
     assert squad.worker_pool[1].effort is None
-    assert "Junior dev" in (squad.worker_pool[1].description or "")
+    assert "claude-3-opus" not in squad.scout.to_slug()
+    assert "argon" not in squad.reviewer.to_slug()
 
-    assert squad.worker_pool[2].label == "worker-3"
-    assert squad.worker_pool[2].to_slug() == "pi:xai/grok-4.7"
-    assert squad.worker_pool[2].effort is None
-
-    # Reviewer (gemini) != Architect (gpt/openai-codex)
+    # Reviewer (xai) != Architect (openai-codex)
     assert not squad.has_reviewer_model_family_conflict()
 
     # If reviewer changed to codex/gpt, conflict is detected

@@ -63,6 +63,11 @@ herdm = "herdr_master.cli.main:app"
 [tool.hatch.build.targets.wheel]
 packages = ["src/herdr_master"]
 
+[tool.hatch.build.targets.wheel.force-include]
+"skills/ergo/SKILL.md" = "herdr_master/_skills/ergo/SKILL.md"
+"skills/herdr-master/SKILL.md" = "herdr_master/_skills/herdr-master/SKILL.md"
+"skills/orchestration/SKILL.md" = "herdr_master/_skills/orchestration/SKILL.md"
+
 [tool.ruff]
 line-length = 100
 target-version = "py310"

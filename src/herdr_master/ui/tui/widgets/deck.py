@@ -1,54 +1,16 @@
-"""Center Deck widget multiplexing Output, Diff, Pipeline, and Mailbox views."""
+"""Center Deck hosting the WorkspaceBrowser and LivePaneView."""
 
-from rich.text import Text
 from textual.app import ComposeResult
-from textual.containers import Container, Vertical
-from textual.widgets import Static
+from textual.containers import Vertical
 
+from herdr_master.ui.tui.live_pane import PaneFrame, ReplyResult
 from herdr_master.ui.tui.state import AppState
-from herdr_master.ui.tui.widgets.diff_viewer import DiffViewerWidget
-from herdr_master.ui.tui.widgets.mailbox_view import MailboxViewWidget
-from herdr_master.ui.tui.widgets.output_stream import OutputStreamWidget
-from herdr_master.ui.tui.widgets.pipeline_view import PipelineView
-
-
-class DeckTabBar(Static):
-    """Visual tab selector at the top of the Center Deck."""
-
-    DEFAULT_CSS = """
-    DeckTabBar {
-        height: 1;
-        background: #1e1e1e;
-        padding: 0 1;
-        color: #888888;
-    }
-    """
-
-    def __init__(self, active_mode: int = 3, **kwargs) -> None:
-        super().__init__(**kwargs)
-        self.active_mode = active_mode
-
-    def set_active_mode(self, mode: int) -> None:
-        self.active_mode = mode
-        self.refresh_display()
-
-    def on_mount(self) -> None:
-        self.refresh_display()
-
-    def refresh_display(self) -> None:
-        t = Text()
-        modes = [(1, "Output"), (2, "Diff"), (3, "Pipeline"), (4, "Mailbox")]
-        for mode, name in modes:
-            if mode == self.active_mode:
-                t.append(f" [{mode}] {name} ", style="bold cyan reverse")
-            else:
-                t.append(f" [{mode}] {name} ", style="dim")
-            t.append(" ")
-        self.update(t)
+from herdr_master.ui.tui.widgets.live_output import LivePaneView
+from herdr_master.ui.tui.widgets.workspaces import WorkspaceBrowser
 
 
 class CenterDeck(Vertical):
-    """Multiplexed center deck supporting 4 views."""
+    """Host container for WorkspaceBrowser and LivePaneView."""
 
     DEFAULT_CSS = """
     CenterDeck {
@@ -56,45 +18,93 @@ class CenterDeck(Vertical):
         height: 1fr;
         background: #111111;
     }
-    .deck-content {
+    CenterDeck.-full WorkspaceBrowser {
+        width: 1fr;
         height: 1fr;
+    }
+    CenterDeck.-full LivePaneView {
+        display: none;
+    }
+    CenterDeck.-horizontal {
+        layout: horizontal;
+    }
+    CenterDeck.-horizontal WorkspaceBrowser {
+        width: 50;
+        min-width: 48;
+        height: 100%;
+    }
+    CenterDeck.-horizontal LivePaneView {
+        width: 1fr;
+        height: 100%;
+        display: block;
+    }
+    CenterDeck.-vertical {
+        layout: vertical;
+    }
+    CenterDeck.-vertical WorkspaceBrowser {
+        width: 100%;
+        height: 12;
+    }
+    CenterDeck.-vertical LivePaneView {
+        width: 100%;
+        height: 1fr;
+        display: block;
     }
     """
 
     def __init__(self, app_state: AppState, **kwargs) -> None:
         super().__init__(**kwargs)
         self.app_state = app_state
-        self._tab_bar = DeckTabBar(active_mode=app_state.active_deck_mode)
-        self._output_view = OutputStreamWidget(app_state)
-        self._diff_view = DiffViewerWidget(app_state)
-        self._pipeline_view = PipelineView(app_state)
-        self._mailbox_view = MailboxViewWidget(app_state)
-        self._container = Container(classes="deck-content")
+        self._workspace_view = WorkspaceBrowser(app_state)
+        self._live_pane_view = LivePaneView(id="live-pane")
 
     def compose(self) -> ComposeResult:
-        yield self._tab_bar
-        with self._container:
-            yield self._output_view
-            yield self._diff_view
-            yield self._pipeline_view
-            yield self._mailbox_view
+        yield self._workspace_view
+        yield self._live_pane_view
 
     def on_mount(self) -> None:
-        self.switch_mode(self.app_state.active_deck_mode)
+        self._check_layout()
+
+    def on_resize(self, event: object) -> None:
+        self._check_layout()
+
+    def on_live_pane_view_draft_cancelled(
+        self, event: LivePaneView.DraftCancelled
+    ) -> None:
+        self._check_layout()
 
     def update_state(self, app_state: AppState) -> None:
         self.app_state = app_state
-        self._tab_bar.set_active_mode(app_state.active_deck_mode)
-        self._output_view.update_state(app_state)
-        self._diff_view.update_state(app_state)
-        self._pipeline_view.update_state(app_state)
-        self._mailbox_view.update_state(app_state)
-        self.switch_mode(app_state.active_deck_mode)
+        self._workspace_view.update_state(app_state)
+        self._check_layout()
 
-    def switch_mode(self, mode: int) -> None:
-        """Toggle visibility between views based on active mode (1..4)."""
-        self._tab_bar.set_active_mode(mode)
-        self._output_view.display = mode == 1
-        self._diff_view.display = mode == 2
-        self._pipeline_view.display = mode == 3
-        self._mailbox_view.display = mode == 4
+    def update_live_frame(self, frame: PaneFrame) -> None:
+        self._live_pane_view.update_frame(frame)
+        self._check_layout()
+
+    def apply_reply_result(self, result: ReplyResult) -> None:
+        self._live_pane_view.apply_reply_result(result)
+        self._check_layout()
+
+    def _check_layout(self) -> None:
+        has_active = self._live_pane_view.has_active_pane
+        has_draft = self._live_pane_view.has_retained_draft
+        show_live = has_active or has_draft
+
+        width = (
+            self.size.width
+            if self.size.width > 0
+            else (self.app.size.width if self.app else 80)
+        )
+
+        if not show_live:
+            self.remove_class("-horizontal", "-vertical")
+            self.add_class("-full")
+        else:
+            self.remove_class("-full")
+            if width >= 110:
+                self.remove_class("-vertical")
+                self.add_class("-horizontal")
+            else:
+                self.remove_class("-horizontal")
+                self.add_class("-vertical")

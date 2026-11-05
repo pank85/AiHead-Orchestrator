@@ -12,56 +12,68 @@ from herdr_master.ui.tui.widgets.deck import CenterDeck
 from herdr_master.ui.tui.widgets.footer import ActionFooter
 from herdr_master.ui.tui.widgets.header_bar import HeaderBar
 from herdr_master.ui.tui.widgets.hierarchy import HierarchyTree
-from herdr_master.ui.tui.widgets.pipeline_view import PipelineView
 from herdr_master.ui.tui.widgets.quick_launch import QuickLaunchBar
+from herdr_master.ui.tui.widgets.workspaces import WorkspaceBrowser
 
 
 @pytest.mark.asyncio
 async def test_tui_app_mount_and_components():
-    """Verify first page has no left column, and full-width cockpit mounts cleanly."""
+    """Verify full-width cockpit mounts exactly one workspace browser and no obsolete views."""
     app = HerdrMasterApp(demo=True)
     async with app.run_test() as pilot:
         # Check core widgets exist
         assert pilot.app.query_one(HeaderBar) is not None
         assert pilot.app.query_one(CenterDeck) is not None
         assert pilot.app.query_one(ActionFooter) is not None
-        assert pilot.app.query_one(PipelineView) is not None
+        assert pilot.app.query_one(WorkspaceBrowser) is not None
+        assert len(pilot.app.query(WorkspaceBrowser)) == 1
 
-        # Verify HierarchyTree is NOT on the first page!
+        # CenterDeck has no tab bar or obsolete view switching
+        deck = pilot.app.query_one(CenterDeck)
+        assert not hasattr(deck, "_tab_bar")
+        assert not hasattr(deck, "switch_mode")
+
+        # Verify HierarchyTree is NOT on the first page
         assert len(pilot.app.query(HierarchyTree)) == 0
 
-        # Verify initial deck mode is 3 (Pipeline)
-        assert pilot.app.app_state.active_deck_mode == 3
+        # Open in Herdr button exists and is keyboard-focusable
+        btn = pilot.app.query_one("#btn-open-herdr")
+        assert btn is not None
 
 
 @pytest.mark.asyncio
 async def test_deck_mode_switching_keys():
-    """Verify keys 1, 2, 3, 4 switch deck views properly."""
+    """Verify obsolete action methods, bindings, and footer hints are removed."""
     app = HerdrMasterApp(demo=True)
     async with app.run_test() as pilot:
-        deck = pilot.app.query_one(CenterDeck)
+        # Assert obsolete action methods are absent from HerdrMasterApp
+        obsolete_actions = [
+            "action_deck_mode",
+            "action_prompt_agent",
+            "action_review_worker",
+            "action_squash_land",
+            "action_kill_worker",
+        ]
+        for action in obsolete_actions:
+            assert not hasattr(pilot.app, action)
 
-        # Switch to Mode 1 (Output)
-        await pilot.press("1")
-        assert pilot.app.app_state.active_deck_mode == 1
-        assert deck._output_view.display is True
-        assert deck._pipeline_view.display is False
+        # Assert removed keys are absent from app bindings
+        bound_keys = {b.key for b in pilot.app.BINDINGS}
+        for key in ("0", "1", "2", "3", "4", "p", "r", "m", "k", "d"):
+            assert key not in bound_keys
 
-        # Switch to Mode 2 (Diff)
-        await pilot.press("2")
-        assert pilot.app.app_state.active_deck_mode == 2
-        assert deck._diff_view.display is True
-        assert deck._output_view.display is False
+        # Assert footer does not show obsolete hints
+        footer_text = str(pilot.app.query_one(ActionFooter).render())
+        for hint in ("Views", "Prompt", "Review", "Squash", "Kill"):
+            assert hint not in footer_text
 
-        # Switch to Mode 4 (Mailbox)
-        await pilot.press("4")
-        assert pilot.app.app_state.active_deck_mode == 4
-        assert deck._mailbox_view.display is True
-
-        # Switch back to Mode 3 (Pipeline)
-        await pilot.press("3")
-        assert pilot.app.app_state.active_deck_mode == 3
-        assert deck._pipeline_view.display is True
+        # Press removed keys on main screen: verify no state mutation or view switches occur
+        before_state = pilot.app.app_state.model_dump()
+        for key in ("0", "1", "2", "3", "4", "p", "r", "m", "k", "d"):
+            await pilot.press(key)
+            await pilot.pause()
+        assert pilot.app.app_state.model_dump() == before_state
+        assert pilot.app.is_running
 
 
 @pytest.mark.asyncio
@@ -102,7 +114,7 @@ async def test_launch_ergo_modal_worker_dynamic_effort_and_description():
         assert modal._effort_select.display is False
         assert modal._effort_note.display is True
         assert modal._description_input.display is True
-        assert "Senior dev" in modal._description_input.value
+        assert "Simple, mechanical, well-scoped jobs" in modal._description_input.value
 
         # Select Scout again: returns to standard role editor
         modal._load_agent_into_editor("scout")
@@ -187,8 +199,8 @@ async def test_launch_master_submits_to_app_state():
 
 
 @pytest.mark.asyncio
-async def test_tui_launch_ergo_outside_herdr_exits_with_attach():
-    """Verify launching Ergo outside Herdr triggers exit with attach result."""
+async def test_tui_launch_ergo_outside_herdr_stays_open():
+    """The multi-project cockpit stays open after launching, even outside Herdr."""
     from unittest.mock import AsyncMock, patch
 
     from herdr_master.core.context import HerdrContext
@@ -205,6 +217,8 @@ async def test_tui_launch_ergo_outside_herdr_exits_with_attach():
     fake_res = {
         "session": "ergo-worker",
         "workspace_id": "w_test",
+        "pane_id": "w_test:p1",
+        "orchestrator_pane_id": "w_test:p1",
         "scout_pane_id": "w_test:p1",
         "tab_id": "w_test:t1",
     }
@@ -213,7 +227,7 @@ async def test_tui_launch_ergo_outside_herdr_exits_with_attach():
     app.client = mock_client
 
     with (
-        patch("herdr_master.ui.tui.app.resolve_herdr_context", return_value=fake_ctx),
+        patch("herdr_master.ui.tui.app.resolve_launch_context", return_value=fake_ctx),
         patch("herdr_master.ui.tui.app.launch_ergo", new_callable=AsyncMock, return_value=fake_res),
     ):
         async with app.run_test(size=(110, 45)) as pilot:
@@ -227,12 +241,13 @@ async def test_tui_launch_ergo_outside_herdr_exits_with_attach():
                 )
             )
             await pilot.pause()
-            assert app.return_value == {"action": "attach", "session": "ergo-worker"}
+            assert app.return_value is None
+            assert app.is_running
 
 
 @pytest.mark.asyncio
-async def test_tui_launch_ergo_inside_herdr_exits_with_done():
-    """Verify launching Ergo inside Herdr triggers exit with done result."""
+async def test_tui_launch_ergo_inside_herdr_stays_open():
+    """Inside Herdr, Ergo opens a fresh workspace and the cockpit stays running."""
     from unittest.mock import AsyncMock, patch
 
     from herdr_master.core.context import HerdrContext
@@ -250,7 +265,9 @@ async def test_tui_launch_ergo_inside_herdr_exits_with_done():
     )
     fake_res = {
         "session": "default",
-        "workspace_id": "w9",
+        "workspace_id": "w-new",
+        "pane_id": "w-new:p1",
+        "orchestrator_pane_id": "w9:p2",
         "scout_pane_id": "w9:p2",
         "tab_id": "w9:t2",
     }
@@ -259,8 +276,10 @@ async def test_tui_launch_ergo_inside_herdr_exits_with_done():
     app.client = mock_client
 
     with (
-        patch("herdr_master.ui.tui.app.resolve_herdr_context", return_value=fake_ctx),
-        patch("herdr_master.ui.tui.app.launch_ergo", new_callable=AsyncMock, return_value=fake_res),
+        patch("herdr_master.ui.tui.app.resolve_launch_context", return_value=fake_ctx),
+        patch(
+            "herdr_master.ui.tui.app.launch_ergo", new_callable=AsyncMock, return_value=fake_res
+        ) as launch,
     ):
         async with app.run_test(size=(110, 45)) as pilot:
             await pilot.press("e")
@@ -273,8 +292,123 @@ async def test_tui_launch_ergo_inside_herdr_exits_with_done():
                 )
             )
             await pilot.pause()
-            assert app.return_value == {
-                "action": "done",
-                "session": "default",
-                "workspace_id": "w9",
-            }
+            assert app.return_value is None
+            assert app.app_state.workspace_id != "w-new"
+    launch.assert_awaited_once()
+    assert launch.await_args.kwargs["fresh_workspace"] is True
+    assert launch.await_args.kwargs["focus"] is False
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    "return_socket,expected_meta",
+    [
+        ("/custom/herdr.sock", "/custom/herdr.sock"),
+        (None, ""),
+    ],
+)
+async def test_live_custom_master_launch_records_exact_socket_without_handoff(
+    return_socket, expected_meta, tmp_path: Path
+):
+    from unittest.mock import AsyncMock, patch
+
+    from herdr_master.core.context import HerdrContext
+    from herdr_master.core.models import HarnessKind
+    from herdr_master.ui.tui.modals.launch_master import MasterLaunchParams
+
+    mock_client = AsyncMock()
+    mock_client.session = "default"
+
+    fake_ctx = HerdrContext(
+        is_inside_herdr=False,
+        session_name="default",
+        socket_path=Path("/tmp/herdr.sock"),
+    )
+    fake_res = {
+        "session": "custom-sess",
+        "workspace_id": "w-cust",
+        "pane_id": "w-cust:p1",
+        "model": "gemini-3.8-flash-high",
+    }
+    if return_socket is not None:
+        fake_res["socket"] = return_socket
+
+    app = HerdrMasterApp(demo=False, project_path=tmp_path)
+    app.client = mock_client
+    app._refresh_live_snapshot = AsyncMock()
+
+    with (
+        patch("herdr_master.ui.tui.app.resolve_launch_context", return_value=fake_ctx),
+        patch(
+            "herdr_master.ui.tui.app.launch_master",
+            new_callable=AsyncMock,
+            return_value=fake_res,
+        ),
+    ):
+        async with app.run_test(size=(110, 45)) as pilot:
+            await pilot.press("n")
+            modal = pilot.app.screen
+            assert isinstance(modal, LaunchMasterModal)
+            modal.dismiss(
+                MasterLaunchParams(
+                    name="cust-coord",
+                    harness=HarnessKind.AGY,
+                    model="gemini-3.8-flash-high",
+                    project_path=tmp_path,
+                )
+            )
+            await pilot.pause()
+            assert app.return_value is None
+            assert app.is_running
+            master = app.app_state.masters["master-cust-coord"]
+            assert master.metadata["socket_path"] == expected_meta
+
+
+@pytest.mark.asyncio
+async def test_removed_main_screen_keys_produce_no_mocked_navigation_rpcs():
+    from unittest.mock import AsyncMock
+
+    app = HerdrMasterApp(demo=True)
+    app._open_in_herdr = AsyncMock()
+    async with app.run_test() as pilot:
+        for key in ("0", "1", "2", "3", "4", "p", "r", "m", "k", "d"):
+            await pilot.press(key)
+            await pilot.pause()
+        app._open_in_herdr.assert_not_called()
+
+
+@pytest.mark.asyncio
+async def test_typing_shortcuts_in_launcher_and_config_inputs(tmp_path: Path):
+    from unittest.mock import AsyncMock
+
+    app = HerdrMasterApp(demo=False, project_path=tmp_path)
+    app._open_in_herdr = AsyncMock()
+    app._refresh_live_snapshot = AsyncMock()
+    async with app.run_test(size=(110, 45)) as pilot:
+        # Open LaunchMasterModal
+        await pilot.press("n")
+        modal = pilot.app.screen
+        assert isinstance(modal, LaunchMasterModal)
+        modal._name_input.focus()
+        for char in ("o", "0", "1", "2", "3", "4", "p", "r", "m", "k", "d"):
+            await pilot.press(char)
+        await pilot.pause()
+        app._open_in_herdr.assert_not_called()
+        assert isinstance(pilot.app.screen, LaunchMasterModal)
+        await pilot.click("#btn-cancel")
+        await pilot.pause()
+        assert not isinstance(pilot.app.screen, LaunchMasterModal)
+
+        # Open LaunchErgoModal
+        await pilot.press("e")
+        ergo_modal = pilot.app.screen
+        assert isinstance(ergo_modal, LaunchErgoModal)
+        ergo_modal._ws_input.focus()
+        for char in ("o", "0", "1", "2", "3", "4", "p", "r", "m", "k", "d"):
+            await pilot.press(char)
+        await pilot.pause()
+        app._open_in_herdr.assert_not_called()
+        assert isinstance(pilot.app.screen, LaunchErgoModal)
+        await pilot.click("#btn-cancel")
+        await pilot.pause()
+        assert not isinstance(pilot.app.screen, LaunchErgoModal)

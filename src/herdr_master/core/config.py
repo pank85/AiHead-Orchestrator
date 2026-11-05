@@ -30,29 +30,16 @@ class WorktreeConfig(BaseModel):
 
 
 class ModelsConfig(BaseModel):
-    default_squad: Dict[str, str] = Field(
-        default_factory=lambda: {
-            "scout": "agy:gemini-3.8-flash-high",
-            "architect": "pi:openai-codex/gpt-6.1-sol:high",
-            "reviewer": "agy:gemini-4-argon-high",
-        }
-    )
-    worker_pool: Dict[str, Any] = Field(
-        default_factory=lambda: {
-            "worker-1": {
-                "binding": "claude:claude-3-opus",
-                "description": "Senior dev - Very capable for complex, architectural tasks",
-            },
-            "worker-2": {
-                "binding": "agy:gemini-3.8-flash",
-                "description": "Junior dev - Fast and cost-effective for boilerplate tasks",
-            },
-            "worker-3": {
-                "binding": "pi:xai/grok-4.7",
-                "description": "Mid dev - General implementation, backend, APIs, refactoring",
-            },
-        }
-    )
+    """Explicit project model overrides.
+
+    None means the field is absent and inherits the catalog product squad.
+    An empty worker_pool mapping is an explicit empty pool, not a missing one.
+    Pydantic must not populate these with the product squad, or absent files
+    become indistinguishable from explicit overrides.
+    """
+
+    default_squad: Optional[Dict[str, str]] = None
+    worker_pool: Optional[Dict[str, Any]] = None
 
 
 class TUIConfig(BaseModel):
@@ -93,7 +80,7 @@ def load_project_config(path: Optional[Path] = None) -> HerdrMasterConfig:
 def save_project_config(config: HerdrMasterConfig, path: Optional[Path] = None) -> Path:
     """Save HerdrMasterConfig to TOML format."""
     target_path = path or find_project_config_path() or (Path.cwd() / ".herdr-master.toml")
-    dumped = config.model_dump()
+    dumped = config.model_dump(exclude_none=True)
     toml_str = tomli_w.dumps(dumped)
 
     target_path.parent.mkdir(parents=True, exist_ok=True)
@@ -103,33 +90,58 @@ def save_project_config(config: HerdrMasterConfig, path: Optional[Path] = None) 
     return target_path
 
 
-def squad_from_project_config(config: HerdrMasterConfig) -> Squad:
-    """Build a Squad domain object from HerdrMasterConfig."""
-    squad_dict = config.models.default_squad
-    scout_slug = squad_dict.get("scout", "agy:gemini-3.8-flash-high")
-    architect_slug = squad_dict.get("architect", "pi:openai-codex/gpt-6.1-sol:high")
-    reviewer_slug = squad_dict.get("reviewer", "agy:gemini-4-argon-high")
-
-    scout = HarnessBinding.from_slug(scout_slug, label="scout")
-    architect = HarnessBinding.from_slug(architect_slug, label="architect")
-    reviewer = HarnessBinding.from_slug(reviewer_slug, label="reviewer")
-
+def bindings_from_worker_mapping(worker_pool: Dict[str, Any]) -> List[HarnessBinding]:
+    """Parse an explicit project worker table. Effort is cleared."""
     pool: List[HarnessBinding] = []
-    order = 0
-    for label, val in config.models.worker_pool.items():
+    for order, (label, val) in enumerate(worker_pool.items()):
         if isinstance(val, dict):
             slug_str = val.get("binding") or val.get("slug") or ""
-            desc = val.get("description")
             binding = HarnessBinding.from_slug(
-                slug_str, label=label, description=desc, order=order
+                slug_str,
+                label=label,
+                description=val.get("description"),
+                enabled=bool(val.get("enabled", True)),
+                order=int(val.get("order", order)),
             )
         else:
             binding = HarnessBinding.from_slug(str(val), label=label, order=order)
-        # Workers have no fixed effort; Architect decides dynamically
         binding.effort = None
         pool.append(binding)
-        order += 1
+    return pool
 
+
+def project_model_overrides(config: HerdrMasterConfig) -> Dict[str, Any]:
+    """Return only fields present in the project file.
+
+    ``worker_pool`` is None when the project did not set one. An empty list means
+    the project explicitly configured an empty pool.
+    """
+    roles: Dict[str, str] = {}
+    raw_roles = config.models.default_squad or {}
+    for key in ("scout", "architect", "reviewer"):
+        value = raw_roles.get(key)
+        if value:
+            roles[key] = value
+    workers: Optional[List[HarnessBinding]] = None
+    if config.models.worker_pool is not None:
+        workers = bindings_from_worker_mapping(config.models.worker_pool)
+    return {"roles": roles, "worker_pool": workers}
+
+
+def squad_from_project_config(config: HerdrMasterConfig) -> Squad:
+    """Build a Squad from explicit project fields, inheriting the catalog otherwise."""
+    product = Squad()
+    explicit = project_model_overrides(config)
+    scout = product.scout
+    architect = product.architect
+    reviewer = product.reviewer
+    if "scout" in explicit["roles"]:
+        scout = HarnessBinding.from_slug(explicit["roles"]["scout"], label="scout")
+    if "architect" in explicit["roles"]:
+        architect = HarnessBinding.from_slug(explicit["roles"]["architect"], label="architect")
+    if "reviewer" in explicit["roles"]:
+        reviewer = HarnessBinding.from_slug(explicit["roles"]["reviewer"], label="reviewer")
+    pool = product.worker_pool if explicit["worker_pool"] is None else explicit["worker_pool"]
     return Squad(
         scout=scout,
         architect=architect,
@@ -144,6 +156,8 @@ def squad_to_project_config(
 ) -> HerdrMasterConfig:
     """Export a Squad into HerdrMasterConfig models."""
     cfg = existing_config or HerdrMasterConfig()
+    if cfg.models.default_squad is None:
+        cfg.models.default_squad = {}
     cfg.models.default_squad["scout"] = squad.scout.to_slug()
     cfg.models.default_squad["architect"] = squad.architect.to_slug()
     cfg.models.default_squad["reviewer"] = squad.reviewer.to_slug()
@@ -153,6 +167,7 @@ def squad_to_project_config(
         key = worker.label or f"worker-{idx + 1}"
         entry: Dict[str, Any] = {
             "binding": worker.to_slug(include_effort=False),
+            "enabled": bool(worker.enabled),
         }
         if worker.description:
             entry["description"] = worker.description

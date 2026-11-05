@@ -6,6 +6,8 @@ from typing import Any, Dict, List, Optional
 
 from pydantic import BaseModel, Field
 
+from herdr_master.core.catalog import HarnessKind, default_squad_data
+
 
 class WorkerState(str, Enum):
     SPAWNING = "SPAWNING"
@@ -19,15 +21,6 @@ class WorkerState(str, Enum):
     SQUASHING = "SQUASHING"
     LANDED = "LANDED"
     FAILED = "FAILED"
-
-
-class HarnessKind(str, Enum):
-    AGY = "agy"
-    PI = "pi"
-    CLAUDE = "claude"
-    OPENCODE = "opencode"
-    CODEX = "codex"
-    GEMINI = "gemini"
 
 
 class EffortLevel(str, Enum):
@@ -77,40 +70,46 @@ class HarnessBinding(BaseModel):
         )
 
 
+def _catalog_binding(role: str) -> HarnessBinding:
+    """Build one product role binding. Each call returns a new object."""
+    record = default_squad_data()[role]
+    effort = record.get("effort")
+    return HarnessBinding(
+        kind=HarnessKind(record["kind"]),
+        model=record["model"],
+        effort=EffortLevel(effort) if effort else None,
+        label=record.get("label"),
+        description=record.get("description"),
+        enabled=bool(record.get("enabled", True)),
+        order=int(record.get("order", 0)),
+    )
+
+
+def _catalog_worker_pool() -> List[HarnessBinding]:
+    """Build a fresh product worker pool. Effort stays unset."""
+    pool: List[HarnessBinding] = []
+    for record in default_squad_data()["worker_pool"]:
+        pool.append(
+            HarnessBinding(
+                kind=HarnessKind(record["kind"]),
+                model=record["model"],
+                effort=None,
+                label=record.get("label"),
+                description=record.get("description"),
+                enabled=bool(record.get("enabled", True)),
+                order=int(record.get("order", 0)),
+            )
+        )
+    return pool
+
+
 class Squad(BaseModel):
     """Squad configuration containing core Ergo pipeline roles and ordered worker pool."""
 
-    scout: HarnessBinding = Field(
-        default_factory=lambda: HarnessBinding.from_slug("agy:gemini-3.8-flash-high")
-    )
-    architect: HarnessBinding = Field(
-        default_factory=lambda: HarnessBinding.from_slug("pi:openai-codex/gpt-6.1-sol:high")
-    )
-    reviewer: HarnessBinding = Field(
-        default_factory=lambda: HarnessBinding.from_slug("agy:gemini-4-argon-high")
-    )
-    worker_pool: List[HarnessBinding] = Field(
-        default_factory=lambda: [
-            HarnessBinding.from_slug(
-                "claude:claude-3-opus",
-                label="worker-1",
-                description="Senior dev - Very capable for complex, architectural tasks",
-                order=0,
-            ),
-            HarnessBinding.from_slug(
-                "agy:gemini-3.8-flash",
-                label="worker-2",
-                description="Junior dev - Fast and cost-effective for boilerplate tasks",
-                order=1,
-            ),
-            HarnessBinding.from_slug(
-                "pi:xai/grok-4.7",
-                label="worker-3",
-                description="Mid dev - General implementation, backend, APIs, refactoring",
-                order=2,
-            ),
-        ]
-    )
+    scout: HarnessBinding = Field(default_factory=lambda: _catalog_binding("scout"))
+    architect: HarnessBinding = Field(default_factory=lambda: _catalog_binding("architect"))
+    reviewer: HarnessBinding = Field(default_factory=lambda: _catalog_binding("reviewer"))
+    worker_pool: List[HarnessBinding] = Field(default_factory=_catalog_worker_pool)
 
     def reviewer_model_family(self) -> str:
         """Extract broad family prefix for reviewer model."""

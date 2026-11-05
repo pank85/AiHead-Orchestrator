@@ -54,6 +54,7 @@ class AgentSnapshot(BaseSnapshotModel):
     pane_id: str
     workspace_id: Optional[str] = None
     tab_id: Optional[str] = None
+    terminal_id: Optional[str] = None
     agent: Optional[str] = None
     name: Optional[str] = None
     agent_status: Optional[str] = None

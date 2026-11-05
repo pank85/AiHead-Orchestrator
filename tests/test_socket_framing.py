@@ -4,6 +4,7 @@ import asyncio
 import json
 import tempfile
 from pathlib import Path
+from types import SimpleNamespace
 from typing import Any, Dict, List
 
 import pytest
@@ -14,6 +15,7 @@ from herdr_master.herdr.snapshot import (
     SessionSnapshot,
 )
 from herdr_master.herdr.socket import (
+    HerdrConnectionError,
     HerdrRPCError,
     NDJSONBuffer,
     send_rpc,
@@ -212,3 +214,422 @@ async def test_start_agent_retries_on_agent_pane_busy():
 
     assert res["type"] == "agent_started"
     assert client._rpc.call_count == 2
+
+
+class _FakeAsyncStreamWriter:
+    """Mock StreamWriter for deterministic socket framing tests."""
+
+    def __init__(self) -> None:
+        self.written: List[bytes] = []
+        self.closed = False
+
+    def write(self, data: bytes) -> None:
+        self.written.append(data)
+
+    async def drain(self) -> None:
+        pass
+
+    def close(self) -> None:
+        self.closed = True
+
+    async def wait_closed(self) -> None:
+        pass
+
+
+def setup_fake_stream(monkeypatch: pytest.MonkeyPatch, tmp_path: Path):
+    """Provide a real StreamReader and controlled FakeWriter with mocked unix connection."""
+    sock_path = tmp_path / "mock_stream.sock"
+    sock_path.touch()
+
+    reader = asyncio.StreamReader(loop=asyncio.get_running_loop())
+    writer = _FakeAsyncStreamWriter()
+
+    async def _fake_open_unix_connection(path: str):
+        assert Path(path) == sock_path
+        return reader, writer
+
+    monkeypatch.setattr(asyncio, "open_unix_connection", _fake_open_unix_connection)
+    monkeypatch.setattr(
+        "herdr_master.herdr.subscribe.uuid", SimpleNamespace(uuid4=lambda: SimpleNamespace(hex="1"))
+    )
+    return sock_path, reader, writer
+
+
+@pytest.mark.asyncio
+async def test_subscribe_coalesced_ack_and_multiple_events(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+):
+    """Verify that multiple events coalesced with the subscription acknowledgement are not lost."""
+    sock_path, reader, writer = setup_fake_stream(monkeypatch, tmp_path)
+    client = HerdrClient(socket_path=sock_path)
+    sub = client.subscribe([{"type": "pane.agent_status_changed", "pane_id": "p-1"}])
+
+    ack = {"id": "sub-1", "result": {"type": "subscription_started"}}
+    ev1 = {
+        "event": "pane.agent_status_changed",
+        "data": {"pane_id": "p-1", "agent_status": "working"},
+    }
+    ev2 = {
+        "event": "pane.agent_status_changed",
+        "data": {"pane_id": "p-1", "agent_status": "blocked"},
+    }
+
+    # Feed acknowledgement and two complete events in a single chunk
+    feed_chunk = (
+        json.dumps(ack).encode("utf-8")
+        + b"\n"
+        + json.dumps(ev1).encode("utf-8")
+        + b"\n"
+        + json.dumps(ev2).encode("utf-8")
+        + b"\n"
+    )
+    reader.feed_data(feed_chunk)
+
+    started = await sub.connect()
+    assert started["result"]["type"] == "subscription_started"
+
+    # Events arriving with acknowledgement must be immediately readable
+    # without waiting for more chunks
+    events_iter = sub.events().__aiter__()
+    received_1 = await anext(events_iter)
+    assert received_1 == ev1
+    received_2 = await anext(events_iter)
+    assert received_2 == ev2
+
+    reader.feed_eof()
+    with pytest.raises(StopAsyncIteration):
+        await anext(events_iter)
+
+    assert sub._closed is True
+    assert writer.closed is True
+
+
+@pytest.mark.asyncio
+async def test_subscribe_coalesced_ack_complete_and_partial_event(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+):
+    """Verify handling of ack + complete event + partial event completed by subsequent feed."""
+    sock_path, reader, writer = setup_fake_stream(monkeypatch, tmp_path)
+    client = HerdrClient(socket_path=sock_path)
+    sub = client.subscribe([{"type": "pane.agent_status_changed", "pane_id": "p-1"}])
+
+    ack = {"id": "sub-1", "result": {"type": "subscription_started"}}
+    ev1 = {
+        "event": "pane.agent_status_changed",
+        "data": {"pane_id": "p-1", "agent_status": "working"},
+    }
+    ev2 = {
+        "event": "pane.agent_status_changed",
+        "data": {"pane_id": "p-1", "agent_status": "done"},
+    }
+
+    ev2_bytes = json.dumps(ev2).encode("utf-8") + b"\n"
+    split_point = 15
+    part_a = ev2_bytes[:split_point]
+    part_b = ev2_bytes[split_point:]
+
+    # Feed 1: ack + complete ev1 + partial ev2
+    chunk1 = (
+        json.dumps(ack).encode("utf-8")
+        + b"\n"
+        + json.dumps(ev1).encode("utf-8")
+        + b"\n"
+        + part_a
+    )
+    reader.feed_data(chunk1)
+
+    started = await sub.connect()
+    assert started["result"]["type"] == "subscription_started"
+
+    # ev1 is immediately yielded without waiting for the rest of ev2
+    events_iter = sub.events().__aiter__()
+    received_1 = await anext(events_iter)
+    assert received_1 == ev1
+
+    # Now deliver part_b to complete ev2, then EOF
+    reader.feed_data(part_b)
+    reader.feed_eof()
+
+    received_2 = await anext(events_iter)
+    assert received_2 == ev2
+
+    with pytest.raises(StopAsyncIteration):
+        await anext(events_iter)
+
+    assert sub._closed is True
+
+
+@pytest.mark.asyncio
+async def test_subscribe_immediate_eof_after_coalesced_events(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+):
+    """Verify clean EOF handling when server disconnects immediately after coalesced frames."""
+    sock_path, reader, writer = setup_fake_stream(monkeypatch, tmp_path)
+    client = HerdrClient(socket_path=sock_path)
+    sub = client.subscribe([{"type": "pane.agent_status_changed", "pane_id": "p-1"}])
+
+    ack = {"id": "sub-1", "result": {"type": "subscription_started"}}
+    ev1 = {
+        "event": "pane.agent_status_changed",
+        "data": {"pane_id": "p-1", "agent_status": "working"},
+    }
+    ev2 = {
+        "event": "pane.agent_status_changed",
+        "data": {"pane_id": "p-1", "agent_status": "done"},
+    }
+
+    # Feed ack + ev1 + ev2 and immediately EOF
+    feed_chunk = (
+        json.dumps(ack).encode("utf-8")
+        + b"\n"
+        + json.dumps(ev1).encode("utf-8")
+        + b"\n"
+        + json.dumps(ev2).encode("utf-8")
+        + b"\n"
+    )
+    reader.feed_data(feed_chunk)
+    reader.feed_eof()
+
+    started = await sub.connect()
+    assert started["result"]["type"] == "subscription_started"
+
+    # Both events must be drained before EOF terminates the stream cleanly
+    received = []
+    async for ev in sub.events():
+        received.append(ev)
+
+    assert received == [ev1, ev2]
+    assert sub._closed is True
+
+
+@pytest.mark.asyncio
+async def test_subscribe_ordering_and_no_duplication(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+):
+    """Verify events are yielded in exact wire order with no duplicates across chunk boundaries."""
+    sock_path, reader, writer = setup_fake_stream(monkeypatch, tmp_path)
+    client = HerdrClient(socket_path=sock_path)
+    sub = client.subscribe([{"type": "pane.agent_status_changed", "pane_id": "p-1"}])
+
+    ack = {"id": "sub-1", "result": {"type": "subscription_started"}}
+    events = [
+        {"event": "pane.agent_status_changed", "data": {"seq": i, "pane_id": "p-1"}}
+        for i in range(5)
+    ]
+
+    # Ack + event 0
+    reader.feed_data(
+        json.dumps(ack).encode("utf-8") + b"\n" + json.dumps(events[0]).encode("utf-8") + b"\n"
+    )
+    await sub.connect()
+
+    # Events 1 and 2 in next chunk
+    chunk_1_2 = (
+        json.dumps(events[1]).encode("utf-8")
+        + b"\n"
+        + json.dumps(events[2]).encode("utf-8")
+        + b"\n"
+    )
+    reader.feed_data(chunk_1_2)
+    # Event 3 and 4 in subsequent individual chunks
+    reader.feed_data(json.dumps(events[3]).encode("utf-8") + b"\n")
+    reader.feed_data(json.dumps(events[4]).encode("utf-8") + b"\n")
+    reader.feed_eof()
+
+    collected = []
+    async for ev in sub.events():
+        collected.append(ev)
+
+    assert len(collected) == 5
+    assert collected == events
+
+
+@pytest.mark.asyncio
+async def test_subscribe_double_subscribe_and_cleanup(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+):
+    """Verify double-subscribe refusal, idempotent close, and pending event release."""
+    sock_path, reader, writer = setup_fake_stream(monkeypatch, tmp_path)
+    client = HerdrClient(socket_path=sock_path)
+    sub = client.subscribe([{"type": "pane.agent_status_changed", "pane_id": "p-1"}])
+
+    ack = {"id": "sub-1", "result": {"type": "subscription_started"}}
+    ev1 = {"event": "pane.agent_status_changed", "data": {"seq": 1}}
+    ev2 = {"event": "pane.agent_status_changed", "data": {"seq": 2}}
+
+    reader.feed_data(
+        json.dumps(ack).encode("utf-8")
+        + b"\n"
+        + json.dumps(ev1).encode("utf-8")
+        + b"\n"
+        + json.dumps(ev2).encode("utf-8")
+        + b"\n"
+    )
+
+    await sub.connect()
+    assert len(sub._pending_events) == 2
+
+    # Second subscribe refusal on active connection
+    with pytest.raises(RuntimeError, match="Socket already subscribed"):
+        await sub.subscribe()
+    with pytest.raises(RuntimeError, match="Socket already subscribed"):
+        await sub.connect()
+
+    # Explicit close cleans up and drops pending frames
+    await sub.close()
+    assert sub._closed is True
+    assert len(sub._pending_events) == 0
+    assert len(sub._buffer.remaining) == 0
+    assert writer.closed is True
+
+    # Closing again is idempotent
+    await sub.close()
+
+    # Calling events() after close raises RuntimeError
+    with pytest.raises(RuntimeError, match=r"Must call connect\(\) before reading events"):
+        async for _ in sub.events():
+            pass
+
+    # Calling connect() after close raises RuntimeError
+    with pytest.raises(RuntimeError, match="Subscription is closed"):
+        await sub.connect()
+
+
+@pytest.mark.asyncio
+async def test_subscribe_ack_error_cleanup(monkeypatch: pytest.MonkeyPatch, tmp_path: Path):
+    """Verify that an error in the ack frame closes the connection and discards surplus data."""
+    sock_path, reader, writer = setup_fake_stream(monkeypatch, tmp_path)
+    client = HerdrClient(socket_path=sock_path)
+    sub = client.subscribe([{"type": "pane.agent_status_changed", "pane_id": "p-1"}])
+
+    err_ack = {
+        "id": "sub-1",
+        "error": {"code": "PERMISSION_DENIED", "message": "Access denied"},
+    }
+    surplus_ev = {"event": "pane.agent_status_changed", "data": {"seq": 1}}
+
+    reader.feed_data(
+        json.dumps(err_ack).encode("utf-8")
+        + b"\n"
+        + json.dumps(surplus_ev).encode("utf-8")
+        + b"\n"
+    )
+
+    with pytest.raises(HerdrRPCError) as exc_info:
+        await sub.connect()
+
+    assert exc_info.value.code == "PERMISSION_DENIED"
+    assert sub._closed is True
+    assert len(sub._pending_events) == 0
+    assert len(sub._buffer.remaining) == 0
+    assert writer.closed is True
+
+
+@pytest.mark.asyncio
+async def test_subscribe_mismatched_request_id_rejected(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+):
+    """Finding 5: subscription ACK with mismatched request ID is rejected and closes socket."""
+    sock_path, reader, writer = setup_fake_stream(monkeypatch, tmp_path)
+    client = HerdrClient(socket_path=sock_path)
+    sub = client.subscribe([{"type": "pane.agent_status_changed", "pane_id": "p-1"}])
+
+    wrong_id_ack = {
+        "id": "wrong-request-id",
+        "result": {"type": "subscription_started"},
+    }
+    reader.feed_data(json.dumps(wrong_id_ack).encode("utf-8") + b"\n")
+
+    with pytest.raises(HerdrConnectionError, match="mismatched request id"):
+        await sub.connect()
+
+    assert sub._closed is True
+    assert writer.closed is True
+
+
+@pytest.mark.asyncio
+async def test_subscribe_wrong_result_tag_rejected(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+):
+    """Finding 5: subscription ACK with missing or wrong result tag is rejected."""
+    sock_path, reader, writer = setup_fake_stream(monkeypatch, tmp_path)
+    client = HerdrClient(socket_path=sock_path)
+    sub = client.subscribe([{"type": "pane.agent_status_changed", "pane_id": "p-1"}])
+
+    bad_tag_ack = {
+        "id": "sub-1",
+        "result": {"type": "wrong_tag"},
+    }
+    reader.feed_data(json.dumps(bad_tag_ack).encode("utf-8") + b"\n")
+
+    with pytest.raises(HerdrConnectionError, match="Invalid subscription acknowledgement"):
+        await sub.connect()
+
+    assert sub._closed is True
+    assert writer.closed is True
+
+
+@pytest.mark.asyncio
+async def test_subscribe_event_before_ack_rejected(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+):
+    """Finding 5: premature event frame before subscription ACK is rejected."""
+    sock_path, reader, writer = setup_fake_stream(monkeypatch, tmp_path)
+    client = HerdrClient(socket_path=sock_path)
+    sub = client.subscribe([{"type": "pane.agent_status_changed", "pane_id": "p-1"}])
+
+    event_frame = {
+        "event": "pane.agent_status_changed",
+        "data": {"pane_id": "p-1", "agent_status": "working"},
+    }
+    reader.feed_data(json.dumps(event_frame).encode("utf-8") + b"\n")
+
+    with pytest.raises(HerdrConnectionError):
+        await sub.connect()
+
+    assert sub._closed is True
+    assert writer.closed is True
+
+
+@pytest.mark.asyncio
+async def test_subscribe_coalesced_ack_and_event_real_unix_socket():
+    """Verify that coalesced ack and event are handled over a real Unix domain socket."""
+    with tempfile.TemporaryDirectory() as tmpdir:
+        sock_path = Path(tmpdir) / "coalesced_sub.sock"
+
+        async def handle_sub_client(reader: asyncio.StreamReader, writer: asyncio.StreamWriter):
+            line = await reader.readline()
+            req = json.loads(line.decode("utf-8"))
+            start_resp = {"id": req["id"], "result": {"type": "subscription_started"}}
+            ev = {
+                "event": "pane.agent_status_changed",
+                "data": {"pane_id": "p-1", "workspace_id": "ws-1", "agent_status": "working"},
+            }
+            # Write both ack and event in a single write call
+            writer.write(
+                json.dumps(start_resp).encode("utf-8")
+                + b"\n"
+                + json.dumps(ev).encode("utf-8")
+                + b"\n"
+            )
+            await writer.drain()
+            await asyncio.sleep(0.05)
+            writer.close()
+            await writer.wait_closed()
+
+        server = await asyncio.start_unix_server(handle_sub_client, path=str(sock_path))
+        try:
+            client = HerdrClient(socket_path=sock_path)
+            sub = client.subscribe([{"type": "pane.agent_status_changed", "pane_id": "p-1"}])
+            started = await sub.connect()
+            assert started["result"]["type"] == "subscription_started"
+
+            events = []
+            async for ev in sub.events():
+                events.append(ev)
+
+            assert len(events) == 1
+            assert events[0]["data"]["agent_status"] == "working"
+        finally:
+            server.close()
+            await server.wait_closed()

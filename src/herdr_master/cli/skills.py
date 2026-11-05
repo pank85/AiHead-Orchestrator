@@ -1,11 +1,16 @@
 """CLI command and manager for installing standalone skills across agent harnesses."""
 
+from __future__ import annotations
+
 from pathlib import Path
 from typing import Dict, List, NamedTuple
 
 import typer
 from rich.console import Console
 from rich.table import Table
+
+from herdr_master.core.catalog import CANONICAL_SKILLS, HarnessKind, get_harness
+from herdr_master.core.skill_resources import SkillResourceError, get_skill_source
 
 console = Console()
 skills_app = typer.Typer(
@@ -24,84 +29,54 @@ def find_repo_root() -> Path:
     """Find the root directory of herdr-master containing skills/."""
     current = Path(__file__).resolve().parent
     for p in [current, *current.parents]:
-        if (p / "skills" / "herdr-master" / "SKILL.md").exists():
+        if (p / "skills" / "herdr-master" / "SKILL.md").exists() and (
+            p / "skills" / "ergo" / "SKILL.md"
+        ).exists():
             return p
-    # Fallback to standard project path
-    fallback = Path("/home/pank/projects/herdr-master")
-    if (fallback / "skills" / "herdr-master" / "SKILL.md").exists():
-        return fallback
     raise FileNotFoundError("Could not locate herdr-master root with skills/ directory.")
 
 
-def get_skill_targets() -> Dict[str, List[TargetLocation]]:
-    """Return map of skill_name -> target locations across all 4 supported harnesses."""
-    home = Path.home()
-    return {
-        "herdr-master": [
-            TargetLocation(
-                harness="Antigravity (agy)",
-                kind="skill",
-                path=home / ".gemini" / "config" / "skills" / "herdr-master" / "SKILL.md",
-                description="Slash command /herdr-master",
-            ),
-            TargetLocation(
-                harness="Pi (pi)",
-                kind="command",
-                path=home / ".pi" / "agent" / "prompts" / "herdr-master.md",
-                description="Slash command /herdr-master",
-            ),
-            TargetLocation(
-                harness="Claude Code (claude)",
-                kind="command",
-                path=home / ".claude" / "commands" / "herdr-master.md",
-                description="Slash command /herdr-master",
-            ),
-            TargetLocation(
-                harness="OpenCode (opencode)",
-                kind="skill",
-                path=home / ".config" / "opencode" / "skills" / "herdr-master" / "SKILL.md",
-                description="Skill /herdr-master",
-            ),
-            TargetLocation(
-                harness="OpenCode (opencode)",
-                kind="command",
-                path=home / ".config" / "opencode" / "commands" / "herdr-master.md",
-                description="Command /herdr-master",
-            ),
-        ],
-        "ergo": [
-            TargetLocation(
-                harness="Antigravity (agy)",
-                kind="skill",
-                path=home / ".gemini" / "config" / "skills" / "ergo" / "SKILL.md",
-                description="Slash command /ergo",
-            ),
-            TargetLocation(
-                harness="Pi (pi)",
-                kind="command",
-                path=home / ".pi" / "agent" / "prompts" / "ergo.md",
-                description="Slash command /ergo",
-            ),
-            TargetLocation(
-                harness="Claude Code (claude)",
-                kind="command",
-                path=home / ".claude" / "commands" / "ergo.md",
-                description="Slash command /ergo",
-            ),
-            TargetLocation(
-                harness="OpenCode (opencode)",
-                kind="skill",
-                path=home / ".config" / "opencode" / "skills" / "ergo" / "SKILL.md",
-                description="Skill /ergo",
-            ),
-            TargetLocation(
-                harness="OpenCode (opencode)",
-                kind="command",
-                path=home / ".config" / "opencode" / "commands" / "ergo.md",
-                description="Command /ergo",
-            ),
-        ],
-    }
+def get_skill_targets(home: Path | None = None) -> Dict[str, List[TargetLocation]]:
+    """Return map of skill_name -> target locations across supported harnesses from catalog."""
+    base_home = home if home is not None else Path.home()
+    targets_map: Dict[str, List[TargetLocation]] = {}
+
+    for skill in CANONICAL_SKILLS:
+        locs: List[TargetLocation] = []
+        for kind in HarnessKind:
+            spec = get_harness(kind.value)
+            for target in spec.install_targets:
+                resolved_path = Path(
+                    target.path_template.format(home=str(base_home), skill=skill)
+                )
+                locs.append(
+                    TargetLocation(
+                        harness=f"{spec.label} ({spec.kind})",
+                        kind=target.kind,
+                        path=resolved_path,
+                        description=f"/{skill} ({target.description})",
+                    )
+                )
+        targets_map[skill] = locs
+
+    return targets_map
+
+
+def _evaluate_link_status(target_path: Path, canonical_path: Path | None) -> str:
+    """Distinguish live active link from missing, broken, or stale links."""
+    if target_path.is_symlink():
+        try:
+            resolved = target_path.resolve()
+            if not target_path.exists():
+                return "[red]✗ Broken[/red]"
+            if canonical_path is not None and resolved == canonical_path.resolve():
+                return "[green]✓ Active[/green]"
+            return "[yellow]⚠ Stale[/yellow]"
+        except Exception:
+            return "[red]✗ Broken[/red]"
+    elif target_path.exists():
+        return "[yellow]⚠ Stale[/yellow]"
+    return "[red]✗ Missing[/red]"
 
 
 @skills_app.command("install")
@@ -113,34 +88,49 @@ def install_skills(
         help="Overwrite or update existing symlinks",
     ),
 ) -> None:
-    """Install and symlink standalone skills and commands across all 4 harnesses."""
-    try:
-        repo_root = find_repo_root()
-    except Exception as e:
-        console.print(f"[red]Error locating skills:[/red] {e}")
-        raise typer.Exit(code=1) from e
-
+    """Install and symlink standalone skills and commands across all supported harnesses."""
     targets_map = get_skill_targets()
     console.print(
         "[bold cyan]👑 Installing Standalone Skills & Commands across AI Harnesses...[/bold cyan]\n"
     )
 
     installed_count = 0
+    has_error = False
+
     for skill_name, targets in targets_map.items():
-        canonical_file = repo_root / "skills" / skill_name / "SKILL.md"
-        if not canonical_file.exists():
-            console.print(f"[red]Warning: Canonical skill not found at {canonical_file}[/red]")
+        try:
+            canonical_file = get_skill_source(skill_name)
+        except SkillResourceError as e:
+            console.print(f"[red]Error locating canonical skill '{skill_name}':[/red] {e}")
+            has_error = True
+            continue
+        except Exception as e:
+            console.print(f"[red]Unexpected error locating skill '{skill_name}':[/red] {e}")
+            has_error = True
             continue
 
         for target in targets:
             try:
                 target.path.parent.mkdir(parents=True, exist_ok=True)
-                if target.path.is_symlink() or target.path.exists():
+                if target.path.is_symlink():
                     if force:
                         target.path.unlink()
                     else:
-                        console.print(f"[dim]Skipping existing {target.path}[/dim]")
+                        console.print(f"[dim]Skipping existing symlink {target.path}[/dim]")
                         continue
+                elif target.path.exists():
+                    if target.path.is_dir():
+                        console.print(
+                            f"[red]Refusing to overwrite existing directory {target.path}[/red]"
+                        )
+                        has_error = True
+                        continue
+                    if force:
+                        target.path.unlink()
+                    else:
+                        console.print(f"[dim]Skipping existing file {target.path}[/dim]")
+                        continue
+
                 target.path.symlink_to(canonical_file)
                 console.print(
                     f"[green]✓[/green] [bold]{target.harness}[/bold] ({target.kind}): "
@@ -149,6 +139,13 @@ def install_skills(
                 installed_count += 1
             except Exception as e:
                 console.print(f"[red]Failed to link {target.path}:[/red] {e}")
+                has_error = True
+
+    if has_error:
+        console.print(
+            f"\n[red]Completed with errors. {installed_count} skill/command links configured.[/red]"
+        )
+        raise typer.Exit(code=1)
 
     console.print(
         f"\n[bold green]✨ Done! {installed_count} skill/command links configured.[/bold green]"
@@ -158,7 +155,11 @@ def install_skills(
         "[bold]claude[/bold], [bold]opencode[/bold]:"
     )
     console.print("  • [cyan]/herdr-master [task][/cyan] — Root orchestrator for multiple jobs")
-    console.print("  • [cyan]/ergo [--herdr] [intent][/cyan] — Phased pipeline")
+    console.print("  • [cyan]/ergo [--native] [--models ...] [intent][/cyan] — Phased pipeline")
+    console.print(
+        "  • [cyan]/orchestration [--models ...] [intent][/cyan] — Phased pipeline, "
+        "host subagents only (no Herdr)"
+    )
 
 
 @skills_app.command("list")
@@ -174,9 +175,13 @@ def list_skills() -> None:
     table.add_column("Status", justify="center")
 
     for skill_name, targets in targets_map.items():
+        try:
+            canonical_file = get_skill_source(skill_name)
+        except Exception:
+            canonical_file = None
+
         for target in targets:
-            is_installed = target.path.exists() or target.path.is_symlink()
-            status_badge = "[green]✓ Active[/green]" if is_installed else "[red]✗ Missing[/red]"
+            status_badge = _evaluate_link_status(target.path, canonical_file)
             table.add_row(
                 target.harness,
                 f"/{skill_name}",
