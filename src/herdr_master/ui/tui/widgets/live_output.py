@@ -249,19 +249,22 @@ class LivePaneView(Vertical):
         display: none;
     }
     #prompt-input {
-        height: 1;
-        min-height: 1;
-        border: none;
+        height: 3;
+        min-height: 3;
+        border: round #444444;
         padding: 0 1;
-        background: #1a1a1a;
+        background: #141414;
         color: #ffffff;
         width: 100%;
+        margin: 0;
     }
     #prompt-input:focus {
-        background: #252525;
+        border: round #0087d7;
+        background: #1a1a1a;
     }
     #prompt-input:disabled {
-        background: #141414;
+        border: round #222222;
+        background: #111111;
         color: #555555;
     }
     #live-pane-controls {
