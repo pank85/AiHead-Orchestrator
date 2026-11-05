@@ -73,6 +73,14 @@ class CenterDeck(Vertical):
     ) -> None:
         self._check_layout()
 
+    def on_workspace_browser_pane_activated(
+        self, event: WorkspaceBrowser.PaneActivated
+    ) -> None:
+        self.focus_live_input()
+
+    def focus_live_input(self) -> None:
+        self._live_pane_view.focus_input()
+
     def update_state(self, app_state: AppState) -> None:
         self.app_state = app_state
         self._workspace_view.update_state(app_state)
