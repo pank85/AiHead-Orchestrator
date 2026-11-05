@@ -5,6 +5,7 @@ from __future__ import annotations
 import re
 from typing import Callable, Optional
 
+import pyte
 from rich.text import Text
 from textual import events
 from textual.app import ComposeResult
@@ -134,14 +135,20 @@ class TargetDetails(ModalScreen[None]):
 class LivePaneOutput(VerticalScroll):
     """Scrollable container for bounded terminal output snapshots."""
 
+    can_focus = True
+
     DEFAULT_CSS = """
     LivePaneOutput {
         height: 1fr;
         width: 100%;
         background: #0c0c0c;
+        border: round #222222;
         overflow-y: scroll;
         overflow-x: hidden;
         color: #dddddd;
+    }
+    LivePaneOutput:focus {
+        border: round #0087d7;
     }
     #live-pane-output-text {
         width: 100%;
@@ -149,16 +156,43 @@ class LivePaneOutput(VerticalScroll):
     }
     """
 
-    def __init__(self, **kwargs) -> None:
+    def __init__(
+        self,
+        on_pause_changed: Optional[Callable[[bool], None]] = None,
+        on_terminal_input: Optional[
+            Callable[[Optional[str], Optional[list[str]]], None]
+        ] = None,
+        **kwargs,
+    ) -> None:
         super().__init__(**kwargs)
         self._static = Static("", id="live-pane-output-text")
+        self._content = self._static
         self._rich_text = Text("")
         self.is_paused = False
         self._programmatic = False
-        self.on_pause_changed: Optional[Callable[[bool], None]] = None
+        self.on_pause_changed = on_pause_changed
+        self._on_terminal_input = on_terminal_input
+        self._pyte_screen = pyte.HistoryScreen(120, 40, history=1000)
+        self._pyte_stream = pyte.Stream(self._pyte_screen)
+
+    @property
+    def on_terminal_input(
+        self,
+    ) -> Optional[Callable[[Optional[str], Optional[list[str]]], None]]:
+        return self._on_terminal_input
+
+    @on_terminal_input.setter
+    def on_terminal_input(
+        self, value: Optional[Callable[[Optional[str], Optional[list[str]]], None]]
+    ) -> None:
+        self._on_terminal_input = value
+
+    @property
+    def cursor(self) -> tuple[int, int]:
+        return (self._pyte_screen.cursor.x, self._pyte_screen.cursor.y)
 
     def compose(self) -> ComposeResult:
-        yield self._static
+        yield self._content
 
     def _scroll_bottom_if_following(self) -> None:
         # Layout must settle before max_scroll_y is known. A later manual pause wins.
@@ -169,11 +203,113 @@ class LivePaneOutput(VerticalScroll):
             finally:
                 self._programmatic = False
 
-    def update_snapshot(self, rich_text: Text) -> None:
-        self._rich_text = rich_text
-        self._static.update(rich_text)
+    def _refresh_display(self) -> None:
+        try:
+            if self.has_focus:
+                display_text = self._rich_text.copy()
+                display_text.append(Text("█", style="bold cyan"))
+                self._content.update(display_text)
+            else:
+                self._content.update(self._rich_text)
+        except Exception:
+            pass
+
+    def update_snapshot(self, raw: str | Text, reset: bool = False) -> None:
+        if reset:
+            self._pyte_screen.reset()
+        if isinstance(raw, str):
+            raw_str = raw
+            self._rich_text = Text.from_ansi(sanitize_ansi(raw_str))
+        else:
+            self._rich_text = raw
+            raw_str = raw.plain
+
+        self._pyte_screen.reset()
+        if raw_str:
+            try:
+                self._pyte_stream.feed(raw_str.replace("\r\n", "\n").replace("\n", "\r\n"))
+            except Exception:
+                pass
+
+        self._refresh_display()
         if not self.is_paused:
             self.call_after_refresh(self._scroll_bottom_if_following)
+
+    def on_focus(self, event: events.Focus) -> None:
+        self._refresh_display()
+
+    def on_blur(self, event: events.Blur) -> None:
+        self._refresh_display()
+
+    def on_key(self, event: events.Key) -> None:
+        if event.key in ("ctrl+right_square_bracket", "ctrl+]", "ctrl+close_bracket"):
+            event.stop()
+            try:
+                browser = self.app.query_one("WorkspaceBrowser")
+                try:
+                    browser.query_one("#workspace-tree").focus()
+                except Exception:
+                    browser.focus()
+            except Exception:
+                pass
+            return
+
+        if event.key == "escape":
+            event.stop()
+            if self._on_terminal_input:
+                self._on_terminal_input(None, ["esc"])
+            return
+
+        key_map = {
+            "enter": "enter",
+            "backspace": "backspace",
+            "tab": "tab",
+            "shift+tab": "backtab",
+            "backtab": "backtab",
+            "up": "up",
+            "down": "down",
+            "left": "left",
+            "right": "right",
+            "home": "home",
+            "end": "end",
+            "pageup": "pageup",
+            "pagedown": "pagedown",
+            "delete": "delete",
+            "ctrl+c": "ctrl+c",
+            "ctrl+d": "ctrl+d",
+            "ctrl+z": "ctrl+z",
+            "ctrl+l": "ctrl+l",
+            "ctrl+u": "ctrl+u",
+            "ctrl+w": "ctrl+w",
+            "ctrl+a": "ctrl+a",
+            "ctrl+e": "ctrl+e",
+            "ctrl+k": "ctrl+k",
+            "ctrl+r": "ctrl+r",
+        }
+
+        if event.key in key_map:
+            event.stop()
+            if self._on_terminal_input:
+                self._on_terminal_input(None, [key_map[event.key]])
+            return
+
+        if event.key == "space":
+            event.stop()
+            if self._on_terminal_input:
+                self._on_terminal_input(" ", None)
+            return
+
+        if event.character and len(event.character) == 1 and event.character.isprintable():
+            event.stop()
+            if self._on_terminal_input:
+                self._on_terminal_input(event.character, None)
+            return
+
+    def on_paste(self, event: events.Paste) -> None:
+        if event.text:
+            event.stop()
+            if self._on_terminal_input:
+                self._on_terminal_input(event.text, None)
 
     def follow(self) -> None:
         self.is_paused = False
@@ -235,9 +371,13 @@ class LivePaneView(Vertical):
         height: 1fr;
         width: 100%;
         background: #0c0c0c;
+        border: round #222222;
         overflow-y: scroll;
         overflow-x: hidden;
         color: #dddddd;
+    }
+    #live-pane-output:focus {
+        border: round #0087d7;
     }
     #reply-text {
         height: 2;
@@ -249,6 +389,7 @@ class LivePaneView(Vertical):
         display: none;
     }
     #prompt-input {
+        display: none;
         height: 3;
         min-height: 3;
         border: round #444444;
@@ -372,6 +513,20 @@ class LivePaneView(Vertical):
             super().__init__()
             self.request = request
 
+    class TerminalInputRequested(Message):
+        """Operator typed or pasted directly into the interactive terminal screen."""
+
+        def __init__(
+            self,
+            lease: PaneLease,
+            text: Optional[str] = None,
+            keys: Optional[list[str]] = None,
+        ) -> None:
+            super().__init__()
+            self.lease = lease
+            self.text = text
+            self.keys = keys
+
     class DraftCancelled(Message):
         """Operator cancelled the unsent draft."""
 
@@ -379,7 +534,11 @@ class LivePaneView(Vertical):
         super().__init__(**kwargs)
         self._identity = Static("No pane selected", id="live-pane-identity")
         self._state_bar = Static("", id="live-pane-state")
-        self._output = LivePaneOutput(id="live-pane-output")
+        self._output = LivePaneOutput(
+            id="live-pane-output",
+            on_pause_changed=self._on_pause_changed,
+            on_terminal_input=self._handle_terminal_input,
+        )
         self._prompt_input = Input(
             placeholder="Type prompt and press Enter to send…",
             id="prompt-input",
@@ -418,6 +577,7 @@ class LivePaneView(Vertical):
 
     def on_mount(self) -> None:
         self._output.on_pause_changed = self._on_pause_changed
+        self._output.on_terminal_input = self._handle_terminal_input
         self._refresh_identity()
         self._refresh_state()
         self._refresh_controls()
@@ -477,21 +637,24 @@ class LivePaneView(Vertical):
             self._latest_rendered_text = None
             self._output.update_snapshot(
                 Text("Draft retained for original target. Cancel to view the current pane.",
-                     style="yellow")
+                     style="yellow"),
+                reset=True,
             )
         else:
             if frame.phase == "loading" and not frame.text_ansi:
                 rich = Text("Loading output…", style="dim")
                 snapshot_key = None
+                raw_payload: str | Text = rich
             else:
                 rich = Text.from_ansi(sanitize_ansi(frame.text_ansi))
                 snapshot_key = frame.text_ansi
+                raw_payload = frame.text_ansi
             self._stashed_rich_text = rich
             if not self._output.is_paused and (
                 snapshot_key != self._latest_rendered_text or pane_changed
             ):
                 self._latest_rendered_text = snapshot_key
-                self._output.update_snapshot(rich)
+                self._output.update_snapshot(raw_payload, reset=pane_changed)
 
         self._refresh_identity()
         self._refresh_state()
@@ -500,6 +663,23 @@ class LivePaneView(Vertical):
     def _on_pause_changed(self, is_paused: bool) -> None:
         self._refresh_state()
         self._refresh_controls()
+
+    def _handle_terminal_input(
+        self, text: Optional[str], keys: Optional[list[str]]
+    ) -> None:
+        if (
+            self._current_frame is not None
+            and self._current_frame.lease is not None
+            and self._current_frame.phase in ("live", "degraded")
+            and not self._draft_invalid
+        ):
+            self.post_message(
+                self.TerminalInputRequested(
+                    lease=self._current_frame.lease,
+                    text=text,
+                    keys=keys,
+                )
+            )
 
     def _refresh_identity(self) -> None:
         if self._draft_invalid and self._draft_target:
@@ -716,7 +896,12 @@ class LivePaneView(Vertical):
                 self._latest_rendered_text = (
                     self._current_frame.text_ansi if self._current_frame else None
                 )
-                self._output.update_snapshot(self._stashed_rich_text)
+                payload: str | Text = (
+                    self._current_frame.text_ansi
+                    if self._current_frame and self._current_frame.text_ansi
+                    else self._stashed_rich_text
+                )
+                self._output.update_snapshot(payload)
             self._refresh_state()
             self._refresh_controls()
 
@@ -785,13 +970,19 @@ class LivePaneView(Vertical):
         self._refresh_state()
         self._refresh_controls()
         self.post_message(
-            self.ReplyRequested(ReplyRequest(lease=self._current_frame.lease, text=text))
+            self.ReplyRequested(
+                ReplyRequest(lease=self._current_frame.lease, text=text, notify=False)
+            )
         )
 
     def focus_input(self) -> None:
-        """Focus the inline prompt input if enabled and not blocked by an invalid draft."""
-        if not self._prompt_input.disabled and not self._draft_invalid:
-            self._prompt_input.focus()
+        """Focus the terminal output widget if active and not blocked by an invalid draft."""
+        if (
+            self._current_frame is not None
+            and self._current_frame.phase in ("live", "degraded")
+            and not self._draft_invalid
+        ):
+            self._output.focus()
 
     def on_key(self, event: events.Key) -> None:
         if event.key == "escape" and self._prompt_input.has_focus:

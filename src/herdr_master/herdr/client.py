@@ -277,6 +277,42 @@ class HerdrClient:
         resp = await self._rpc("agent.send_keys", params)
         return resp.get("result", {})
 
+    async def pane_send_text(
+        self,
+        pane_id: str,
+        text: str,
+    ) -> Dict[str, Any]:
+        """Send raw text characters directly to a pane via Protocol 22."""
+        params = {"pane_id": pane_id, "text": text}
+        resp = await self._rpc("pane.send_text", params)
+        return resp.get("result", {})
+
+    async def pane_send_keys(
+        self,
+        pane_id: str,
+        keys: Union[str, List[str]],
+    ) -> Dict[str, Any]:
+        """Send raw keystrokes directly to a pane via Protocol 22."""
+        key_list = [keys] if isinstance(keys, str) else list(keys)
+        params = {"pane_id": pane_id, "keys": key_list}
+        resp = await self._rpc("pane.send_keys", params)
+        return resp.get("result", {})
+
+    async def pane_send_input(
+        self,
+        pane_id: str,
+        text: Optional[str] = None,
+        keys: Optional[Union[str, List[str]]] = None,
+    ) -> Dict[str, Any]:
+        """Send raw text or keystrokes directly to a pane via Protocol 22."""
+        params: Dict[str, Any] = {"pane_id": pane_id}
+        if text is not None:
+            params["text"] = text
+        if keys is not None:
+            params["keys"] = [keys] if isinstance(keys, str) else list(keys)
+        resp = await self._rpc("pane.send_input", params)
+        return resp.get("result", {})
+
     def subscribe(self, subscriptions: List[Dict[str, Any]]) -> HerdrSubscription:
         """Create a new events.subscribe connection with the specified subscriptions."""
         return HerdrSubscription(

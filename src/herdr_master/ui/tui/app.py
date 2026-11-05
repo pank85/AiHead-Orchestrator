@@ -42,7 +42,7 @@ from herdr_master.ui.tui.state import AppState
 from herdr_master.ui.tui.widgets.deck import CenterDeck
 from herdr_master.ui.tui.widgets.footer import ActionFooter
 from herdr_master.ui.tui.widgets.header_bar import HeaderBar
-from herdr_master.ui.tui.widgets.live_output import LivePaneView
+from herdr_master.ui.tui.widgets.live_output import LivePaneOutput, LivePaneView
 from herdr_master.ui.tui.widgets.quick_launch import QuickLaunchBar
 from herdr_master.ui.tui.widgets.workspaces import (
     WorkspaceBrowser,
@@ -369,7 +369,9 @@ class HerdrMasterApp(App):
         await self._close_live_controller()
 
     async def action_quit(self) -> None:
-        if len(self.screen_stack) > 1 or isinstance(self.focused, (TextArea, Input)):
+        if len(self.screen_stack) > 1 or isinstance(
+            self.focused, (TextArea, Input, LivePaneOutput)
+        ):
             return
         await self._close_live_controller()
         self.exit()
@@ -415,6 +417,24 @@ class HerdrMasterApp(App):
             group="live-pane-submit",
         )
 
+    def on_live_pane_view_terminal_input_requested(
+        self, event: LivePaneView.TerminalInputRequested
+    ) -> None:
+        if (
+            self.demo
+            or self._live_closed
+            or not self._live_ready
+            or self._live_controller is None
+        ):
+            return
+        self.run_worker(
+            self._live_controller.send_terminal_input(
+                lease=event.lease, text=event.text, keys=event.keys
+            ),
+            group="live-pane-terminal-input",
+            exclusive=False,
+        )
+
     async def _submit_live_pane_reply(self, request: ReplyRequest) -> None:
         self._live_submit_task = asyncio.current_task()
         try:
@@ -439,15 +459,16 @@ class HerdrMasterApp(App):
                         request.lease, "rejected", "Target changed before dispatch"
                     )
             self._deck.apply_reply_result(result)
-            socket, workspace, pane = request.lease.key
-            self.notify(
-                f"{result.outcome.capitalize()}: {safe_display(result.message)}\n"
-                f"Socket: {safe_display(socket)} · workspace: {safe_display(workspace)}"
-                f" · pane: {safe_display(pane)}",
-                severity="information" if result.outcome == "accepted" else "warning",
-                timeout=10,
-                markup=False,
-            )
+            if request.notify:
+                socket, workspace, pane = request.lease.key
+                self.notify(
+                    f"{result.outcome.capitalize()}: {safe_display(result.message)}\n"
+                    f"Socket: {safe_display(socket)} · workspace: {safe_display(workspace)}"
+                    f" · pane: {safe_display(pane)}",
+                    severity="information" if result.outcome == "accepted" else "warning",
+                    timeout=10,
+                    markup=False,
+                )
             if result.outcome == "accepted" and not self._live_closed:
                 self._schedule_inventory_refresh()
         finally:
@@ -456,7 +477,9 @@ class HerdrMasterApp(App):
 
     def action_open_in_herdr(self) -> None:
         """Open selected workspace or pane in Herdr."""
-        if len(self.screen_stack) > 1 or isinstance(self.focused, (TextArea, Input)):
+        if len(self.screen_stack) > 1 or isinstance(
+            self.focused, (TextArea, Input, LivePaneOutput)
+        ):
             return
         if self.demo:
             self.notify("Demo mode: live terminal navigation is disabled.", severity="warning")
@@ -679,7 +702,9 @@ class HerdrMasterApp(App):
 
     def action_new_master(self) -> None:
         """Open the Launch Herdr Master dialog."""
-        if len(self.screen_stack) > 1 or isinstance(self.focused, (TextArea, Input)):
+        if len(self.screen_stack) > 1 or isinstance(
+            self.focused, (TextArea, Input, LivePaneOutput)
+        ):
             return
 
         async def _on_master_launch(params: MasterLaunchParams) -> None:
@@ -777,13 +802,17 @@ class HerdrMasterApp(App):
 
     def action_new_ergo(self) -> None:
         """Open the 2-column Squad Settings & Ergo Pipeline Launcher."""
-        if len(self.screen_stack) > 1 or isinstance(self.focused, (TextArea, Input)):
+        if len(self.screen_stack) > 1 or isinstance(
+            self.focused, (TextArea, Input, LivePaneOutput)
+        ):
             return
         self.action_open_settings()
 
     def action_open_settings(self) -> None:
         """Open the 2-column Squad Settings & Ergo Pipeline Launcher dialog."""
-        if len(self.screen_stack) > 1 or isinstance(self.focused, (TextArea, Input)):
+        if len(self.screen_stack) > 1 or isinstance(
+            self.focused, (TextArea, Input, LivePaneOutput)
+        ):
             return
 
         async def _on_ergo_launch(params: ErgoLaunchParams) -> None:

@@ -89,6 +89,16 @@ class ReplyRequest:
 
     lease: PaneLease
     text: str
+    notify: bool = True
+
+
+@dataclass(frozen=True)
+class TerminalInput:
+    """Direct terminal text or keystroke forwarding request for a live pane."""
+
+    lease: PaneLease
+    text: Optional[str] = None
+    keys: Optional[List[str]] = None
 
 
 @dataclass(frozen=True)
@@ -358,6 +368,30 @@ class LivePaneController:
             # Notify the app even during an in-flight send, whose can_reply was
             # already false for an unrelated reason.
             self._publish_current_state()
+
+    @property
+    def _desired_target(self) -> Optional[WorkspaceTarget]:
+        return self._active_target
+
+    @_desired_target.setter
+    def _desired_target(self, value: Optional[WorkspaceTarget]) -> None:
+        self._active_target = value
+
+    @property
+    def _epoch(self) -> int:
+        return self._generation
+
+    @_epoch.setter
+    def _epoch(self, value: int) -> None:
+        self._generation = value
+
+    @property
+    def _phase(self) -> PanePhase:
+        return self._current_phase
+
+    @_phase.setter
+    def _phase(self, value: PanePhase) -> None:
+        self._current_phase = value
 
     def _publish_frame(
         self,
@@ -1192,6 +1226,85 @@ class LivePaneController:
         finally:
             self._send_in_flight = False
             self._publish_current_state()
+
+    async def send_terminal_input(
+        self,
+        lease: PaneLease,
+        text: Optional[str] = None,
+        keys: Optional[List[str]] = None,
+    ) -> bool:
+        """Forward raw terminal text or keystrokes directly to a live pane.
+
+        Supports all live panes (shells, idle agents, busy agents, prompt blocks)
+        without requiring agent identity or interactive readiness.
+        """
+        if self._closed or not self._enabled:
+            return False
+        if (
+            self._active_lease is None
+            or self._active_lease != lease
+            or self._epoch != lease.generation
+        ):
+            return False
+        if self._phase not in ("live", "degraded"):
+            return False
+        if not text and not keys:
+            return False
+
+        session_name = (
+            self._desired_target.session_name
+            if self._desired_target and self._desired_target.session_name
+            else "default"
+        )
+        socket_path = Path(lease.key[0])
+        pane_id = lease.key[2]
+
+        if self._client_factory is not None:
+            try:
+                client = self._client_factory(session_name, socket_path)
+            except TypeError:
+                client = self._client_factory(socket_path, session_name)  # type: ignore[call-arg]
+        else:
+            client = self._get_client(session_name, socket_path)
+
+        text_arg = text if text else None
+        keys_arg = keys if keys else None
+
+        try:
+            if hasattr(client, "pane_send_input") and callable(client.pane_send_input):
+                res = client.pane_send_input(pane_id=pane_id, text=text_arg, keys=keys_arg)
+                if asyncio.iscoroutine(res) or hasattr(res, "__await__"):
+                    await asyncio.wait_for(res, timeout=self._send_timeout)
+            elif hasattr(client, "pane_send_text") or hasattr(client, "pane_send_keys"):
+                if text_arg and callable(getattr(client, "pane_send_text", None)):
+                    res = client.pane_send_text(pane_id=pane_id, text=text_arg)
+                    if asyncio.iscoroutine(res) or hasattr(res, "__await__"):
+                        await asyncio.wait_for(res, timeout=self._send_timeout)
+                if keys_arg and callable(getattr(client, "pane_send_keys", None)):
+                    res = client.pane_send_keys(pane_id=pane_id, keys=keys_arg)
+                    if asyncio.iscoroutine(res) or hasattr(res, "__await__"):
+                        await asyncio.wait_for(res, timeout=self._send_timeout)
+            elif hasattr(client, "_rpc") and callable(client._rpc):
+                params: Dict[str, Any] = {"pane_id": pane_id}
+                if text_arg is not None:
+                    params["text"] = text_arg
+                if keys_arg is not None:
+                    params["keys"] = [keys_arg] if isinstance(keys_arg, str) else list(keys_arg)
+                res = client._rpc("pane.send_input", params)
+                if asyncio.iscoroutine(res) or hasattr(res, "__await__"):
+                    await asyncio.wait_for(res, timeout=self._send_timeout)
+            else:
+                return False
+        except (HerdrRPCError, HerdrConnectionError, asyncio.TimeoutError, OSError) as exc:
+            logger.warning("Failed to send terminal input to pane %s: %s", pane_id, exc)
+            return False
+        except Exception as exc:
+            logger.warning("Unexpected error sending terminal input to pane %s: %s", pane_id, exc)
+            return False
+
+        if self._dirty_event is not None:
+            self._dirty_event.set()
+        return True
 
     async def close(self) -> None:
         """Close the controller idempotently and suppress further publishes."""
