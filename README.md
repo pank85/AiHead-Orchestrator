@@ -24,9 +24,12 @@ Whether coordinating multiple background jobs simultaneously or driving a struct
 
 Herdr-Master ships with **first-class, standalone agent skills and slash commands** that can be installed directly into all four supported agent harnesses (**Antigravity**, **Pi**, **Claude Code**, and **OpenCode**).
 
-### 🎯 The Two Standalone Capabilities
+### 🎯 The Three Standalone Capabilities
 
 #### 1. `/herdr-master [task]` — Persistent Root Orchestrator (Multiple Jobs)
+
+> **Requires:** Herdr ([herdr.dev](https://herdr.dev)) and the `herdm` CLI. The skill exits if `HERDR_ENV` is unset — by design.
+
 * **Works with OR without an initial prompt**:
   * You can invoke `/herdr-master` **completely blank without a prompt**. The Master will initialize, inspect the Herdr workspace, verify Git repository state (ensuring the `develop` integration branch is ready), and confirm that orchestration is active.
   * It will prompt: *"Orchestration is active. What is your first job?"*
@@ -37,9 +40,13 @@ Herdr-Master ships with **first-class, standalone agent skills and slash command
   * Default child/bootstrap sessions resolve the product Scout binding (`agy:gemini-3.8-flash-medium:medium`), and final diff reviews resolve the product Reviewer (`pi:xai/grok-4.7:high`).
   * It monitors workers reactively using native async watchers (zero polling loops).
   * It runs a mandatory **Master Final Review Gate** on the cumulative diff, sending remediation requests if needed, and safely lands approved changes via squash merge into `develop`.
+  * **Per-job pipelines**: asking for a job "with `/ergo`" or "with orchestration" forwards that command to the child session, so that tab runs a phased pipeline in its own worktree instead of plain work.
   * **Zero `git reset --hard`**: Your main working tree remains untouched and protected.
 
 #### 2. `/ergo [--native] [--models ...] [intent]` — Phased Pipeline (Single Major Job)
+
+> **Requires:** `herdm`, plus **Herdr for the default cross-harness mode**. `--native` runs on host subagents and needs no Herdr — but still needs `herdm` for squad resolution.
+
 * **Structured Multi-Stage Execution**:
   * Runs a rigid, high-assurance pipeline: `Scout` (reconnaissance) → `Architect` (system design & work breakdown) → `Parallel Coders` (isolated worktree implementations) → `Reviewer` (blind diff review gate) → `Squash Integration`.
 * **Execution Modes**:
@@ -53,9 +60,38 @@ Herdr-Master ships with **first-class, standalone agent skills and slash command
 
 ---
 
+#### 3. `/orchestration [--models ...] [intent]` — Phased Pipeline, Host Subagents Only (No Herdr)
+
+> **Requires:** a shell, a git repository, and a host subagent tool. **No Herdr, no `herdm`, no catalog** — this is the only one of the three that runs standalone.
+
+* **Zero external dependencies**: the same Scout → Architect → parallel Coders → blind Reviewer
+  pipeline as `/ergo`, but every role is spawned with the current harness's own subagent tool.
+  No Herdr workspace, no `herdr` CLI, no `herdm` CLI, no catalog lookup — just a shell, a git
+  repository, and a subagent tool.
+* **Portable by design**: works in Antigravity (`invoke_subagent`), Pi (`subagent`), Claude Code
+  (`Agent`), and OpenCode (`subagent`). If the harness has no subagent tool, the skill stops
+  instead of faking the pipeline in one context.
+* **No invented models**: the host default is used unless the operator pins models with
+  `--models scout=...,architect=...,coder=...,reviewer=...`.
+* **Same guarantees**: isolated worktree on `orchestration/<run-id>`, mandatory Approval Gate,
+  disjoint file ownership, expert persona per Coder, read-only blind Reviewer with a scoped fix
+  loop, and a single squash commit — never `git reset --hard`.
+* **Delegable from `/herdr-master`**: ask the master to *"do this job with orchestration"* and it
+  opens a new tab, hands the child an isolated worktree, and that tab runs this full pipeline
+  instead of plain work. The child stops after its own reviewed commit; the master keeps the final
+  review gate and the squash-merge into `develop`.
+
+```bash
+/orchestration Implement OAuth2 SSO with tests and migration notes
+/orchestration --models scout=<model>,architect=<model>,reviewer=<model> "Add rate limiting"
+```
+
+---
+
 ### 📦 Installation Across All Harnesses
 
-Install both canonical `/herdr-master` and `/ergo` skills & slash commands across all supported harnesses:
+Install all three canonical skills & slash commands (`/herdr-master`, `/ergo`, `/orchestration`)
+across every supported harness:
 
 ```bash
 # Using the herdm CLI:
@@ -73,10 +109,10 @@ The installer detects and symlinks canonical skill definitions into the native d
 
 | Harness | Skill Type | Destination Path | Available Command |
 | :--- | :--- | :--- | :--- |
-| **Antigravity (`agy`)** | Native Skill | `~/.gemini/antigravity-cli/skills/<skill>/SKILL.md` | `/herdr-master`<br/>`/ergo` |
-| **Pi (`pi`)** | Prompt / Skill | `~/.pi/agent/skills/<skill>/SKILL.md` | `/herdr-master`<br/>`/ergo` |
-| **Claude Code (`claude`)** | Custom Slash Command | `~/.claude/commands/<skill>.md` | `/herdr-master`<br/>`/ergo` |
-| **OpenCode (`opencode`)** | Skill & Command | `~/.config/opencode/skills/<skill>/SKILL.md`<br/>`~/.config/opencode/commands/<skill>.md` | `/herdr-master`<br/>`/ergo` |
+| **Antigravity (`agy`)** | Native Skill | `~/.gemini/antigravity-cli/skills/<skill>/SKILL.md` | `/herdr-master`<br/>`/ergo`<br/>`/orchestration` |
+| **Pi (`pi`)** | Prompt / Skill | `~/.pi/agent/skills/<skill>/SKILL.md` | `/herdr-master`<br/>`/ergo`<br/>`/orchestration` |
+| **Claude Code (`claude`)** | Custom Slash Command | `~/.claude/commands/<skill>.md` | `/herdr-master`<br/>`/ergo`<br/>`/orchestration` |
+| **OpenCode (`opencode`)** | Skill & Command | `~/.config/opencode/skills/<skill>/SKILL.md`<br/>`~/.config/opencode/commands/<skill>.md` | `/herdr-master`<br/>`/ergo`<br/>`/orchestration` |
 
 ### 🔍 Inspect Installation Status
 
@@ -319,19 +355,29 @@ uv run ruff check .
 
 ---
 
+## 📖 Skill Guides
+
+Complete usage instructions for each command:
+
+* [**`/herdr-master`**](docs/skills/herdr-master.md) — multiple jobs, one tab and worktree each, final review gate before landing.
+* [**`/ergo`**](docs/skills/ergo.md) — one major job, phased pipeline, cross-harness model per role.
+* [**`/orchestration`**](docs/skills/orchestration.md) — the same pipeline on the host's own subagents, no Herdr required.
+
+---
+
 ## 📚 Deep-Dive Documentation
 
-For detailed architectural specifications and design documents, explore the [`ai_docs/`](file:///home/pank/projects/herdr-master/ai_docs/) directory:
+For detailed architectural specifications and design documents, explore the [`ai_docs/`](ai_docs/) directory:
 
-* [**00. System Overview & Vision**](file:///home/pank/projects/herdr-master/ai_docs/00_OVERVIEW.md) — Vision, tenets, and principles.
-* [**01. Architecture & Core Specifications**](file:///home/pank/projects/herdr-master/ai_docs/01_ARCHITECTURE_AND_SPECP.md) — System components, worker states, and lifecycle.
-* [**02. Inter-Harness Communication Protocol (IHCP)**](file:///home/pank/projects/herdr-master/ai_docs/02_INTER_HARNESS_PROTOCOL.md) — Message envelopes, mailboxes, and PTY injection.
-* [**03. Orchestration Pipelines & Ergo Integration**](file:///home/pank/projects/herdr-master/ai_docs/03_ORCHESTRATION_AND_ERGO_PIPELINE.md) — Phased pipeline execution flow.
-* [**04. CLI & Terminal UI (TUI) Specification**](file:///home/pank/projects/herdr-master/ai_docs/04_CLI_AND_TUI_SPEC.md) — Textual UI widgets, actions, and modal specs.
-* [**05. Herdr Plugin & Integration Packaging**](file:///home/pank/projects/herdr-master/ai_docs/05_HERDR_PLUGIN_AND_INTEGRATION.md) — Packaging as Herdr plugin and skill.
+* [**00. System Overview & Vision**](ai_docs/00_OVERVIEW.md) — Vision, tenets, and principles.
+* [**01. Architecture & Core Specifications**](ai_docs/01_ARCHITECTURE_AND_SPECS.md) — System components, worker states, and lifecycle.
+* [**02. Inter-Harness Communication Protocol (IHCP)**](ai_docs/02_INTER_HARNESS_PROTOCOL.md) — Message envelopes, mailboxes, and PTY injection.
+* [**03. Orchestration Pipelines & Ergo Integration**](ai_docs/03_ORCHESTRATION_AND_ERGO_PIPELINE.md) — Phased pipeline execution flow.
+* [**04. CLI & Terminal UI (TUI) Specification**](ai_docs/04_CLI_AND_TUI_SPEC.md) — Textual UI widgets, actions, and modal specs.
+* [**05. Herdr Plugin & Integration Packaging**](ai_docs/05_HERDR_PLUGIN_AND_INTEGRATION.md) — Packaging as Herdr plugin and skill.
 
 ---
 
 ## 📄 License
 
-Distributed under the **MIT License**. See [`LICENSE`](file:///home/pank/projects/herdr-master/LICENSE) for more details.
+Distributed under the **MIT License**. See [`LICENSE`](LICENSE) for more details.

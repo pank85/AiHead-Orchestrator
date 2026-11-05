@@ -63,6 +63,13 @@ Identify which harness you are running in (`agy`, `pi`, `claude`, or `opencode`)
   - The child adopts the assigned worktree, branch, and workspace (`owns_workspace = false`). Adopted workspaces are not created or closed.
   - The child must stop after its own reviewed commit on its assigned worktree branch; the master alone integrates into `develop`.
   - Do NOT recursively invoke `herdm ergo` to start another coordinator.
+- **Forwarding `/orchestration` to Child Sessions (pipeline per job, one tab each)**:
+  When the user asks to run a job "with orchestration" (or includes `/orchestration`), dispatch it exactly like any other job — one new tab, one isolated worktree — but prompt the child with `/orchestration <task>` instead of plain work, so that tab runs the full Scout → Architect → parallel Coders → blind Reviewer pipeline with its harness's own native subagents. No nested workspace, no `herdm` inside the child.
+  - Resolve the canonical `/orchestration` skill from the catalog (`herdm catalog show --json` → `skill_sources.orchestration`) rather than any static or obsolete path.
+  - Constrain the child to the assigned worktree, branch, and adopted workspace (`owns_workspace = false`). The child adopts all three and must not create or close a workspace, delete its branch or worktree, squash-merge into `develop`, push, deploy, or recursively start another master.
+  - The child stops after its single reviewed commit on its assigned branch. **The master alone** runs the Master Final Review Gate and performs the serial squash-merge into `develop`.
+  - The plan approval gate still applies end to end: relay the child's `plan.md` summary to the user and wait for explicit approval before any Coder starts, exactly as for a forwarded `/ergo`.
+  - Report the child's commit SHA, the Reviewer verdict, tests, and the `develop` squash SHA in the usual job report.
 - Record for each job its name, tab/pane ID, scope, status, and important decisions. Report launches and progress concisely. Submit with `herdr agent prompt`; establish that work actually starts by observing state/output. A timeout or stalled response does not prove non-delivery: inspect before retrying, never blindly duplicate work.
 - **Async Monitoring (No Polling Loops)**: Monitor only agents created by this orchestration. After confirming a child is working, launch one bounded **async watcher** for that child using your harness's native async mechanism in **§1**; the user authorizes this monitoring delegation:
   - Pass the exact Herdr session/socket environment variables (`HERDR_ENV`, `HERDR_WORKSPACE_ID`, etc.), child name or pane ID, and an explicit timeout.

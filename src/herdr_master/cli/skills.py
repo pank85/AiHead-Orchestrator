@@ -156,6 +156,10 @@ def install_skills(
     )
     console.print("  • [cyan]/herdr-master [task][/cyan] — Root orchestrator for multiple jobs")
     console.print("  • [cyan]/ergo [--native] [--models ...] [intent][/cyan] — Phased pipeline")
+    console.print(
+        "  • [cyan]/orchestration [--models ...] [intent][/cyan] — Phased pipeline, "
+        "host subagents only (no Herdr)"
+    )
 
 
 @skills_app.command("list")

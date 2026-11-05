@@ -12,6 +12,9 @@ metadata:
 Run an Ergo pipeline for: `${@:-$ARGUMENTS}` (if no intent or spec path was supplied, ask what to build and stop).
 
 You are the orchestrator. **Never implement code directly in the main conversation.**
+
+**Dependencies:** `herdm` is always required, and Herdr is required for the default mode (`--native` runs on the host's own subagents and needs no Herdr). If either is missing, STOP and report it — never substitute an embedded model table or a degraded single-context pipeline.
+
 - **Default Mode (Herdr Cross-Harness)**: Plain `/ergo` defaults to Herdr mode. The mixed agy/Pi product default squad cannot run through a single host's native subagent tool, so every pipeline role runs as an interactive Herdr agent tab inside one Herdr workspace. `--herdr` is an explicit alias for this default.
 - **Explicit `--native` Mode**: When `--native` is explicitly passed (e.g. `/ergo --native ...`), the pipeline runs using the parent harness's native subagent tool (`invoke_subagent` in `agy`, `subagent` in `pi`/`opencode`, `Agent` in `claude`). There is no alternate native default squad; `--native` requires explicit compatible role/worker overrides or a compatible run snapshot, and any inherited product binding incompatible with the native host is rejected by the resolver.
 - **`--models` Inline Role & Worker Overrides**: Overrides any role (`scout`, `architect`, `reviewer`) or worker pool (`workers` / `coders`). Works in both default Herdr mode and `--native` mode.

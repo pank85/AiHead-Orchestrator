@@ -352,7 +352,7 @@ def install_cmd(
         help="Overwrite or update existing symlinks",
     ),
 ) -> None:
-    """Install standalone /herdr-master and /ergo skills across all 4 agent harnesses."""
+    """Install the /herdr-master, /ergo, and /orchestration skills across all harnesses."""
     run_install_skills(force=force)
 
 

@@ -5,6 +5,7 @@ from pathlib import Path
 import pytest
 
 from herdr_master.core.catalog import (
+    CANONICAL_SKILLS,
     CatalogError,
     describe_native_agent,
 )
@@ -19,8 +20,8 @@ REPO_ROOT = Path(__file__).resolve().parents[1]
 
 
 def test_canonical_skills_loadable_and_valid():
-    """Both canonical skills must resolve from resources with YAML front matter."""
-    for skill_name in ("ergo", "herdr-master"):
+    """Every canonical skill must resolve from resources with YAML front matter."""
+    for skill_name in CANONICAL_SKILLS:
         source_path = get_skill_source(skill_name)
         assert source_path.exists()
         assert source_path.name == "SKILL.md"
@@ -267,10 +268,83 @@ def test_herdr_master_skill_catalog_consumption_and_bindings():
     assert "Do NOT recursively invoke `herdm ergo`" in body
 
 
+def test_orchestration_skill_is_herdr_free_and_keeps_every_gate():
+    """Assert /orchestration runs on host subagents only and keeps the pipeline gates."""
+    body = load_skill_body("orchestration")
+
+    # Orchestrator never implements; every phase and gate is present
+    assert "Never implement code directly in the main conversation" in body
+    assert "## 2. Scout — discovery (never skip)" in body
+    assert "## 3. Architect — design and allocation (never skip)" in body
+    assert "## 5. User Approval Gate (never skip)" in body
+    assert "## 6. Parallel Specialist Coders" in body
+    assert "## 7. Blind Reviewer and Scoped Fix Loop (never skip)" in body
+    assert "## 8. Land: Sync, Then One Squash Commit" in body
+
+    # Hard rules preserved
+    assert "Never skip the Scout, the Approval Gate, or the Reviewer" in body
+    assert "Never code in the orchestrator" in body
+    assert "Adopt this expert persona: <Expert Persona>." in body
+    assert "Never `git reset --hard`" in body
+    assert "Never invent a model ID" in body
+
+    # No Herdr surface of any kind
+    for forbidden in (
+        "herdr agent",
+        "herdr tab",
+        "herdr workspace",
+        "herdr status",
+        "herdm catalog",
+        "herdm ergo",
+        "HERDR_WORKSPACE_ID",
+        "HERDR_PANE_ID",
+        "owns_workspace",
+    ):
+        assert forbidden not in body, f"/orchestration must not reference {forbidden}"
+
+    # Host adapter table covers all four native subagent hosts
+    for host_tool in ("invoke_subagent", "subagent", "Agent"):
+        assert host_tool in body
+    assert "EnableWriteTools: false" in body
+
+    # Read-only reviewer report persistence without granting write access
+    assert "RUN_DIR/review.md" in body
+    assert "persist it into" in body
+
+
+def test_orchestration_can_run_as_a_delegated_job():
+    """Assert /orchestration adapts when a master hands it a job in a new tab."""
+    body = load_skill_body("orchestration")
+
+    assert "Delegated from a master orchestrator" in body
+    assert "Adopt, never recreate." in body
+    assert "Never land into the integration branch." in body
+    assert "do step 1 and stop" in body
+    assert "do not delete the branch or worktree, on success or failure" in body
+    assert "Never start another master or pipeline." in body
+
+    # Delegation must not weaken the mandatory gates
+    assert "do not get skipped just because a master is watching" in body
+
+
+def test_herdr_master_forwards_orchestration_jobs():
+    """Assert /herdr-master can dispatch a job as a /orchestration pipeline in its own tab."""
+    body = load_skill_body("herdr-master")
+
+    assert "Forwarding `/orchestration` to Child Sessions" in body
+    assert 'run a job "with orchestration"' in body
+    assert "prompt the child with `/orchestration <task>`" in body
+    assert "skill_sources.orchestration" in body
+    assert "one new tab, one isolated worktree" in body
+    # Master keeps integration and the final review gate
+    assert "**The master alone** runs the Master Final Review Gate" in body
+
+
 def test_no_obsolete_dotfiles_or_hardcoded_paths():
     """Ensure no obsolete dotfiles or hardcoded user paths remain in owned files."""
     ergo_raw = (REPO_ROOT / "skills" / "ergo" / "SKILL.md").read_text(encoding="utf-8")
     hm_raw = (REPO_ROOT / "skills" / "herdr-master" / "SKILL.md").read_text(encoding="utf-8")
+    orch_raw = (REPO_ROOT / "skills" / "orchestration" / "SKILL.md").read_text(encoding="utf-8")
     skills_cli_raw = (REPO_ROOT / "src" / "herdr_master" / "cli" / "skills.py").read_text(
         encoding="utf-8"
     )
@@ -279,6 +353,7 @@ def test_no_obsolete_dotfiles_or_hardcoded_paths():
     for path_str, content in [
         ("skills/ergo/SKILL.md", ergo_raw),
         ("skills/herdr-master/SKILL.md", hm_raw),
+        ("skills/orchestration/SKILL.md", orch_raw),
         ("src/herdr_master/cli/skills.py", skills_cli_raw),
         ("scripts/install-skills.sh", sh_installer_raw),
     ]:

@@ -108,6 +108,7 @@ def test_cli_skills_list():
     assert "Herdr-Master" in result.output
     assert "/herdr-master" in result.output
     assert "/ergo" in result.output
+    assert "/orchestration" in result.output
 
 
 def test_cli_skills_install_and_remove_in_temp_home(tmp_path: Path):
@@ -115,12 +116,13 @@ def test_cli_skills_install_and_remove_in_temp_home(tmp_path: Path):
     fake_home.mkdir()
 
     targets_map = get_skill_targets(home=fake_home)
+    expected_links = sum(len(locs) for locs in targets_map.values())
 
     with patch("herdr_master.cli.skills.get_skill_targets", return_value=targets_map):
         # Initial install
         result = runner.invoke(app, ["skills", "install"])
         assert result.exit_code == 0
-        assert "10 skill/command links configured" in result.output
+        assert f"{expected_links} skill/command links configured" in result.output
 
         # Verify all symlinks exist and point to canonical files
         for skill_name, locs in targets_map.items():
@@ -141,7 +143,7 @@ def test_cli_skills_install_and_remove_in_temp_home(tmp_path: Path):
         # Remove
         remove_result = runner.invoke(app, ["skills", "remove"])
         assert remove_result.exit_code == 0
-        assert "Cleaned up 10 skill/command symlinks" in remove_result.output
+        assert f"Cleaned up {expected_links} skill/command symlinks" in remove_result.output
 
         for _skill_name, locs in targets_map.items():
             for loc in locs:
