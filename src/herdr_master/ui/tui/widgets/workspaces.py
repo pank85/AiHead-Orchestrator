@@ -319,6 +319,13 @@ class WorkspaceBrowser(Vertical):
             super().__init__()
             self.target = target
 
+    class PaneActivated(Message):
+        """Operator explicitly activated (pressed Enter or clicked) a pane node."""
+
+        def __init__(self, target: WorkspaceTarget) -> None:
+            super().__init__()
+            self.target = target
+
     def __init__(self, app_state: AppState, **kwargs) -> None:
         super().__init__(**kwargs)
         self.app_state = app_state
@@ -604,6 +611,8 @@ class WorkspaceBrowser(Vertical):
             self._selected_target_disappeared = False
         self._update_open_strip()
         self._notify_selection_if_changed()
+        if self._selected_target is not None and self._selected_target.pane_id is not None:
+            self.post_message(self.PaneActivated(self._selected_target))
 
     def on_button_pressed(self, event: Button.Pressed) -> None:
         if event.button.id == "btn-open-herdr":

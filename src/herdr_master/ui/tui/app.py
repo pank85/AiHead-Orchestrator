@@ -8,7 +8,7 @@ from typing import Callable, Optional
 from textual.app import App, ComposeResult
 from textual.binding import Binding
 from textual.containers import Horizontal
-from textual.widgets import TextArea
+from textual.widgets import Input, TextArea
 
 from herdr_master.core.context import resolve_herdr_context
 from herdr_master.core.models import MasterSession, PipelinePhase, PipelineRun
@@ -369,7 +369,7 @@ class HerdrMasterApp(App):
         await self._close_live_controller()
 
     async def action_quit(self) -> None:
-        if len(self.screen_stack) > 1 or isinstance(self.focused, TextArea):
+        if len(self.screen_stack) > 1 or isinstance(self.focused, (TextArea, Input)):
             return
         await self._close_live_controller()
         self.exit()
@@ -456,7 +456,7 @@ class HerdrMasterApp(App):
 
     def action_open_in_herdr(self) -> None:
         """Open selected workspace or pane in Herdr."""
-        if len(self.screen_stack) > 1 or isinstance(self.focused, TextArea):
+        if len(self.screen_stack) > 1 or isinstance(self.focused, (TextArea, Input)):
             return
         if self.demo:
             self.notify("Demo mode: live terminal navigation is disabled.", severity="warning")
@@ -679,7 +679,7 @@ class HerdrMasterApp(App):
 
     def action_new_master(self) -> None:
         """Open the Launch Herdr Master dialog."""
-        if len(self.screen_stack) > 1 or isinstance(self.focused, TextArea):
+        if len(self.screen_stack) > 1 or isinstance(self.focused, (TextArea, Input)):
             return
 
         async def _on_master_launch(params: MasterLaunchParams) -> None:
@@ -777,13 +777,13 @@ class HerdrMasterApp(App):
 
     def action_new_ergo(self) -> None:
         """Open the 2-column Squad Settings & Ergo Pipeline Launcher."""
-        if len(self.screen_stack) > 1 or isinstance(self.focused, TextArea):
+        if len(self.screen_stack) > 1 or isinstance(self.focused, (TextArea, Input)):
             return
         self.action_open_settings()
 
     def action_open_settings(self) -> None:
         """Open the 2-column Squad Settings & Ergo Pipeline Launcher dialog."""
-        if len(self.screen_stack) > 1 or isinstance(self.focused, TextArea):
+        if len(self.screen_stack) > 1 or isinstance(self.focused, (TextArea, Input)):
             return
 
         async def _on_ergo_launch(params: ErgoLaunchParams) -> None:

@@ -6,12 +6,13 @@ import re
 from typing import Callable, Optional
 
 from rich.text import Text
+from textual import events
 from textual.app import ComposeResult
 from textual.binding import Binding
 from textual.containers import Horizontal, Vertical, VerticalScroll
 from textual.message import Message
 from textual.screen import ModalScreen
-from textual.widgets import Button, Static, TextArea
+from textual.widgets import Button, Input, Static, TextArea
 
 from herdr_master.ui.tui.live_pane import PaneFrame, PaneLease, ReplyRequest, ReplyResult
 from herdr_master.ui.tui.widgets.workspaces import WorkspaceTarget, safe_display, status_label
@@ -247,6 +248,22 @@ class LivePaneView(Vertical):
         padding: 0;
         display: none;
     }
+    #prompt-input {
+        height: 1;
+        min-height: 1;
+        border: none;
+        padding: 0 1;
+        background: #1a1a1a;
+        color: #ffffff;
+        width: 100%;
+    }
+    #prompt-input:focus {
+        background: #252525;
+    }
+    #prompt-input:disabled {
+        background: #141414;
+        color: #555555;
+    }
     #live-pane-controls {
         height: 1;
         width: 100%;
@@ -331,6 +348,9 @@ class LivePaneView(Vertical):
     LivePaneView.-reply-active #reply-text {
         display: block;
     }
+    LivePaneView.-reply-active #prompt-input {
+        display: none;
+    }
     LivePaneView.-reply-active #btn-reply {
         display: none;
     }
@@ -357,6 +377,10 @@ class LivePaneView(Vertical):
         self._identity = Static("No pane selected", id="live-pane-identity")
         self._state_bar = Static("", id="live-pane-state")
         self._output = LivePaneOutput(id="live-pane-output")
+        self._prompt_input = Input(
+            placeholder="Type prompt and press Enter to send…",
+            id="prompt-input",
+        )
         self._reply_text = TextArea("", id="reply-text")
         self._btn_reply = Button(Text("Reply"), id="btn-reply")
         self._btn_send = Button(Text("Send"), id="btn-send-reply")
@@ -372,6 +396,7 @@ class LivePaneView(Vertical):
         self._draft_lease: Optional[PaneLease] = None
         self._draft_target: Optional[WorkspaceTarget] = None
         self._draft_invalid: bool = False
+        self._inline_pending_lease: Optional[PaneLease] = None
         self._send_in_flight: bool = False
         self._feedback_message: Optional[Text] = None
 
@@ -379,6 +404,7 @@ class LivePaneView(Vertical):
         yield self._identity
         yield self._state_bar
         yield self._output
+        yield self._prompt_input
         yield self._reply_text
         with Horizontal(id="live-pane-controls"):
             yield self._btn_reply
@@ -577,6 +603,39 @@ class LivePaneView(Vertical):
                 and self._current_frame.target.pane_id)
         )
 
+        if self._current_frame is None or self._current_frame.phase == "empty":
+            self._prompt_input.disabled = True
+            self._prompt_input.placeholder = "No pane selected"
+        elif self._draft_invalid:
+            self._prompt_input.disabled = True
+            self._prompt_input.placeholder = (
+                "Draft retained for previous target — Cancel draft to send"
+            )
+        elif self._send_in_flight:
+            self._prompt_input.disabled = True
+            self._prompt_input.placeholder = "Sending prompt…"
+        elif self._current_frame.phase == "loading":
+            self._prompt_input.disabled = True
+            self._prompt_input.placeholder = "Agent is loading…"
+        elif self._current_frame.phase in ("stale", "unavailable"):
+            self._prompt_input.disabled = True
+            self._prompt_input.placeholder = (
+                f"Pane {self._current_frame.phase} — cannot accept input"
+            )
+        elif not self._current_frame.can_reply:
+            self._prompt_input.disabled = True
+            if self._current_frame.agent_status == "terminal":
+                self._prompt_input.placeholder = (
+                    "Terminal shell is read-only — press 'o' to Open in Herdr"
+                )
+            else:
+                self._prompt_input.placeholder = (
+                    "Replies disabled (demo mode or agent blocked)"
+                )
+        else:
+            self._prompt_input.disabled = False
+            self._prompt_input.placeholder = "Type prompt and press Enter to send…"
+
         if self._draft_lease is not None:
             self.add_class("-reply-active")
             self._reply_text.read_only = self._send_in_flight
@@ -699,27 +758,78 @@ class LivePaneView(Vertical):
         if event.text_area.id == "reply-text":
             self._refresh_controls()
 
+    def on_input_submitted(self, event: Input.Submitted) -> None:
+        if event.input.id == "prompt-input":
+            event.stop()
+            self._submit_inline_prompt()
+
+    def _submit_inline_prompt(self) -> None:
+        if (
+            self._send_in_flight
+            or self._current_frame is None
+            or not self._current_frame.can_reply
+            or self._current_frame.lease is None
+            or self._draft_invalid
+        ):
+            return
+        text = self._prompt_input.value.strip()
+        if not text:
+            return
+        self._send_in_flight = True
+        self._inline_pending_lease = self._current_frame.lease
+        self._feedback_message = Text("Sending…", style="cyan")
+        self._prompt_input.value = ""
+        self._refresh_state()
+        self._refresh_controls()
+        self.post_message(
+            self.ReplyRequested(ReplyRequest(lease=self._current_frame.lease, text=text))
+        )
+
+    def focus_input(self) -> None:
+        """Focus the inline prompt input if enabled and not blocked by an invalid draft."""
+        if not self._prompt_input.disabled and not self._draft_invalid:
+            self._prompt_input.focus()
+
+    def on_key(self, event: events.Key) -> None:
+        if event.key == "escape" and self._prompt_input.has_focus:
+            event.stop()
+            try:
+                browser = self.app.query_one("WorkspaceBrowser")
+                try:
+                    browser.query_one("#workspace-tree").focus()
+                except Exception:
+                    browser.focus()
+            except Exception:
+                pass
+
     def apply_reply_result(self, result: ReplyResult) -> None:
         """Apply submission outcome delivered from the app submission worker."""
-        if result.lease != self._draft_lease:
+        if result.lease != self._draft_lease and result.lease != self._inline_pending_lease:
             # Stale completion must not unlock, modify, or clear a newer send.
             return
         self._send_in_flight = False
+        is_inline = result.lease == self._inline_pending_lease
+        self._inline_pending_lease = None
 
-        if result.outcome == "accepted" and not self._draft_invalid:
-            self._draft_lease = None
-            self._draft_target = None
-            self._draft_invalid = False
-            self._reply_text.text = ""
-            self._feedback_message = Text("Prompt accepted", style="green")
-            self._refresh_controls()
-            self._refresh_identity()
-            self._refresh_state()
-            self.post_message(self.DraftCancelled())
-        elif result.outcome == "accepted":
-            self._feedback_message = Text("Original prompt accepted", style="green")
-            self._refresh_controls()
-            self._refresh_state()
+        if result.outcome == "accepted":
+            if is_inline:
+                self._feedback_message = Text("Prompt accepted", style="green")
+                self._refresh_controls()
+                self._refresh_state()
+            elif not self._draft_invalid:
+                self._draft_lease = None
+                self._draft_target = None
+                self._draft_invalid = False
+                self._reply_text.text = ""
+                self._feedback_message = Text("Prompt accepted", style="green")
+                self._refresh_controls()
+                self._refresh_identity()
+                self._refresh_state()
+                self.post_message(self.DraftCancelled())
+            else:
+                self._feedback_message = Text("Original prompt accepted", style="green")
+                self._refresh_controls()
+                self._refresh_state()
         elif result.outcome == "rejected":
             self._feedback_message = Text(
                 f"Rejected: {safe_display(result.message)}", style="bold red"
