@@ -439,15 +439,16 @@ class HerdrMasterApp(App):
                         request.lease, "rejected", "Target changed before dispatch"
                     )
             self._deck.apply_reply_result(result)
-            socket, workspace, pane = request.lease.key
-            self.notify(
-                f"{result.outcome.capitalize()}: {safe_display(result.message)}\n"
-                f"Socket: {safe_display(socket)} · workspace: {safe_display(workspace)}"
-                f" · pane: {safe_display(pane)}",
-                severity="information" if result.outcome == "accepted" else "warning",
-                timeout=10,
-                markup=False,
-            )
+            if request.notify:
+                socket, workspace, pane = request.lease.key
+                self.notify(
+                    f"{result.outcome.capitalize()}: {safe_display(result.message)}\n"
+                    f"Socket: {safe_display(socket)} · workspace: {safe_display(workspace)}"
+                    f" · pane: {safe_display(pane)}",
+                    severity="information" if result.outcome == "accepted" else "warning",
+                    timeout=10,
+                    markup=False,
+                )
             if result.outcome == "accepted" and not self._live_closed:
                 self._schedule_inventory_refresh()
         finally:

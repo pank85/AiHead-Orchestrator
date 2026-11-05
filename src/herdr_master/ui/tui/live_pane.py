@@ -89,6 +89,7 @@ class ReplyRequest:
 
     lease: PaneLease
     text: str
+    notify: bool = True
 
 
 @dataclass(frozen=True)

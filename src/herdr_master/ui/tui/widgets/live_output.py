@@ -785,7 +785,9 @@ class LivePaneView(Vertical):
         self._refresh_state()
         self._refresh_controls()
         self.post_message(
-            self.ReplyRequested(ReplyRequest(lease=self._current_frame.lease, text=text))
+            self.ReplyRequested(
+                ReplyRequest(lease=self._current_frame.lease, text=text, notify=False)
+            )
         )
 
     def focus_input(self) -> None:
