@@ -5,7 +5,7 @@ from typing import Optional, Tuple
 
 import pytest
 from textual.app import App, ComposeResult
-from textual.widgets import Checkbox, DataTable, Input, Select, Static, TabbedContent, TextArea
+from textual.widgets import Button, Checkbox, DataTable, Input, Select, Static, TabbedContent, TextArea
 
 from herdr_master.core.config import (
     CouncilConfig,
@@ -234,3 +234,57 @@ async def test_settings_modal_cancel_discards(tmp_path):
         # Verify file on disk does not exist or was not modified
         config_path = project_dir / ".herdr-master.toml"
         assert not config_path.exists()
+
+
+@pytest.mark.asyncio
+async def test_council_tab_is_compact_and_add_member_visible_at_80x24(tmp_path):
+    """Council controls (incl. Add member) fit in the modal viewport without scrolling."""
+    app = SettingsHostApp(project_path=tmp_path)
+    async with app.run_test(size=(80, 24)) as pilot:
+        modal = app.modal
+        modal.query_one(TabbedContent).active = "tab-council"
+        await pilot.pause()
+
+        scroll = modal.query_one("#tab-council .settings-tab-scroll")
+        screen_region = app.screen.region
+        for bid in ("#btn-add-member", "#btn-edit-member", "#btn-remove-member"):
+            region = modal.query_one(bid).region
+            assert screen_region.contains_region(region), bid
+            assert scroll.region.contains_region(region), bid
+        assert scroll.scroll_offset.y == 0
+
+        table = modal.query_one("#council-members-table", DataTable)
+        assert table.region.height <= 7
+
+        # Coordinator / scout: harness + model + effort inline on one row each.
+        for role in ("coordinator", "scout"):
+            ys = {
+                modal.query_one(f"#council-{role}-{part}").region.y
+                for part in ("harness", "model", "effort")
+            }
+            assert len(ys) == 1
+
+        # Add button still works
+        before = len(modal._council_members)
+        modal.query_one("#council-member-label-input", Input).value = "extra-member"
+        await pilot.click("#btn-add-member")
+        await pilot.pause()
+        assert len(modal._council_members) == before + 1
+
+
+@pytest.mark.asyncio
+async def test_council_effort_saved_and_orchestration_efforts_saved(tmp_path):
+    app = SettingsHostApp(project_path=tmp_path)
+    async with app.run_test(size=(80, 24)) as pilot:
+        modal = app.modal
+        modal.query_one("#council-coordinator-effort", Select).value = "high"
+        editor = modal.orchestration_editor
+        editor.query_one("#orch-architect-effort", Select).value = "xhigh"
+        modal._validate_and_save()
+        await pilot.pause()
+    cfg, _ = app.result
+    assert cfg.council.coordinator.effort.value == "high"
+    assert cfg.council.scout.effort.value == "medium"  # default preserved
+    assert cfg.orchestration.architect_effort == "xhigh"
+    reloaded = load_project_config(tmp_path / ".herdr-master.toml")
+    assert reloaded.orchestration.architect_effort == "xhigh"

@@ -565,3 +565,33 @@ def test_resolve_folder_path_and_availability(tmp_path):
     # Relative path resolution against base directory
     resolved = resolve_folder_path("existing_sub", base_dir=tmp_path)
     assert resolved == sub.resolve()
+
+
+def test_orchestration_role_efforts_roundtrip_and_backward_compat(tmp_path):
+    """Role efforts persist; configs saved without them still load with None."""
+    cfg = HerdrMasterConfig()
+    cfg.orchestration.scout_effort = "low"
+    cfg.orchestration.architect_effort = "xhigh"
+    cfg.orchestration.reviewer_effort = "HIGH"
+    save_path = tmp_path / ".herdr-master.toml"
+    save_project_config(cfg, save_path)
+    reloaded = load_project_config(save_path).orchestration
+    assert reloaded.scout_effort == "low"
+    assert reloaded.architect_effort == "xhigh"
+    assert reloaded.reviewer_effort == "high"
+
+    legacy = OrchestrationConfig.model_validate(
+        {"harness": "agy", "scout_model": "flash_lite", "worker_models": ["flash"]}
+    )
+    assert legacy.scout_effort is None
+    assert legacy.architect_effort is None
+    assert legacy.reviewer_effort is None
+    assert OrchestrationConfig(scout_effort="none").scout_effort is None
+
+
+def test_orchestration_role_effort_rejects_invalid_and_workers_stay_effortless():
+    with pytest.raises(ValidationError):
+        OrchestrationConfig(architect_effort="turbo")
+    assert "worker_effort" not in OrchestrationConfig.model_fields
+    with pytest.raises(ValidationError):
+        OrchestrationConfig(worker_models=["flash:xhigh"])

@@ -780,6 +780,9 @@ async def launch_orchestration(
     cwd: str | None = None,
     session: str | None = None,
     *,
+    scout_effort: EffortLevel | str | None = None,
+    architect_effort: EffortLevel | str | None = None,
+    reviewer_effort: EffortLevel | str | None = None,
     ai_head: bool | None = None,
     dangerously_skip_permissions: bool = True,
     fresh_workspace: bool = False,
@@ -818,6 +821,14 @@ async def launch_orchestration(
     if not worker_models:
         worker_models = [coder_m]
 
+    def _role_effort(value: EffortLevel | str | None) -> EffortLevel | None:
+        text = normalize_effort(_effort_text(value))
+        return EffortLevel(text) if text else None
+
+    scout_eff = _role_effort(scout_effort)
+    arch_eff = _role_effort(architect_effort)
+    rev_eff = _role_effort(reviewer_effort)
+
     worker_pool = [
         HarnessBinding(
             kind=harness_kind,
@@ -829,13 +840,20 @@ async def launch_orchestration(
     ]
 
     squad = Squad(
-        scout=HarnessBinding(kind=harness_kind, model=scout_m, label="scout", order=0),
-        architect=HarnessBinding(kind=harness_kind, model=arch_m, label="architect", order=1),
-        reviewer=HarnessBinding(kind=harness_kind, model=rev_m, label="reviewer", order=2),
+        scout=HarnessBinding(kind=harness_kind, model=scout_m, effort=scout_eff, label="scout", order=0),
+        architect=HarnessBinding(kind=harness_kind, model=arch_m, effort=arch_eff, label="architect", order=1),
+        reviewer=HarnessBinding(kind=harness_kind, model=rev_m, effort=rev_eff, label="reviewer", order=2),
         worker_pool=worker_pool,
     )
 
     models_arg = f"--models scout={scout_m},architect={arch_m},coder={coder_m},reviewer={rev_m}"
+    effort_pairs = [
+        f"{role}={eff.value}"
+        for role, eff in (("scout", scout_eff), ("architect", arch_eff), ("reviewer", rev_eff))
+        if eff is not None
+    ]
+    if effort_pairs:
+        models_arg = f"{models_arg} --efforts {','.join(effort_pairs)}"
     stripped_intent = intent.strip() if intent else ""
     formatted_intent = f"{models_arg} {stripped_intent}".strip() if stripped_intent else models_arg
 
@@ -850,7 +868,7 @@ async def launch_orchestration(
             "argv": argv,
             "prompt_prefix": None,
             "model": scout_m,
-            "effort": None,
+            "effort": scout_eff.value if scout_eff else None,
             "launch_model": None,
             "launch_args": ["--kind", "agy", "--", *argv],
         }
@@ -858,7 +876,7 @@ async def launch_orchestration(
         descriptor = _host_launch(
             kind_str,
             scout_m,
-            None,
+            scout_eff,
             "scout",
             dangerously_skip_permissions=dangerously_skip_permissions,
         )
@@ -926,7 +944,7 @@ async def launch_orchestration(
         "intent": formatted_intent,
         "harness": descriptor["kind"],
         "model": scout_m,
-        "effort": None,
+        "effort": scout_eff.value if scout_eff else None,
         "squad": squad,
         "dangerously_skip_permissions": dangerously_skip_permissions,
         "ai_head": head_discovery if (head_discovery and head_discovery.enabled) else None,

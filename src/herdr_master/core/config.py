@@ -152,6 +152,9 @@ DEFAULT_ORCHESTRATION_MODELS: Dict[str, Dict[str, str]] = {
 }
 
 
+ORCHESTRATION_EFFORT_VALUES = ("low", "medium", "high", "xhigh", "max")
+
+
 class OrchestrationConfig(BaseModel):
     """Configuration for single-harness native orchestration pipelines."""
 
@@ -162,6 +165,29 @@ class OrchestrationConfig(BaseModel):
     architect_model: Optional[str] = None
     worker_models: List[str] = Field(default_factory=list)
     reviewer_model: Optional[str] = None
+    # Per-role reasoning effort (optional). Workers deliberately have none:
+    # the Architect decides worker effort.
+    scout_effort: Optional[str] = None
+    architect_effort: Optional[str] = None
+    reviewer_effort: Optional[str] = None
+
+    @field_validator("scout_effort", "architect_effort", "reviewer_effort", mode="before")
+    @classmethod
+    def _validate_role_effort(cls, v: Any) -> Optional[str]:
+        if v is None:
+            return None
+        if hasattr(v, "value"):
+            v = v.value
+        text = str(v).strip().lower()
+        if not text or text in ("none", "default"):
+            return None
+        if text not in ORCHESTRATION_EFFORT_VALUES:
+            raise ValueError(
+                f"Unsupported effort '{v}'. Expected one of: "
+                + ", ".join(ORCHESTRATION_EFFORT_VALUES)
+                + "."
+            )
+        return text
 
     @property
     def scout(self) -> Optional[str]:

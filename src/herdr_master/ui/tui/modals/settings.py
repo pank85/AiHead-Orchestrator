@@ -34,12 +34,21 @@ from herdr_master.core.config import (
     save_project_config,
     squad_to_project_config,
 )
-from herdr_master.core.models import HarnessBinding, HarnessKind, Squad
+from herdr_master.core.models import EffortLevel, HarnessBinding, HarnessKind, Squad
 from herdr_master.pipeline.squad import resolve_squad
 from herdr_master.ui.tui.modals.project_folder import ProjectFolderPicker
 from herdr_master.ui.tui.state import harness_select_options
 from herdr_master.ui.tui.widgets.orchestration_editor import OrchestrationEditor
 from herdr_master.ui.tui.widgets.squad_editor import SquadEditor
+
+
+COUNCIL_EFFORT_OPTIONS = [
+    ("Unset", "none"),
+    ("Low", "low"),
+    ("Medium", "medium"),
+    ("High", "high"),
+    ("Max", "max"),
+]
 
 
 class SettingsModal(ModalScreen[Optional[Tuple[HerdrMasterConfig, Squad]]]):
@@ -131,13 +140,59 @@ class SettingsModal(ModalScreen[Optional[Tuple[HerdrMasterConfig, Squad]]]):
         color: #ff8888;
     }
     .footer-row {
-        height: 3;
-        max-height: 3;
-        margin-top: 1;
+        height: 1;
+        max-height: 1;
+        margin-top: 0;
     }
     .footer-row Button {
         margin-right: 2;
         min-width: 14;
+    }
+    .compact-tab {
+        padding: 0;
+    }
+    .compact-row {
+        height: 1;
+        margin-top: 0;
+    }
+    .compact-label {
+        width: 13;
+        color: #aaaaaa;
+    }
+    .compact-harness {
+        width: 14;
+    }
+    .compact-model {
+        width: 1fr;
+        margin-left: 1;
+    }
+    .compact-effort {
+        width: 11;
+        margin-left: 1;
+    }
+    .compact-label-input {
+        width: 20;
+    }
+    .compact-row Button {
+        margin-right: 1;
+        min-width: 8;
+    }
+    .compact-row Checkbox {
+        margin-left: 1;
+        width: auto;
+    }
+    .compact-section {
+        color: #aaaaaa;
+        text-style: bold;
+        margin-top: 1;
+        height: 1;
+    }
+    .compact-warning {
+        color: #ffaa00;
+        height: 1;
+    }
+    .council-table-container {
+        height: 7;
     }
     #aihead-soul-input {
         height: 6;
@@ -242,71 +297,78 @@ class SettingsModal(ModalScreen[Optional[Tuple[HerdrMasterConfig, Squad]]]):
 
                 # Tab 4: AI Council Settings
                 with TabPane("AI Council", id="tab-council"):
-                    with VerticalScroll(classes="settings-tab-scroll"):
-                        yield Label("Council Coordinator:", classes="section-label")
-                        with Horizontal(classes="field-row"):
-                            yield Label("Harness:")
-                            yield Select(
-                                harness_select_options(),
-                                value=self._council_config.coordinator.kind.value,
-                                id="council-coordinator-harness",
-                            )
-                            yield Label("Model:")
-                            yield Input(
-                                value=self._council_config.coordinator.model,
-                                id="council-coordinator-model",
-                            )
+                    with VerticalScroll(classes="settings-tab-scroll compact-tab"):
+                        for role, binding in (
+                            ("coordinator", self._council_config.coordinator),
+                            ("scout", self._council_config.scout),
+                        ):
+                            with Horizontal(classes="compact-row"):
+                                yield Label(f"{role.capitalize()}:", classes="compact-label")
+                                yield Select(
+                                    harness_select_options(),
+                                    value=binding.kind.value,
+                                    compact=True,
+                                    classes="compact-harness",
+                                    id=f"council-{role}-harness",
+                                )
+                                yield Input(
+                                    value=binding.model,
+                                    compact=True,
+                                    classes="compact-model",
+                                    id=f"council-{role}-model",
+                                )
+                                yield Select(
+                                    COUNCIL_EFFORT_OPTIONS,
+                                    value=binding.effort.value if binding.effort else "none",
+                                    allow_blank=False,
+                                    compact=True,
+                                    classes="compact-effort",
+                                    id=f"council-{role}-effort",
+                                )
 
-                        yield Label("Council Scout:", classes="section-label")
-                        with Horizontal(classes="field-row"):
-                            yield Label("Harness:")
-                            yield Select(
-                                harness_select_options(),
-                                value=self._council_config.scout.kind.value,
-                                id="council-scout-harness",
-                            )
-                            yield Label("Model:")
-                            yield Input(
-                                value=self._council_config.scout.model,
-                                id="council-scout-model",
-                            )
-
-                        yield Label("Council Members (Deliberators):", classes="section-label")
-                        yield Static("", id="council-warning", classes="warning-text")
-                        with Vertical(classes="table-container"):
+                        yield Label("Council Members (Deliberators):", classes="compact-section")
+                        yield Static("", id="council-warning", classes="compact-warning")
+                        with Vertical(classes="council-table-container"):
                             yield DataTable(id="council-members-table", cursor_type="row")
 
-                        yield Label("Member Details:", classes="section-label")
-                        with Horizontal(classes="field-row"):
-                            yield Label("Label:")
+                        with Horizontal(classes="compact-row"):
                             yield Input(
-                                placeholder="Identity label (e.g. council-1)",
+                                placeholder="Label (e.g. council-1)",
+                                compact=True,
+                                classes="compact-label-input",
                                 id="council-member-label-input",
                             )
-                            yield Label("Harness:")
                             yield Select(
                                 harness_select_options(),
                                 value="agy",
+                                compact=True,
+                                classes="compact-harness",
                                 id="council-member-harness-select",
                             )
-                        with Horizontal(classes="field-row"):
-                            yield Label("Model:")
                             yield Input(
                                 placeholder="Model name",
+                                compact=True,
+                                classes="compact-model",
                                 id="council-member-model-input",
                             )
                             yield Checkbox(
                                 "Enabled",
                                 value=True,
+                                compact=True,
                                 id="council-member-enabled-checkbox",
                             )
-
-                        with Horizontal(classes="action-row"):
-                            yield Button("Add Member", id="btn-add-member", variant="success")
-                            yield Button("Update Member", id="btn-edit-member", variant="warning")
-                            yield Button("Remove Member", id="btn-remove-member", variant="error")
-                            yield Button("Move Up", id="btn-member-up")
-                            yield Button("Move Down", id="btn-member-down")
+                        with Horizontal(classes="compact-row"):
+                            yield Button(
+                                "Add", id="btn-add-member", variant="success", compact=True
+                            )
+                            yield Button(
+                                "Update", id="btn-edit-member", variant="warning", compact=True
+                            )
+                            yield Button(
+                                "Remove", id="btn-remove-member", variant="error", compact=True
+                            )
+                            yield Button("Up", id="btn-member-up", compact=True)
+                            yield Button("Down", id="btn-member-down", compact=True)
 
                 # Tab 5: AiHead Persona Settings
                 with TabPane("AiHead Persona", id="tab-aihead"):
@@ -344,8 +406,8 @@ class SettingsModal(ModalScreen[Optional[Tuple[HerdrMasterConfig, Squad]]]):
 
             yield Static("", id="settings-status", classes="status-bar")
             with Horizontal(classes="footer-row"):
-                yield Button("Save Settings", id="btn-save", variant="primary")
-                yield Button("Cancel", id="btn-cancel")
+                yield Button("Save Settings", id="btn-save", variant="primary", compact=True)
+                yield Button("Cancel", id="btn-cancel", compact=True)
 
     def on_mount(self) -> None:
         self._setup_favorites_table()
@@ -601,6 +663,10 @@ class SettingsModal(ModalScreen[Optional[Tuple[HerdrMasterConfig, Squad]]]):
 
         self.app.push_screen(ProjectFolderPicker(folder), on_selected)
 
+    def _council_effort(self, role: str) -> Optional[EffortLevel]:
+        value = str(self.query_one(f"#council-{role}-effort", Select).value)
+        return EffortLevel(value) if value in {e.value for e in EffortLevel} else None
+
     def _validate_and_save(self) -> None:
         tabbed = self.query_one(TabbedContent)
 
@@ -628,6 +694,8 @@ class SettingsModal(ModalScreen[Optional[Tuple[HerdrMasterConfig, Squad]]]):
         coord_model = self.query_one("#council-coordinator-model", Input).value.strip()
         scout_harness = str(self.query_one("#council-scout-harness", Select).value)
         scout_model = self.query_one("#council-scout-model", Input).value.strip()
+        coord_effort = self._council_effort("coordinator")
+        scout_effort = self._council_effort("scout")
 
         if not coord_model:
             self._set_status("Council Coordinator model cannot be blank.")
@@ -651,11 +719,13 @@ class SettingsModal(ModalScreen[Optional[Tuple[HerdrMasterConfig, Squad]]]):
                 coordinator=HarnessBinding(
                     kind=HarnessKind(coord_harness),
                     model=coord_model,
+                    effort=coord_effort,
                     label="coordinator",
                 ),
                 scout=HarnessBinding(
                     kind=HarnessKind(scout_harness),
                     model=scout_model,
+                    effort=scout_effort,
                     label="scout",
                 ),
                 members=self._council_members,

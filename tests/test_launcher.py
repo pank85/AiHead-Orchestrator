@@ -636,3 +636,39 @@ async def test_launch_ergo_ai_head_state_reaches_bootstrap_instructions(
         assert discovery.model == "old"
     instructions = _payload(client.prompt_agent.await_args.args[1])["ai_head"]["instructions"]
     assert ("Do not consult AiHead" in instructions) is busy_text
+
+
+@pytest.mark.asyncio
+async def test_launch_orchestration_passes_role_efforts_not_worker_effort():
+    from herdr_master.pipeline.launcher import launch_orchestration
+
+    client = _client()
+    with (
+        patch("herdr_master.pipeline.launcher.resolve_herdr_context", return_value=_inside()),
+        patch("herdr_master.pipeline.launcher.ensure_herdr_server", new_callable=AsyncMock),
+    ):
+        res = await launch_orchestration(
+            client=client,
+            intent="build it",
+            workspace_label="orch",
+            harness="claude",
+            scout_model="claude-sonnet-4-6",
+            architect_model="claude-opus-4-6",
+            coder_model="claude-sonnet-4-6 | claude-opus-4-6",
+            reviewer_model="claude-opus-4-6",
+            scout_effort="low",
+            architect_effort="xhigh",
+            reviewer_effort=None,
+            cwd="/tmp/repo",
+        )
+    squad = res["squad"]
+    assert squad.scout.effort == EffortLevel.LOW
+    assert squad.architect.effort == EffortLevel.MAX  # xhigh aliases to max
+    assert squad.reviewer.effort is None
+    assert [w.effort for w in squad.worker_pool] == [None, None]
+    assert len(squad.worker_pool) == 2
+    assert res["effort"] == "low"
+    assert "--efforts scout=low,architect=max" in res["intent"]
+    assert "reviewer=" not in res["intent"].split("--efforts", 1)[1]
+    prompt = client.prompt_agent.await_args.args[1]
+    assert "--efforts scout=low,architect=max" in prompt

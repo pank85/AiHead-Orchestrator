@@ -31,6 +31,9 @@ class OrchestrationLaunchParams(BaseModel):
     architect_model: str
     coder_model: str
     reviewer_model: str
+    scout_effort: Optional[str] = None
+    architect_effort: Optional[str] = None
+    reviewer_effort: Optional[str] = None
     dangerously_skip_permissions: bool = True
     project_path: Optional[Path] = None
 
@@ -257,8 +260,11 @@ class LaunchOrchestrationModal(ModalScreen[Optional[OrchestrationLaunchParams]])
             harness=orch_config.harness,
             scout_model=self.editor._scout_input.value.strip(),
             architect_model=self.editor._architect_input.value.strip(),
-            coder_model=self.editor._coder_input.value.strip(),
+            coder_model=" | ".join(orch_config.worker_models),
             reviewer_model=self.editor._reviewer_input.value.strip(),
+            scout_effort=orch_config.scout_effort,
+            architect_effort=orch_config.architect_effort,
+            reviewer_effort=orch_config.reviewer_effort,
             dangerously_skip_permissions=skip_perms,
             project_path=project_path,
         )

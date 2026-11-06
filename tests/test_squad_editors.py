@@ -206,7 +206,7 @@ async def test_orchestration_editor_defaults_and_harness_switch():
         assert editor._harness_select.value == "agy"
         assert editor._scout_input.value == "flash_lite"
         assert editor._architect_input.value == "pro"
-        assert editor._coder_input.value == "flash"
+        assert [i.value for i in editor._worker_inputs] == ["flash"]
         assert editor._reviewer_input.value == "pro"
         assert editor.is_valid() is True
 
@@ -215,18 +215,20 @@ async def test_orchestration_editor_defaults_and_harness_switch():
         await pilot.pause()
         assert editor._scout_input.value == "claude-sonnet-4-6"
         assert editor._architect_input.value == "claude-opus-4-6"
-        assert editor._coder_input.value == "claude-sonnet-4-6"
+        assert [i.value for i in editor._worker_inputs] == ["claude-sonnet-4-6"]
         assert editor._reviewer_input.value == "claude-opus-4-6"
 
 
 @pytest.mark.asyncio
-async def test_orchestration_editor_worker_pipe_adaptation_and_config():
-    """OrchestrationEditor adapts pipe-separated coder input to worker_models list."""
+async def test_orchestration_editor_worker_list_and_config():
+    """OrchestrationEditor builds worker_models list from worker rows."""
     app = OrchestrationEditorHostApp()
 
     async with app.run_test() as pilot:
         editor = app.editor
-        editor._coder_input.value = "flash | pro | gemini-3.8-flash"
+        editor._worker_inputs[0].value = "flash"
+        editor.add_worker("pro")
+        editor.add_worker("gemini-3.8-flash")
         await pilot.pause()
 
         cfg = editor.get_config()
@@ -245,7 +247,7 @@ async def test_orchestration_editor_worker_pipe_adaptation_and_config():
         editor.reload_config(new_cfg)
         await pilot.pause()
         assert editor._harness_select.value == "pi"
-        assert editor._coder_input.value == "anthropic/claude-3-5-sonnet | xai/grok-4.7"
+        assert [i.value for i in editor._worker_inputs] == ["anthropic/claude-3-5-sonnet", "xai/grok-4.7"]
 
 
 @pytest.mark.asyncio
@@ -257,7 +259,7 @@ async def test_orchestration_editor_prohibits_worker_effort():
         editor = app.editor
 
         # Worker specifying effort fails validation
-        editor._coder_input.value = "flash:high"
+        editor._worker_inputs[0].value = "flash:high"
         await pilot.pause()
         err = editor.validate()
         assert err is not None
@@ -265,9 +267,94 @@ async def test_orchestration_editor_prohibits_worker_effort():
         assert editor.is_valid() is False
 
         # Removing effort restores validity
-        editor._coder_input.value = "flash"
+        editor._worker_inputs[0].value = "flash"
         await pilot.pause()
         assert editor.is_valid() is True
+
+
+@pytest.mark.asyncio
+async def test_orchestration_editor_add_remove_workers_and_role_efforts():
+    """Workers are a dynamic list; scout/architect/reviewer have effort, workers do not."""
+    app = OrchestrationEditorHostApp()
+
+    async with app.run_test(size=(80, 24)) as pilot:
+        editor = app.editor
+        assert editor.worker_count == 1
+
+        await pilot.click("#orch-add-worker")
+        await pilot.pause()
+        assert editor.worker_count == 2
+        await pilot.pause(0.5)  # let the button's active-press effect clear
+        await pilot.click("#orch-add-worker")
+        await pilot.pause()
+        assert editor.worker_count == 3
+        assert len(editor.query(".orch-worker-row")) == 3
+        editor._worker_inputs[1].value = "pro"
+        editor._worker_inputs[2].value = "flash_lite"
+        assert editor.get_config().worker_models == ["flash", "pro", "flash_lite"]
+
+        await pilot.pause(0.5)
+        await pilot.click("#orch-remove-worker")
+        await pilot.pause()
+        assert editor.get_config().worker_models == ["flash", "pro"]
+        assert len(editor.query(".orch-worker-row")) == 2
+
+        # Per-row remove button
+        editor.query(".orch-worker-row Button").first().press()
+        await pilot.pause()
+        assert editor.get_config().worker_models == ["pro"]
+
+        # Last worker cannot be removed
+        assert editor.remove_worker() is False
+        assert editor.worker_count == 1
+
+        # Add/Remove buttons stay on screen
+        for bid in ("#orch-add-worker", "#orch-remove-worker"):
+            assert app.screen.region.contains_region(editor.query_one(bid).region)
+
+        # Role efforts (incl. xhigh)
+        editor.query_one("#orch-scout-effort", Select).value = "low"
+        editor.query_one("#orch-architect-effort", Select).value = "xhigh"
+        editor.query_one("#orch-reviewer-effort", Select).value = "high"
+        await pilot.pause()
+        cfg = editor.get_config()
+        assert (cfg.scout_effort, cfg.architect_effort, cfg.reviewer_effort) == (
+            "low",
+            "xhigh",
+            "high",
+        )
+        assert editor.is_valid()
+
+        # No worker effort control exists
+        assert not editor.query("#orch-coder-effort, #orch-worker-effort")
+        assert not hasattr(cfg, "worker_effort")
+        editor._worker_inputs[0].value = "pro:xhigh"
+        assert "must not specify an effort level" in (editor.validate() or "")
+
+
+@pytest.mark.asyncio
+async def test_orchestration_editor_reload_restores_efforts_and_workers():
+    app = OrchestrationEditorHostApp()
+    async with app.run_test() as pilot:
+        editor = app.editor
+        editor.reload_config(
+            OrchestrationConfig(
+                harness=HarnessKind.CLAUDE,
+                scout_model="a",
+                architect_model="b",
+                worker_models=["c", "d", "e"],
+                reviewer_model="f",
+                architect_effort="max",
+            )
+        )
+        await pilot.pause()
+        assert editor.worker_count == 3
+        cfg = editor.get_config()
+        assert cfg.architect_effort == "max" and cfg.scout_effort is None
+        editor.reload_config(OrchestrationConfig(worker_models=["x"]))
+        await pilot.pause()
+        assert editor.worker_count == 1
+        assert editor.get_config().architect_effort is None
 
 
 # --- Coexistence in Dual Host App ---

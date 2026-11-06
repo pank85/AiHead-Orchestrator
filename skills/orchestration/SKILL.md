@@ -1,7 +1,7 @@
 ---
 name: orchestration
 description: "Run the Scout -> Architect -> parallel coders -> blind reviewer pipeline with this harness's own subagents only. No Herdr, no herdm, no external orchestrator."
-argument-hint: "[--models scout=...,architect=...,coder=...,reviewer=...] [--ai-head|--no-ai-head] [intent]"
+argument-hint: "[--models scout=...,architect=...,coder=...,reviewer=...] [--efforts scout=...,architect=...,reviewer=...] [--ai-head|--no-ai-head] [intent]"
 slash: false
 metadata:
   opencode/autoinvoke: false
@@ -32,7 +32,7 @@ Resolve the subagent tool once at the start and use the same tool for every role
 - If the user passed `--models`, parse `<role>=<model>` pairs (roles: `scout`, `architect`, `coder`, `reviewer`; `coder` may list several bindings separated by `|`) and use exactly those.
 - Otherwise omit the model parameter entirely so each subagent inherits the host's default. Do not copy model slugs from other projects or from memory.
 - If the host rejects the parameter you passed, report the rejection and ask — never silently substitute a different model.
-- Effort: express it as a prompt prefix on line 1 (`think`, `think hard`, `think harder`, `ultrathink`) when the host has no effort flag. Skip it entirely when the user pinned no effort.
+- Effort: if the user passed `--efforts`, parse `<role>=<effort>` pairs (roles: `scout`, `architect`, `reviewer`; values `low`, `medium`, `high`, `max`) and apply each to that role's subagent — as the host's effort parameter when it has one, otherwise as a prompt prefix on line 1 (`think`, `think hard`, `think harder`, `ultrathink`). Skip it entirely for roles where the user pinned no effort. **Worker effort is never user-set** — the Architect decides each Coder's effort per task in `plan.md`.
 
 **Async vs blocking.** If the host's subagent tool returns immediately (async), end your turn after launching and resume on the completion notification; do not poll in a loop. If it blocks, call it and read the result. Either way, verify the artifact each role was told to write before trusting that the role finished.
 
