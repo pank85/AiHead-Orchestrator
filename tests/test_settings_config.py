@@ -378,6 +378,25 @@ def test_ai_head_config_disabled_by_default_and_roundtrip(tmp_path):
     assert reloaded.ai_head.mode == "herdr"
 
 
+def test_ai_head_soul_workflow_knowledge_and_selection_rules():
+    """Verify DEFAULT_AI_HEAD_SOUL and default config include workflow selection intelligence."""
+    # Soul constants contain all 4 workflows
+    for wf in ("/orchestration", "/ergo", "/council", "/herdr-master"):
+        assert wf in DEFAULT_AI_HEAD_SOUL
+
+    # Model and harness discovery sources
+    assert "models.default_squad" in DEFAULT_AI_HEAD_SOUL
+    assert "orchestration" in DEFAULT_AI_HEAD_SOUL
+    assert "catalog" in DEFAULT_AI_HEAD_SOUL
+    assert "Workflow Orchestrator" in DEFAULT_AI_HEAD_SOUL
+
+    # Default AiHead config retains this enriched soul
+    cfg = HerdrMasterConfig()
+    assert cfg.ai_head.soul == DEFAULT_AI_HEAD_SOUL
+    for wf in ("/orchestration", "/ergo", "/council", "/herdr-master"):
+        assert wf in cfg.ai_head.soul
+
+
 def test_ai_head_unsupported_mode_rejected():
     """AiHead execution mode must be 'herdr' or 'cli'; others fail actionably."""
     with pytest.raises(ValidationError, match="Unsupported execution mode 'daemon'"):

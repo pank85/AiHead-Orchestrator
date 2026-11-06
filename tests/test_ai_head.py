@@ -18,6 +18,7 @@ from herdr_master.herdr.snapshot import (
     TabSnapshot,
 )
 from herdr_master.pipeline.ai_head import (
+    CORE_WORKFLOWS,
     AiHeadDecisionReply,
     AiHeadDecisionRequest,
     AiHeadExecutionError,
@@ -26,6 +27,7 @@ from herdr_master.pipeline.ai_head import (
     _clear_running_head_states,
     _load_running_head_state,
     _save_running_head_state,
+    assess_workflow_recommendation,
     build_agent_args,
     build_ai_head_decision_prompt,
     build_ai_head_discovery,
@@ -122,11 +124,75 @@ def test_persona_prompt_uses_soul_and_guardrails():
     assert "NEVER authorize destructive operations" in prompt_default
     assert "git reset --hard" in prompt_default
 
+    # Workflow awareness & model discovery in default system prompt
+    assert "/orchestration" in prompt_default
+    assert "/ergo" in prompt_default
+    assert "/council" in prompt_default
+    assert "/herdr-master" in prompt_default
+    assert "models.default_squad" in prompt_default
+    assert "[orchestration]" in prompt_default
+    assert "catalog" in prompt_default
+    assert "WORKFLOW SELECTION HEURISTICS" in prompt_default
+    assert "scale, ambiguity, and subtask structure" in prompt_default
+
     # Custom soul
     custom_cfg = AiHeadConfig(soul="Principal Architect focused on security and clean architecture")
     prompt_custom = build_ai_head_system_prompt(custom_cfg)
     assert "Principal Architect focused on security and clean architecture" in prompt_custom
     assert "NEVER authorize destructive operations" in prompt_custom
+    # Workflow knowledge persists regardless of customized soul
+    assert "/orchestration" in prompt_custom
+    assert "/ergo" in prompt_custom
+    assert "/council" in prompt_custom
+    assert "/herdr-master" in prompt_custom
+
+
+def test_ai_head_core_workflows_registry():
+    assert "/orchestration" in CORE_WORKFLOWS
+    assert "/ergo" in CORE_WORKFLOWS
+    assert "/council" in CORE_WORKFLOWS
+    assert "/herdr-master" in CORE_WORKFLOWS
+
+    assert "Single-Harness" in CORE_WORKFLOWS["/orchestration"]["name"]
+    assert "Multi-Harness" in CORE_WORKFLOWS["/ergo"]["name"]
+    assert "AI Council" in CORE_WORKFLOWS["/council"]["name"]
+    assert "Master Orchestrator" in CORE_WORKFLOWS["/herdr-master"]["name"]
+
+
+def test_ai_head_workflow_selection_heuristics():
+    # Ambiguous / RFC -> /council
+    rec_council = assess_workflow_recommendation(
+        objective="Design multi-tenant event mesh RFC with consensus on partitioning",
+        ambiguity="high",
+    )
+    assert rec_council["workflow"] == "/council"
+    assert "consensus" in rec_council["rationale"] or "ambiguity" in rec_council["rationale"]
+
+    # Multiple subtasks / parallel jobs -> /herdr-master
+    rec_master = assess_workflow_recommendation(
+        objective="Deploy 3 parallel service upgrades across frontend and backend",
+        scale="multi_task",
+        multiple_subtasks=True,
+    )
+    assert rec_master["workflow"] == "/herdr-master"
+    assert "isolated tabs and worktrees" in rec_master["rationale"]
+
+    # Rigorous feature development -> /ergo
+    rec_ergo = assess_workflow_recommendation(
+        objective="Implement payment gateway with rigorous review and best-of-breed cross-harness models",
+        scale="feature",
+    )
+    assert rec_ergo["workflow"] == "/ergo"
+    assert "best-of-breed" in rec_ergo["rationale"]
+
+    # Fast cohesive single-task -> /orchestration
+    rec_orch = assess_workflow_recommendation(
+        objective="Add input validation helper to auth utility module",
+        scale="small",
+        ambiguity="low",
+    )
+    assert rec_orch["workflow"] == "/orchestration"
+    assert "single-harness" in rec_orch["rationale"]
 
 
 def test_decision_prompt_assembly():
