@@ -396,13 +396,6 @@ class SettingsModal(ModalScreen[Optional[Tuple[HerdrMasterConfig, Squad]]]):
                                 value=self._aihead_config.binding.model,
                                 id="aihead-model",
                             )
-                        with Horizontal(classes="field-row"):
-                            yield Label("Execution Mode:")
-                            yield Select(
-                                [("Herdr (TUI)", "herdr"), ("CLI (Herdr-free)", "cli")],
-                                value=self._aihead_config.mode or "herdr",
-                                id="aihead-mode",
-                            )
 
             yield Static("", id="settings-status", classes="status-bar")
             with Horizontal(classes="footer-row"):
@@ -740,7 +733,6 @@ class SettingsModal(ModalScreen[Optional[Tuple[HerdrMasterConfig, Squad]]]):
         aihead_soul = self.query_one("#aihead-soul-input", TextArea).text.strip()
         aihead_harness = str(self.query_one("#aihead-harness", Select).value)
         aihead_model = self.query_one("#aihead-model", Input).value.strip()
-        aihead_mode = self.query_one("#aihead-mode", Select).value
 
         if aihead_enabled:
             if not aihead_model:
@@ -756,7 +748,6 @@ class SettingsModal(ModalScreen[Optional[Tuple[HerdrMasterConfig, Squad]]]):
             new_aihead = AiHeadConfig(
                 enabled=aihead_enabled,
                 soul=aihead_soul or DEFAULT_AI_HEAD_SOUL,
-                mode=str(aihead_mode) if aihead_mode else None,
                 binding=HarnessBinding(
                     kind=HarnessKind(aihead_harness),
                     model=aihead_model or "pro",

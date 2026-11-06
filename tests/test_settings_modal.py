@@ -183,7 +183,6 @@ async def test_settings_modal_aihead_editing_and_save(tmp_path):
         modal.query_one("#aihead-soul-input", TextArea).text = "Custom UX Architect Soul"
         modal.query_one("#aihead-harness", Select).value = "claude"
         modal.query_one("#aihead-model", Input).value = "claude-sonnet-4-6"
-        modal.query_one("#aihead-mode", Select).value = "cli"
 
         # Tab 1: set default folder
         tabbed.active = "tab-projects"
@@ -203,13 +202,11 @@ async def test_settings_modal_aihead_editing_and_save(tmp_path):
         assert saved_cfg.ai_head.soul == "Custom UX Architect Soul"
         assert saved_cfg.ai_head.binding.kind.value == "claude"
         assert saved_cfg.ai_head.binding.model == "claude-sonnet-4-6"
-        assert saved_cfg.ai_head.mode == "cli"
 
         # Verify persisted on disk
         persisted = load_project_config(modal.project_config_path)
         assert persisted.ai_head.enabled is True
         assert persisted.ai_head.soul == "Custom UX Architect Soul"
-        assert persisted.ai_head.mode == "cli"
 
 
 @pytest.mark.asyncio
