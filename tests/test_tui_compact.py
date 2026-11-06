@@ -19,15 +19,29 @@ async def test_compact_workspace_layout(size):
         toolbar = app.query_one(QuickLaunchBar)
         assert toolbar.size.height == 4
         descriptions = list(toolbar.query(".launch-description"))
-        assert len(descriptions) == 2
-        for description, button_id in zip(
-            descriptions, ("#btn-new-master", "#btn-new-ergo"), strict=True
+        assert len(descriptions) == 4
+        for description, (button_id, expected_text) in zip(
+            descriptions,
+            (
+                ("#btn-new-master", "Coordinate ongoing jobs"),
+                ("#btn-new-ergo", "Run one planned pipeline"),
+                ("#btn-new-orchestration", "Single-harness subagents"),
+                ("#btn-new-council", "Deliberate consensus plan"),
+            ),
+            strict=True,
         ):
             button = toolbar.query_one(button_id)
             assert description.size.height == 1
             assert description.region.y == button.region.bottom
             assert description.region.bottom <= toolbar.region.bottom
-        for button_id in ("#btn-new-master", "#btn-new-ergo", "#btn-settings"):
+            assert expected_text in str(description.render())
+        for button_id in (
+            "#btn-new-master",
+            "#btn-new-ergo",
+            "#btn-new-orchestration",
+            "#btn-new-council",
+            "#btn-settings",
+        ):
             button = app.query_one(button_id)
             assert button.region.y == toolbar.region.y
             assert button.region.right <= size[0]

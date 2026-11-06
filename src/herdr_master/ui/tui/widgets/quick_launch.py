@@ -39,6 +39,12 @@ class QuickLaunchBar(Static):
     class LaunchErgoRequested(Message):
         """User requested to launch a new Ergo Pipeline."""
 
+    class LaunchOrchestrationRequested(Message):
+        """User requested to launch a single-harness Orchestration pipeline."""
+
+    class LaunchCouncilRequested(Message):
+        """User requested to launch an AI Council deliberation run."""
+
     class OpenSettingsRequested(Message):
         """User requested to configure squad/settings."""
 
@@ -62,10 +68,26 @@ class QuickLaunchBar(Static):
                 yield Static("Run one planned pipeline", classes="launch-description")
             with Vertical(classes="launch-action"):
                 yield Button(
-                    "Squad Settings",
+                    "Orchestrate",
+                    id="btn-new-orchestration",
+                    variant="success",
+                    tooltip="[o] Run Scout -> Architect -> Coders -> Reviewer with subagents in a single harness.",
+                )
+                yield Static("Single-harness subagents", classes="launch-description")
+            with Vertical(classes="launch-action"):
+                yield Button(
+                    "AI Council",
+                    id="btn-new-council",
+                    variant="primary",
+                    tooltip="Start an AI Council deliberation run.",
+                )
+                yield Static("Deliberate consensus plan", classes="launch-description")
+            with Vertical(classes="launch-action"):
+                yield Button(
+                    "Settings",
                     id="btn-settings",
                     variant="warning",
-                    tooltip="[s/c] Configure harnesses, models, reasoning effort, and workers.",
+                    tooltip="[s/c] Configure projects, squads, council, and persona.",
                 )
 
     def on_button_pressed(self, event: Button.Pressed) -> None:
@@ -73,5 +95,9 @@ class QuickLaunchBar(Static):
             self.post_message(self.LaunchMasterRequested())
         elif event.button.id == "btn-new-ergo":
             self.post_message(self.LaunchErgoRequested())
+        elif event.button.id == "btn-new-orchestration":
+            self.post_message(self.LaunchOrchestrationRequested())
+        elif event.button.id == "btn-new-council":
+            self.post_message(self.LaunchCouncilRequested())
         elif event.button.id == "btn-settings":
             self.post_message(self.OpenSettingsRequested())

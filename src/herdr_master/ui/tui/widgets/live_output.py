@@ -142,13 +142,9 @@ class LivePaneOutput(VerticalScroll):
         height: 1fr;
         width: 100%;
         background: #0c0c0c;
-        border: round #222222;
         overflow-y: scroll;
         overflow-x: hidden;
         color: #dddddd;
-    }
-    LivePaneOutput:focus {
-        border: round #0087d7;
     }
     #live-pane-output-text {
         width: 100%;
@@ -240,6 +236,22 @@ class LivePaneOutput(VerticalScroll):
 
     def on_blur(self, event: events.Blur) -> None:
         self._refresh_display()
+
+    def on_click(self, event: events.Click) -> None:
+        try:
+            parent_view = self.ancestors_with_self
+            for ancestor in parent_view:
+                if isinstance(ancestor, LivePaneView):
+                    if (
+                        ancestor._prompt_input.display
+                        and not ancestor._prompt_input.disabled
+                    ):
+                        ancestor._prompt_input.focus()
+                        return
+                    break
+        except Exception:
+            pass
+        self.focus()
 
     def on_key(self, event: events.Key) -> None:
         if event.key in ("ctrl+right_square_bracket", "ctrl+]", "ctrl+close_bracket"):
@@ -371,13 +383,9 @@ class LivePaneView(Vertical):
         height: 1fr;
         width: 100%;
         background: #0c0c0c;
-        border: round #222222;
         overflow-y: scroll;
         overflow-x: hidden;
         color: #dddddd;
-    }
-    #live-pane-output:focus {
-        border: round #0087d7;
     }
     #reply-text {
         height: 2;
@@ -389,7 +397,6 @@ class LivePaneView(Vertical):
         display: none;
     }
     #prompt-input {
-        display: none;
         height: 3;
         min-height: 3;
         border: round #444444;
@@ -561,6 +568,7 @@ class LivePaneView(Vertical):
         self._inline_pending_lease: Optional[PaneLease] = None
         self._send_in_flight: bool = False
         self._feedback_message: Optional[Text] = None
+        self._pending_focus: bool = False
 
     def compose(self) -> ComposeResult:
         yield self._identity
@@ -659,6 +667,21 @@ class LivePaneView(Vertical):
         self._refresh_identity()
         self._refresh_state()
         self._refresh_controls()
+
+        if frame.phase in ("empty", "stale", "unavailable") or not (
+            frame.target and frame.target.pane_id
+        ):
+            self._pending_focus = False
+        elif (
+            self._pending_focus
+            and frame.phase in ("live", "degraded")
+            and frame.lease is not None
+            and not self._draft_invalid
+            and not self._prompt_input.disabled
+        ):
+            self._pending_focus = False
+            self._prompt_input.focus()
+            self.call_after_refresh(self._prompt_input.focus)
 
     def _on_pause_changed(self, is_paused: bool) -> None:
         self._refresh_state()
@@ -799,25 +822,20 @@ class LivePaneView(Vertical):
             self._prompt_input.placeholder = "Sending prompt…"
         elif self._current_frame.phase == "loading":
             self._prompt_input.disabled = True
-            self._prompt_input.placeholder = "Agent is loading…"
+            self._prompt_input.placeholder = "Pane is loading…"
         elif self._current_frame.phase in ("stale", "unavailable"):
             self._prompt_input.disabled = True
             self._prompt_input.placeholder = (
                 f"Pane {self._current_frame.phase} — cannot accept input"
             )
-        elif not self._current_frame.can_reply:
+        elif self._current_frame.lease is None:
             self._prompt_input.disabled = True
-            if self._current_frame.agent_status == "terminal":
-                self._prompt_input.placeholder = (
-                    "Terminal shell is read-only — press 'o' to Open in Herdr"
-                )
-            else:
-                self._prompt_input.placeholder = (
-                    "Replies disabled (demo mode or agent blocked)"
-                )
+            self._prompt_input.placeholder = "Terminal input disabled in demo mode"
         else:
             self._prompt_input.disabled = False
-            self._prompt_input.placeholder = "Type prompt and press Enter to send…"
+            self._prompt_input.placeholder = (
+                "Type command or prompt and press Enter… (Esc for tree)"
+            )
 
         if self._draft_lease is not None:
             self.add_class("-reply-active")
@@ -953,39 +971,45 @@ class LivePaneView(Vertical):
 
     def _submit_inline_prompt(self) -> None:
         if (
-            self._send_in_flight
-            or self._current_frame is None
-            or not self._current_frame.can_reply
+            self._current_frame is None
+            or self._current_frame.phase not in ("live", "degraded")
             or self._current_frame.lease is None
             or self._draft_invalid
         ):
             return
-        text = self._prompt_input.value.strip()
-        if not text:
-            return
-        self._send_in_flight = True
-        self._inline_pending_lease = self._current_frame.lease
-        self._feedback_message = Text("Sending…", style="cyan")
+        text = self._prompt_input.value
         self._prompt_input.value = ""
-        self._refresh_state()
-        self._refresh_controls()
         self.post_message(
-            self.ReplyRequested(
-                ReplyRequest(lease=self._current_frame.lease, text=text, notify=False)
+            self.TerminalInputRequested(
+                lease=self._current_frame.lease,
+                text=text if text else None,
+                keys=["enter"],
             )
         )
 
     def focus_input(self) -> None:
-        """Focus the terminal output widget if active and not blocked by an invalid draft."""
+        """Focus the inline prompt input now, or as soon as the selected pane becomes live."""
+        self._pending_focus = True
         if (
             self._current_frame is not None
             and self._current_frame.phase in ("live", "degraded")
+            and self._current_frame.lease is not None
             and not self._draft_invalid
         ):
-            self._output.focus()
+            self._prompt_input.disabled = False
+            self._prompt_input.focus()
+            self.call_after_refresh(self._prompt_input.focus)
+            self._pending_focus = False
 
     def on_key(self, event: events.Key) -> None:
-        if event.key == "escape" and self._prompt_input.has_focus:
+        if not self._prompt_input.has_focus:
+            return
+        if event.key in (
+            "escape",
+            "ctrl+right_square_bracket",
+            "ctrl+]",
+            "ctrl+close_bracket",
+        ):
             event.stop()
             try:
                 browser = self.app.query_one("WorkspaceBrowser")
@@ -995,6 +1019,28 @@ class LivePaneView(Vertical):
                     browser.focus()
             except Exception:
                 pass
+            return
+
+        if event.key == "ctrl+c" and self._prompt_input.value != "":
+            event.stop()
+            self._prompt_input.value = ""
+            return
+
+        if self._prompt_input.value == "":
+            empty_key_map = {
+                "up": "up",
+                "down": "down",
+                "tab": "tab",
+                "shift+tab": "backtab",
+                "backtab": "backtab",
+                "ctrl+c": "ctrl+c",
+                "ctrl+d": "ctrl+d",
+                "ctrl+z": "ctrl+z",
+                "ctrl+l": "ctrl+l",
+            }
+            if event.key in empty_key_map:
+                event.stop()
+                self._handle_terminal_input(None, [empty_key_map[event.key]])
 
     def apply_reply_result(self, result: ReplyResult) -> None:
         """Apply submission outcome delivered from the app submission worker."""

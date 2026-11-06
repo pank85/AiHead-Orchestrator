@@ -174,7 +174,7 @@ async def test_partial_override_and_custom_pool_reach_launch(tmp_path: Path):
         ) as launch,
     ):
         async with app.run_test(size=(110, 45)) as pilot:
-            await pilot.press("c")
+            await pilot.press("e")
             modal = pilot.app.screen
             text = _tree_text(modal)
             assert "subtle-jobs" in text
@@ -341,7 +341,7 @@ async def test_squad_editor_validation_effort_and_read_only_root(tmp_path: Path)
 async def test_reorder_persists_and_save_default_round_trip(tmp_path: Path):
     app = HerdrMasterApp(demo=False, project_path=tmp_path)
     async with app.run_test(size=(110, 45)) as pilot:
-        await pilot.press("s")
+        await pilot.press("e")
         modal = pilot.app.screen
         modal._load_agent_into_editor(("worker", 1))
         modal.query_one("#btn-up-worker").focus()
@@ -378,7 +378,7 @@ async def test_reorder_persists_and_save_default_round_trip(tmp_path: Path):
 async def test_save_default_keeps_disabled_worker(tmp_path: Path):
     app = HerdrMasterApp(demo=False, project_path=tmp_path)
     async with app.run_test(size=(110, 45)) as pilot:
-        await pilot.press("s")
+        await pilot.press("e")
         modal = pilot.app.screen
         assert isinstance(modal, LaunchErgoModal)
         disabled = modal.squad.worker_pool[1]

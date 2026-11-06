@@ -1,7 +1,7 @@
 ---
 name: ergo
 description: "Run the Ergo Scout -> Architect -> parallel specialist Coders -> Reviewer pipeline with worktree/branch isolation, Approval Gate, and single squash-commit landing (supports --models, --native, and default Herdr mode)."
-argument-hint: "[--native] [--models ...] [intent]"
+argument-hint: "[--native] [--models ...] [--ai-head|--no-ai-head] [intent]"
 slash: false
 metadata:
   opencode/autoinvoke: false
@@ -18,6 +18,7 @@ You are the orchestrator. **Never implement code directly in the main conversati
 - **Default Mode (Herdr Cross-Harness)**: Plain `/ergo` defaults to Herdr mode. The mixed agy/Pi product default squad cannot run through a single host's native subagent tool, so every pipeline role runs as an interactive Herdr agent tab inside one Herdr workspace. `--herdr` is an explicit alias for this default.
 - **Explicit `--native` Mode**: When `--native` is explicitly passed (e.g. `/ergo --native ...`), the pipeline runs using the parent harness's native subagent tool (`invoke_subagent` in `agy`, `subagent` in `pi`/`opencode`, `Agent` in `claude`). There is no alternate native default squad; `--native` requires explicit compatible role/worker overrides or a compatible run snapshot, and any inherited product binding incompatible with the native host is rejected by the resolver.
 - **`--models` Inline Role & Worker Overrides**: Overrides any role (`scout`, `architect`, `reviewer`) or worker pool (`workers` / `coders`). Works in both default Herdr mode and `--native` mode.
+- **`--ai-head` / `--no-ai-head` AiHead Consultation**: Configures autonomous technical decision consultation via AiHead (see §3).
 
 ---
 
@@ -109,14 +110,38 @@ Plain `/ergo` and master-forwarded Ergo jobs execute in Herdr mode.
 
 ---
 
-## 3. The Spawn Recipe & Shared Boilerplate
+## 3. AiHead Availability and Autonomous Decisions
+
+The Ergo pipeline supports automated, intelligent technical decision consultation via AiHead:
+
+- **Tri-State Flag & Discovery Descriptor**:
+  - `--ai-head`: Explicitly enable AiHead consultation.
+  - `--no-ai-head`: Explicitly disable AiHead consultation.
+  - Omitted: Discovered from project configuration (`.herdr-master.toml`) or launcher bootstrap context descriptor.
+- **TUI Mode**:
+  - Consults AiHead via its persistent Herdr tab (labelled `ai-head`) in the active workspace.
+  - Automated requests are serialized with unique correlation IDs; never inject requests blindly into an active user conversation.
+- **CLI Mode (100% Herdr-free)**:
+  - Direct execution without Herdr. Commands or harnesses calling each other invoke the harness directly via its native headless CLI runner (e.g. `opencode run`, `agy`, etc.) or native agent tool call in a direct subprocess without any Herdr daemon or socket. Harnesses can call each other directly without Herdr.
+- **Correlated Requests & Structured Decisions**:
+  - Every consultation provides a unique correlation ID and awaits a structured artifact (`{ "decision": "...", "rationale": "...", "escalated": false }`).
+- **Autonomous Decisions & Scope**:
+  - Autonomous decisions are accepted for technical/architectural choices within delegated scope (such as resolving non-conflicting implementation trade-offs or plan approval within delegated intent).
+  - Genuinely ambiguous requirements, conflicting requirements, or missing specifications escalate to the user.
+- **Hard Guardrails**:
+  - **Destructive operations, security bypasses, or out-of-scope actions always require explicit user approval.**
+  - AiHead enablement never grants permission to bypass tests, land unreviewed code, push, or run `git reset --hard`.
+
+---
+
+## 4. The Spawn Recipe & Shared Boilerplate
 
 Every agent prompt must be assembled in this order:
 1. **Effort phrase** on line 1 (`think`, `think hard`, `think harder`, or `ultrathink` when supported by the model/harness).
 2. **Specialist Persona line** (MANDATORY on every Coder task using the task's `Expert Persona` from `plan.md`):
    `Adopt this expert persona: <Expert Persona>.`
 3. **Shared Boilerplate** (verbatim below).
-4. **Role Brief** (`Scout Brief`, `Architect Brief`, `Coder Brief`, or `Reviewer Brief` from **§6** below).
+4. **Role Brief** (`Scout Brief`, `Architect Brief`, `Coder Brief`, or `Reviewer Brief` from **Agent Briefs** below).
 5. **Verbatim `ALLOWED CODER MODELS` block** (when spawning the Architect).
 6. **Run paths & inputs**: absolute `WORKTREE`, absolute `RUN_DIR`, `unitTestsMode` (`none` | `new` | `update-only`), and task-specific inputs.
 
@@ -135,7 +160,7 @@ Every agent prompt must be assembled in this order:
 
 ---
 
-## 4. Pipeline Sequence
+## 5. Pipeline Sequence
 
 Track one checklist item per step and complete in order:
 
@@ -180,6 +205,7 @@ Track one checklist item per step and complete in order:
 - If `~/.claude/lib/render-md.js` exists, render `RUN_DIR/plan.md` to HTML and share the path alongside the summary.
 - Present the plan to the user, clearly listing each task's scope, disjoint files, assigned **Expert Persona**, and assigned **Coder Model / Effort**.
 - **STOP and wait for explicit user approval.** Ask if any task's persona or coder model should be adjusted. No Coder may start before explicit user approval.
+  *(When `--ai-head` is enabled: An authorized AiHead decision within delegated scope may satisfy plan approval, provided its structured decision and rationale are recorded in `RUN_DIR/aihead_decision.json`. Genuinely ambiguous requirements, destructive actions, or scope expansions must still STOP and wait for explicit user approval).*
 
 ### Step 5: Parallel Specialist Coders (NEVER code in the orchestrator)
 - For each approved task in `plan.md`, make the Coder a task-specific specialist by injecting `Adopt this expert persona: <Expert Persona from plan>.` at the top of its prompt.
@@ -220,7 +246,7 @@ Only after the Reviewer verdict is **APPROVED**:
 
 ---
 
-## 5. Hard Rules
+## 6. Hard Rules
 
 - **NEVER skip the Scout, the Approval Gate, or the Reviewer.**
 - **NEVER code directly in the orchestrator** — Coders only.
@@ -235,7 +261,7 @@ Only after the Reviewer verdict is **APPROVED**:
 
 ---
 
-## 6. Agent Briefs
+## 7. Agent Briefs
 
 ### Scout Brief
 **READ-ONLY: never edit source code.** You are the Scout — fast discovery so the Architect doesn't burn context on grep. **Facts, not judgements** — paths, `file:line`, existing patterns, test coverage, and risks. No design recommendations. You write **only** `RUN_DIR/context.md`.

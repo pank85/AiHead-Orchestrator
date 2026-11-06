@@ -340,8 +340,101 @@ def test_herdr_master_forwards_orchestration_jobs():
     assert "**The master alone** runs the Master Final Review Gate" in body
 
 
+def test_council_skill_contract():
+    """Assert /council defines the canonical AI Council protocol and state gates."""
+    body = load_skill_body("council")
+
+    # Header and scope
+    assert "# /council" in body
+    assert "RUN_DIR/final_plan.md" in body
+    assert "plan" in body.lower()
+    assert "NOT perform code implementation" in body or "never modifies codebase source" in body
+
+    # Roster
+    assert "1 Coordinator" in body
+    assert "1 Scout" in body
+    assert "Dynamic Council Members (> 1)" in body or "dynamic members (> 1)" in body.lower()
+    assert "never votes" in body.lower()
+
+    # State-gate commands
+    for cmd in (
+        "council-state init",
+        "council-state open-round",
+        "council-state submit-plan",
+        "council-state submit-feedback",
+        "council-state consensus",
+        "council-state vote",
+        "council-state finalize",
+    ):
+        assert cmd in body, f"Expected {cmd} in /council skill contract"
+
+    # Multi-round protocol stages
+    assert "Independent Plan Drafting" in body
+    assert "Cross-Review" in body
+    assert "maximum number of feedback cycles is 5" in body or "Max 5 Cycles" in body
+    assert "Immediate Stop on Consensus" in body or "Stop immediately at verified consensus" in body
+    assert "Fallback 1-Round Vote" in body or "1-round vote" in body.lower()
+    assert "deterministic tie-break" in body.lower()
+
+    # AiHead availability and autonomous decisions
+    assert "--ai-head" in body
+    assert "--no-ai-head" in body
+    assert "TUI Mode" in body
+    assert "CLI Mode (100% Herdr-free)" in body
+    assert "correlated requests" in body.lower() or "correlation id" in body.lower()
+    assert "structured decision" in body.lower()
+    assert "delegated scope" in body.lower()
+    assert "Destructive operations, security bypasses, or out-of-scope actions always require explicit user approval" in body
+
+
+def test_ergo_skill_ai_head_section():
+    """Assert /ergo includes the AiHead availability and autonomous decision section."""
+    body = load_skill_body("ergo")
+
+    assert "AiHead Availability and Autonomous Decisions" in body
+    assert "--ai-head" in body
+    assert "--no-ai-head" in body
+    assert "TUI Mode" in body
+    assert "CLI Mode (100% Herdr-free)" in body
+    assert "persistent Herdr tab" in body
+    assert "correlation ID" in body
+    assert "structured artifact" in body
+    assert "delegated scope" in body.lower()
+    assert "Destructive operations, security bypasses, or out-of-scope actions always require explicit user approval" in body
+
+
+def test_orchestration_skill_ai_head_section():
+    """Assert /orchestration includes AiHead via aihead-cli while retaining native subagents."""
+    body = load_skill_body("orchestration")
+
+    assert "AiHead Availability and Autonomous Decisions" in body
+    assert "--ai-head" in body
+    assert "--no-ai-head" in body
+    assert "Retain Native Subagents for All Implementation Roles" in body
+    assert "aihead-cli" in body
+    assert "decision-only advisor" in body
+    assert "CLI Mode (100% Herdr-free)" in body
+    assert "correlation ID" in body
+    assert "Destructive operations, security bypasses, or out-of-scope actions always require explicit user approval" in body
+
+    # Verify no Herdr surface was introduced
+    for forbidden in (
+        "herdr agent",
+        "herdr tab",
+        "herdr workspace",
+        "herdr status",
+        "herdm catalog",
+        "herdm ergo",
+        "HERDR_WORKSPACE_ID",
+        "HERDR_PANE_ID",
+        "owns_workspace",
+    ):
+        assert forbidden not in body, f"/orchestration must not reference {forbidden}"
+
+
 def test_no_obsolete_dotfiles_or_hardcoded_paths():
     """Ensure no obsolete dotfiles or hardcoded user paths remain in owned files."""
+    council_raw = (REPO_ROOT / "skills" / "council" / "SKILL.md").read_text(encoding="utf-8")
     ergo_raw = (REPO_ROOT / "skills" / "ergo" / "SKILL.md").read_text(encoding="utf-8")
     hm_raw = (REPO_ROOT / "skills" / "herdr-master" / "SKILL.md").read_text(encoding="utf-8")
     orch_raw = (REPO_ROOT / "skills" / "orchestration" / "SKILL.md").read_text(encoding="utf-8")
@@ -351,6 +444,7 @@ def test_no_obsolete_dotfiles_or_hardcoded_paths():
     sh_installer_raw = (REPO_ROOT / "scripts" / "install-skills.sh").read_text(encoding="utf-8")
 
     for path_str, content in [
+        ("skills/council/SKILL.md", council_raw),
         ("skills/ergo/SKILL.md", ergo_raw),
         ("skills/herdr-master/SKILL.md", hm_raw),
         ("skills/orchestration/SKILL.md", orch_raw),

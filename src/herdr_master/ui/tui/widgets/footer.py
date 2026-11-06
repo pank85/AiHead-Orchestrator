@@ -32,7 +32,8 @@ class ActionFooter(Static):
                 ("n", "New Master"),
                 ("e", "New Ergo"),
                 ("s/c", "Settings"),
-                ("o", "Open in Herdr"),
+                ("o", "Open"),
+                ("d", "Delete WS"),
                 ("q", "Quit"),
             ]
         elif width >= 55:
@@ -41,11 +42,13 @@ class ActionFooter(Static):
                 ("e", "Ergo"),
                 ("s/c", "Settings"),
                 ("o", "Open"),
+                ("d", "Del"),
                 ("q", "Quit"),
             ]
         else:
             keys = [
                 ("o", "Open"),
+                ("d", "Del"),
                 ("q", "Quit"),
                 ("n", "M"),
                 ("e", "E"),

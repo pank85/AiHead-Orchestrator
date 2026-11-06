@@ -29,9 +29,11 @@ def find_repo_root() -> Path:
     """Find the root directory of herdr-master containing skills/."""
     current = Path(__file__).resolve().parent
     for p in [current, *current.parents]:
-        if (p / "skills" / "herdr-master" / "SKILL.md").exists() and (
-            p / "skills" / "ergo" / "SKILL.md"
-        ).exists():
+        if (
+            (p / "skills" / "herdr-master" / "SKILL.md").exists()
+            and (p / "skills" / "ergo" / "SKILL.md").exists()
+            and (p / "skills" / "council" / "SKILL.md").exists()
+        ):
             return p
     raise FileNotFoundError("Could not locate herdr-master root with skills/ directory.")
 
@@ -160,6 +162,9 @@ def install_skills(
         "  • [cyan]/orchestration [--models ...] [intent][/cyan] — Phased pipeline, "
         "host subagents only (no Herdr)"
     )
+    console.print(
+        "  • [cyan]/council [intent][/cyan] — Multi-agent plan synthesis and consensus council"
+    )
 
 
 @skills_app.command("list")
@@ -167,7 +172,7 @@ def list_skills() -> None:
     """List installation status of standalone skills and commands across harnesses."""
     targets_map = get_skill_targets()
 
-    table = Table(title="👑 Herdr-Master & Ergo Standalone Harness Skills")
+    table = Table(title="👑 Herdr-Master, Ergo & Council Standalone Harness Skills")
     table.add_column("Harness", style="cyan", no_wrap=True)
     table.add_column("Command / Role", style="magenta")
     table.add_column("Type", style="yellow")
@@ -195,7 +200,7 @@ def list_skills() -> None:
 
 @skills_app.command("remove")
 def remove_skills() -> None:
-    """Remove installed symlinks for herdr-master and ergo skills across harnesses."""
+    """Remove installed symlinks for standalone skills across harnesses."""
     targets_map = get_skill_targets()
     removed_count = 0
     for _, targets in targets_map.items():

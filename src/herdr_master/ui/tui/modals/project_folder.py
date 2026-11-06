@@ -1,18 +1,71 @@
 """Reusable project-folder input and keyboard-accessible directory picker."""
 
+from contextlib import contextmanager
 from pathlib import Path
-from typing import Iterable, Optional
+from typing import Any, Iterable, List, Optional
 
-from textual.app import ComposeResult
+from textual.app import App, ComposeResult
 from textual.containers import Horizontal, Vertical
 from textual.message import Message
 from textual.screen import ModalScreen
-from textual.widgets import Button, DirectoryTree, Input, Label, Static
+from textual.widgets import Button, DirectoryTree, Input, Label, Select, Static
 
 
-def initial_project_folder(project_path: Optional[Path] = None) -> Path:
-    path = Path(project_path).expanduser() if project_path is not None else Path.cwd()
-    return (path.parent if path.suffix == ".toml" else path).resolve()
+@contextmanager
+def _ensure_active_app():
+    """Ensure an active Textual app context is present for headless widget testing."""
+    from textual._context import active_app
+
+    try:
+        current = active_app.get()
+        try:
+            _ = current.screen
+            yield
+            return
+        except Exception:
+            pass
+    except LookupError:
+        pass
+
+    class _HeadlessApp(App):
+        def clear_selection(self) -> None:
+            pass
+
+    dummy = _HeadlessApp()
+    token = active_app.set(dummy)
+    try:
+        yield
+    finally:
+        active_app.reset(token)
+
+
+def initial_project_folder(
+    project_path: Optional[Path] = None,
+    config: Optional[Any] = None,
+) -> Path:
+    if project_path is not None:
+        path = Path(project_path).expanduser()
+        return (path.parent if path.suffix == ".toml" else path).resolve()
+
+    if config is None:
+        try:
+            from herdr_master.core.config import load_project_config
+
+            config = load_project_config()
+        except Exception:
+            config = None
+
+    if config is not None and getattr(config, "projects", None) is not None:
+        default_folder = getattr(config.projects, "default_folder", None)
+        if default_folder and str(default_folder).strip():
+            try:
+                from herdr_master.core.config import resolve_effective_folder
+
+                return resolve_effective_folder(None, config=config)
+            except Exception:
+                pass
+
+    return Path.cwd().resolve()
 
 
 def validate_project_folder(value: str) -> Path:
@@ -47,9 +100,10 @@ class ProjectFolderPicker(ModalScreen[Optional[Path]]):
     def __init__(self, folder: Path) -> None:
         super().__init__()
         self.folder = folder if folder.is_dir() else Path.home()
-        self._path = Input(value=str(self.folder), id="folder-location")
-        self._tree = FolderTree(self.folder, id="folder-tree")
-        self._error = Static("", id="folder-error", markup=False)
+        with _ensure_active_app():
+            self._path = Input(value=str(self.folder), id="folder-location")
+            self._tree = FolderTree(self.folder, id="folder-tree")
+            self._error = Static("", id="folder-error", markup=False)
 
     def compose(self) -> ComposeResult:
         with Vertical():
@@ -110,6 +164,7 @@ class ProjectFolderField(Vertical):
     ProjectFolderField { height: 4; }
     ProjectFolderField Label { height: 1; }
     ProjectFolderField Horizontal { height: 3; }
+    #select-favorite-folder { width: 22; min-width: 16; margin-right: 1; }
     ProjectFolderField Input { width: 1fr; }
     ProjectFolderField Button { width: 12; min-width: 10; margin-left: 1; }
     """
@@ -117,23 +172,85 @@ class ProjectFolderField(Vertical):
     class Changed(Message):
         pass
 
-    def __init__(self, project_path: Optional[Path] = None) -> None:
+    def __init__(
+        self,
+        project_path: Optional[Path] = None,
+        config: Optional[Any] = None,
+        favorites: Optional[List[Any]] = None,
+    ) -> None:
         super().__init__()
-        self._input = Input(value=str(initial_project_folder(project_path)), id="project-path")
-        self._input.tooltip = "Working directory for this launch. Type a path or browse folders."
+        self._config = config
+        self._favorites: List[Any] = list(favorites) if favorites is not None else []
+        if favorites is None and self._config is None:
+            try:
+                from herdr_master.core.config import load_project_config
+
+                self._config = load_project_config(project_path)
+            except Exception:
+                self._config = None
+
+        if favorites is None and self._config is not None:
+            projects_cfg = getattr(self._config, "projects", None)
+            if projects_cfg is not None:
+                self._favorites = list(getattr(projects_cfg, "favorites", []) or [])
+
+        init_folder = initial_project_folder(project_path, config=self._config)
+        with _ensure_active_app():
+            self._input = Input(value=str(init_folder), id="project-path")
+            self._input.tooltip = "Working directory for this launch. Type a path or browse folders."
+
+            options = [(fav.name, fav.name) for fav in self._favorites]
+            self._select = Select(
+                options=options,
+                prompt="Favorites…",
+                id="select-favorite-folder",
+                allow_blank=True,
+            )
+            if not self._favorites:
+                self._select.display = False
 
     def compose(self) -> ComposeResult:
         yield Label("Project folder:")
         with Horizontal():
+            yield self._select
             yield self._input
             yield Button("Browse…", id="btn-browse-project")
 
     def selected_path(self) -> Path:
         return validate_project_folder(self._input.value)
 
+    def select_favorite(self, name_or_path: str) -> None:
+        for fav in self._favorites:
+            if fav.name == name_or_path or str(fav.path) == name_or_path:
+                self._select.value = fav.name
+                from herdr_master.core.config import resolve_folder_path
+
+                self._input.value = str(resolve_folder_path(fav.path))
+                self.post_message(self.Changed())
+                return
+
+    def set_favorites(self, favorites: List[Any]) -> None:
+        self._favorites = list(favorites)
+        options = [(fav.name, fav.name) for fav in self._favorites]
+        self._select.set_options(options)
+        self._select.display = bool(self._favorites)
+
+    def on_select_changed(self, event: Select.Changed) -> None:
+        if event.select.id == "select-favorite-folder":
+            event.stop()
+            if event.value != Select.BLANK and event.value is not None:
+                for fav in self._favorites:
+                    if fav.name == event.value:
+                        from herdr_master.core.config import resolve_folder_path
+
+                        self._input.value = str(resolve_folder_path(fav.path))
+                        self.post_message(self.Changed())
+                        break
+
     def on_input_changed(self, event: Input.Changed) -> None:
-        event.stop()
-        self.post_message(self.Changed())
+        if event.input.id == "project-path":
+            event.stop()
+            self.post_message(self.Changed())
 
     def on_button_pressed(self, event: Button.Pressed) -> None:
         event.stop()
@@ -145,5 +262,6 @@ class ProjectFolderField(Vertical):
         def selected(path: Optional[Path]) -> None:
             if path is not None:
                 self._input.value = str(path)
+                self.post_message(self.Changed())
 
         self.app.push_screen(ProjectFolderPicker(folder), selected)

@@ -29,6 +29,7 @@ class MasterLaunchParams(BaseModel):
     initial_task: Optional[str] = None
     effort: Optional[EffortLevel] = None
     project_path: Optional[Path] = None
+    ai_head_override: Optional[bool] = None
 
 
 class LaunchMasterModal(ModalScreen[Optional[MasterLaunchParams]]):
@@ -123,6 +124,16 @@ class LaunchMasterModal(ModalScreen[Optional[MasterLaunchParams]]):
             id="master-effort",
         )
         self._task_input = Input(placeholder="Optional initial task to dispatch immediately")
+        self._aihead_select = Select(
+            [
+                ("Inherit (Config)", "inherit"),
+                ("Enable AiHead", "enable"),
+                ("Disable AiHead", "disable"),
+            ],
+            value="inherit",
+            allow_blank=False,
+            id="master-aihead-override",
+        )
         self._preview = Static("", id="master-preview", classes="status-msg")
         self._status = Static("", id="master-status", classes="status-msg")
 
@@ -152,6 +163,9 @@ class LaunchMasterModal(ModalScreen[Optional[MasterLaunchParams]]):
 
                 yield Label("Initial Task / Job (optional):", classes="field-label")
                 yield self._task_input
+
+                yield Label("AiHead Decision:", classes="field-label")
+                yield self._aihead_select
 
             yield self._preview
             yield self._status
@@ -257,6 +271,8 @@ class LaunchMasterModal(ModalScreen[Optional[MasterLaunchParams]]):
             self._set_status(str(exc))
             return
         self._submitting = True
+        aihead_val = str(self._aihead_select.value)
+        ai_head_override = True if aihead_val == "enable" else (False if aihead_val == "disable" else None)
         self.dismiss(
             MasterLaunchParams(
                 name=name,
@@ -265,5 +281,6 @@ class LaunchMasterModal(ModalScreen[Optional[MasterLaunchParams]]):
                 initial_task=self._task_input.value.strip() or None,
                 effort=effort,
                 project_path=project_path,
+                ai_head_override=ai_head_override,
             )
         )

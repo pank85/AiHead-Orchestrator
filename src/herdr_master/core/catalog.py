@@ -12,7 +12,7 @@ from enum import Enum
 from typing import Any, Literal
 
 SCHEMA_VERSION = 1
-CANONICAL_SKILLS = ("ergo", "herdr-master", "orchestration")
+CANONICAL_SKILLS = ("council", "ergo", "herdr-master", "orchestration")
 LaunchMode = Literal["herdr", "native"]
 
 _EFFORT_ALIASES = {"xhigh": "max"}
@@ -595,7 +595,13 @@ def _passthrough_args(kind: str, model: str, effort: str | None) -> list[str]:
     return ["--model", exact]
 
 
-def build_agent_args(harness: str, model: str, effort: str | None = None) -> list[str]:
+def build_agent_args(
+    harness: str,
+    model: str,
+    effort: str | None = None,
+    *,
+    skip_permissions: bool = True,
+) -> list[str]:
     """Build the Herdr argv placed after ``--``. Does not include ``--kind``."""
     spec = get_harness(harness)
     if not spec.supports_herdr:
@@ -614,7 +620,8 @@ def build_agent_args(harness: str, model: str, effort: str | None = None) -> lis
         args = _passthrough_args(kind, model, effort_key)
     else:
         raise CatalogError(f"Harness '{kind}' has no Herdr argv recipe.")
-    args.extend(spec.herdr.permission_flags)
+    if skip_permissions:
+        args.extend(spec.herdr.permission_flags)
     return args
 
 
@@ -627,7 +634,14 @@ def _launch_model(argv: list[str]) -> str | None:
     return argv[index + 1]
 
 
-def describe_herdr_agent(kind: str, model: str, effort: str | None, role: str) -> dict[str, Any]:
+def describe_herdr_agent(
+    kind: str,
+    model: str,
+    effort: str | None,
+    role: str,
+    *,
+    skip_permissions: bool = True,
+) -> dict[str, Any]:
     """Herdr launch descriptor. ``argv`` is the post-``--`` tail from :func:`build_agent_args`."""
     role_key = normalize_role(role)
     kind_key = get_harness(kind).kind
@@ -646,7 +660,7 @@ def describe_herdr_agent(kind: str, model: str, effort: str | None, role: str) -
             "tool": "herdr agent wait",
             "note": "Watcher runs herdr agent wait and must not start another coordinator.",
         }
-    argv = build_agent_args(kind_key, model, effort_key)
+    argv = build_agent_args(kind_key, model, effort_key, skip_permissions=skip_permissions)
     phrase = None
     if get_harness(kind_key).herdr.prompt_effort:
         phrase = effort_phrase(effort_key)

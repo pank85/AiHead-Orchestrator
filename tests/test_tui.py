@@ -8,6 +8,7 @@ from textual.widgets import Tree
 from herdr_master.ui.tui.app import HerdrMasterApp
 from herdr_master.ui.tui.modals.launch_ergo import LaunchErgoModal
 from herdr_master.ui.tui.modals.launch_master import LaunchMasterModal
+from herdr_master.ui.tui.modals.settings import SettingsModal
 from herdr_master.ui.tui.widgets.deck import CenterDeck
 from herdr_master.ui.tui.widgets.footer import ActionFooter
 from herdr_master.ui.tui.widgets.header_bar import HeaderBar
@@ -59,7 +60,7 @@ async def test_deck_mode_switching_keys():
 
         # Assert removed keys are absent from app bindings
         bound_keys = {b.key for b in pilot.app.BINDINGS}
-        for key in ("0", "1", "2", "3", "4", "p", "r", "m", "k", "d"):
+        for key in ("0", "1", "2", "3", "4", "p", "r", "m", "k"):
             assert key not in bound_keys
 
         # Assert footer does not show obsolete hints
@@ -69,7 +70,7 @@ async def test_deck_mode_switching_keys():
 
         # Press removed keys on main screen: verify no state mutation or view switches occur
         before_state = pilot.app.app_state.model_dump()
-        for key in ("0", "1", "2", "3", "4", "p", "r", "m", "k", "d"):
+        for key in ("0", "1", "2", "3", "4", "p", "r", "m", "k"):
             await pilot.press(key)
             await pilot.pause()
         assert pilot.app.app_state.model_dump() == before_state
@@ -78,21 +79,27 @@ async def test_deck_mode_switching_keys():
 
 @pytest.mark.asyncio
 async def test_settings_modal_open_and_tree():
-    """Verify pressing 'c' or 's' opens 2-column LaunchErgoModal with squad tree."""
+    """Verify pressing 'c' or 's' opens SettingsModal with squad tree."""
     app = HerdrMasterApp(demo=True)
     async with app.run_test(size=(110, 45)) as pilot:
         await pilot.press("c")
-        # Top screen should now be LaunchErgoModal (Settings)
-        assert isinstance(pilot.app.screen, LaunchErgoModal)
+        # Top screen should now be SettingsModal
+        assert isinstance(pilot.app.screen, SettingsModal)
 
-        # Check that the left column contains the squad tree
+        # Check that the squad tree exists inside SquadEditor
         tree = pilot.app.screen.query_one("#squad-tree", Tree)
         assert tree is not None
         assert "Herdr-Master Root" in str(tree.root.label)
 
         # Dismiss with Cancel button
         await pilot.click("#btn-cancel")
-        assert not isinstance(pilot.app.screen, LaunchErgoModal)
+        assert not isinstance(pilot.app.screen, SettingsModal)
+
+        # Also test pressing 's'
+        await pilot.press("s")
+        assert isinstance(pilot.app.screen, SettingsModal)
+        await pilot.click("#btn-cancel")
+        assert not isinstance(pilot.app.screen, SettingsModal)
 
 
 @pytest.mark.asyncio
@@ -148,7 +155,7 @@ async def test_launch_master_modal_and_quick_launch():
 
 @pytest.mark.asyncio
 async def test_launch_ergo_modal_and_quick_launch():
-    """Verify clicking #btn-new-ergo, #btn-settings, or pressing 'e' opens LaunchErgoModal."""
+    """Verify clicking #btn-new-ergo or pressing 'e' opens LaunchErgoModal, and #btn-settings opens SettingsModal."""
     app = HerdrMasterApp(demo=True)
     async with app.run_test(size=(110, 45)) as pilot:
         # Press 'e' to open LaunchErgoModal
@@ -163,16 +170,16 @@ async def test_launch_ergo_modal_and_quick_launch():
         await pilot.click("#btn-cancel")
         assert not isinstance(pilot.app.screen, LaunchErgoModal)
 
-        # Click Configure Squad Settings button on QuickLaunchBar
+        # Click Settings button on QuickLaunchBar
         await pilot.click("#btn-settings")
-        assert isinstance(pilot.app.screen, LaunchErgoModal)
+        assert isinstance(pilot.app.screen, SettingsModal)
 
         # Verify bottom section widgets exist
-        assert pilot.app.screen.query_one("#btn-start-ergo") is not None
-        assert pilot.app.screen.query_one("#btn-save-default") is not None
+        assert pilot.app.screen.query_one("#btn-save") is not None
+        assert pilot.app.screen.query_one("#btn-cancel") is not None
 
         await pilot.click("#btn-cancel")
-        assert not isinstance(pilot.app.screen, LaunchErgoModal)
+        assert not isinstance(pilot.app.screen, SettingsModal)
 
 
 @pytest.mark.asyncio
@@ -371,7 +378,7 @@ async def test_removed_main_screen_keys_produce_no_mocked_navigation_rpcs():
     app = HerdrMasterApp(demo=True)
     app._open_in_herdr = AsyncMock()
     async with app.run_test() as pilot:
-        for key in ("0", "1", "2", "3", "4", "p", "r", "m", "k", "d"):
+        for key in ("0", "1", "2", "3", "4", "p", "r", "m", "k"):
             await pilot.press(key)
             await pilot.pause()
         app._open_in_herdr.assert_not_called()

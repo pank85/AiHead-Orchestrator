@@ -65,6 +65,7 @@ herdm = "herdr_master.cli.main:app"
 packages = ["src/herdr_master"]
 
 [tool.hatch.build.targets.wheel.force-include]
+"skills/council/SKILL.md" = "herdr_master/_skills/council/SKILL.md"
 "skills/ergo/SKILL.md" = "herdr_master/_skills/ergo/SKILL.md"
 "skills/herdr-master/SKILL.md" = "herdr_master/_skills/herdr-master/SKILL.md"
 "skills/orchestration/SKILL.md" = "herdr_master/_skills/orchestration/SKILL.md"

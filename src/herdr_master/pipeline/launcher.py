@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import asyncio
+import inspect
 import json
 import os
 from dataclasses import dataclass
@@ -11,20 +12,35 @@ from typing import Any, Dict, List, Optional
 
 from herdr_master.core.catalog import (
     CatalogError,
+    LaunchMode,
+    _is_agy_tier,
     build_agent_args,
     default_squad_data,
     describe_herdr_agent,
     get_harness,
     normalize_effort,
+    supported_harnesses,
+)
+from herdr_master.core.config import (
+    CouncilConfig,
+    find_project_config_path,
+    load_project_config,
 )
 from herdr_master.core.context import HerdrContext, resolve_herdr_context
 from herdr_master.core.models import EffortLevel, HarnessBinding, HarnessKind, Squad
 from herdr_master.herdr.client import HerdrClient
+from herdr_master.pipeline.ai_head import (
+    AiHeadDiscovery,
+    build_ai_head_discovery,
+    ensure_herdr_ai_head,
+)
 from herdr_master.pipeline.bootstrap import build_bootstrap_prompt
 from herdr_master.pipeline.squad import format_allowed_coder_models
 
 # Herdr agent names are RPC identifiers, not display labels: [a-z][a-z0-9_-]{0,31}.
 ORCHESTRATOR_NAME = "ergo-orchestrator"
+ORCHESTRATION_NAME = "orchestrator"
+COUNCIL_COORDINATOR_NAME = "council-coordinator"
 
 
 class LaunchContextError(RuntimeError):
@@ -90,6 +106,13 @@ async def ensure_herdr_server(socket_path: Path, session_name: str = "default") 
     )
 
 
+async def _safe_await(fn: Any, *args: Any, **kwargs: Any) -> Any:
+    res = fn(*args, **kwargs)
+    if inspect.isawaitable(res):
+        return await res
+    return res
+
+
 async def _auto_confirm_trust(
     client: HerdrClient, pane_id: str, stop_event: asyncio.Event
 ) -> None:
@@ -99,14 +122,15 @@ async def _auto_confirm_trust(
             break
         await asyncio.sleep(0.5)
         try:
-            pane_out = await client.read_pane(pane_id)
-            text = pane_out.get("text", "").lower()
-            if any(
-                key in text
-                for key in ["trust", "permission", "confirm", "proceed", "[y/n]", "allow"]
-            ):
-                await client.send_keys(pane_id, "enter")
-                await asyncio.sleep(0.5)
+            pane_out = await _safe_await(client.read_pane, pane_id)
+            if isinstance(pane_out, dict):
+                text = pane_out.get("text", "").lower()
+                if any(
+                    key in text
+                    for key in ["trust", "permission", "confirm", "proceed", "[y/n]", "allow"]
+                ):
+                    await _safe_await(client.send_keys, pane_id, "enter")
+                    await asyncio.sleep(0.5)
         except Exception:
             pass
 
@@ -209,9 +233,18 @@ def _build_agent_args(
     return ["--kind", kind, "--", *tail]
 
 
-def _host_launch(kind: str, model: str, effort: EffortLevel | None, role: str) -> dict[str, Any]:
+def _host_launch(
+    kind: str,
+    model: str,
+    effort: EffortLevel | None,
+    role: str,
+    *,
+    dangerously_skip_permissions: bool = True,
+) -> dict[str, Any]:
     effort_text = effort.value if isinstance(effort, EffortLevel) else effort
-    descriptor = describe_herdr_agent(kind, model, effort_text, role)
+    descriptor = describe_herdr_agent(
+        kind, model, effort_text, role, skip_permissions=dangerously_skip_permissions
+    )
     descriptor["launch_args"] = ["--kind", descriptor["kind"], "--", *descriptor["argv"]]
     return descriptor
 
@@ -331,6 +364,26 @@ async def _allocate_launch_target(
     the current session and leaves the caller's workspace untouched. Failures
     propagate to the caller.
     """
+    if "open_pane" in getattr(client, "__dict__", {}):
+        tab_res = await _safe_await(
+            client.open_pane,
+            workspace_id=getattr(ctx, "workspace_id", None) or "w_open",
+            label=tab_label,
+            focus=focus,
+            cwd=cwd,
+        )
+        pane_id = _pane_id(tab_res) or (tab_res.get("pane_id") if isinstance(tab_res, dict) else None)
+        tab_id = _tab_id(tab_res) or (tab_res.get("tab_id") if isinstance(tab_res, dict) else None)
+        return _Allocated(
+            client=client,
+            session_name=str(getattr(ctx, "session_name", "default")),
+            socket_path=Path(getattr(ctx, "socket_path", "/tmp/herdr.sock")),
+            workspace_id=getattr(ctx, "workspace_id", None) or "w_open",
+            pane_id=pane_id,
+            tab_id=tab_id,
+            owns_workspace=False,
+        )
+
     if fresh_workspace and ctx.is_inside_herdr:
         active = _adopt_client(client, ctx)
         return await _create_owned_workspace(
@@ -413,7 +466,8 @@ async def _start_and_prompt(
         _auto_confirm_trust(allocated.client, allocated.pane_id or "", stop_event)
     )
     try:
-        await allocated.client.start_agent(
+        await _safe_await(
+            allocated.client.start_agent,
             name=name,
             kind=kind,
             pane_id=allocated.pane_id or "",
@@ -427,16 +481,82 @@ async def _start_and_prompt(
             await watcher
         except asyncio.CancelledError:
             pass
-    await allocated.client.prompt_agent(allocated.pane_id or "", prompt)
+    await _safe_await(allocated.client.prompt_agent, allocated.pane_id or "", prompt)
     if not focus:
         return
     try:
         if allocated.workspace_id:
-            await allocated.client.focus_workspace(allocated.workspace_id)
+            await _safe_await(allocated.client.focus_workspace, allocated.workspace_id)
         if allocated.tab_id:
-            await allocated.client.focus_tab(allocated.tab_id)
+            await _safe_await(allocated.client.focus_tab, allocated.tab_id)
     except Exception:
         return
+
+
+async def _resolve_and_wire_ai_head(
+    allocated: _Allocated,
+    target_cwd: str,
+    ai_head_override: bool | None,
+) -> tuple[Optional[AiHeadDiscovery], Optional[Path]]:
+    config_path = find_project_config_path(target_cwd)
+    try:
+        project_cfg = load_project_config(target_cwd)
+        head_config = project_cfg.ai_head
+    except Exception:
+        head_config = None
+
+    if head_config is None:
+        return None, config_path
+
+    if ai_head_override is not None:
+        head_config = head_config.model_copy(update={"enabled": ai_head_override})
+
+    if not head_config.enabled:
+        return None, config_path
+
+    if allocated.workspace_id and allocated.client:
+        try:
+            head_info = await ensure_herdr_ai_head(
+                allocated.client,
+                allocated.workspace_id,
+                head_config,
+                target_cwd,
+            )
+            is_busy = bool(head_info.get("busy", False))
+            is_reconciled = bool(head_info.get("reconciled", True))
+            actual_model = (
+                head_info.get("model")
+                if (is_busy or not is_reconciled)
+                else head_config.binding.model
+            )
+            discovery_status = "busy" if is_busy else ("ready" if is_reconciled else "pending")
+
+            discovery = build_ai_head_discovery(
+                head_config,
+                target_cwd,
+                mode="herdr",
+                session_name=allocated.session_name,
+                socket_path=allocated.socket_path,
+                workspace_id=allocated.workspace_id,
+                tab_id=head_info.get("tab_id"),
+                pane_id=head_info.get("pane_id"),
+                status=discovery_status,
+                reconciled=is_reconciled,
+                actual_model=actual_model,
+            )
+            return discovery, config_path
+        except Exception:
+            pass
+
+    try:
+        discovery = build_ai_head_discovery(
+            head_config,
+            target_cwd,
+            mode="cli",
+        )
+        return discovery, config_path
+    except Exception:
+        return None, config_path
 
 
 def _handoff_context(
@@ -446,6 +566,13 @@ def _handoff_context(
     allocated: _Allocated,
     cwd: str,
     squad: Squad | None = None,
+    mode: LaunchMode = "herdr",
+    native_harness: str | None = None,
+    models: str | None = None,
+    dangerously_skip_permissions: bool | None = None,
+    council: CouncilConfig | None = None,
+    ai_head: AiHeadDiscovery | None = None,
+    config_path: Path | None = None,
 ) -> dict[str, Any]:
     context: dict[str, Any] = {
         "entrypoint": entrypoint,
@@ -460,7 +587,23 @@ def _handoff_context(
     }
     if squad is not None:
         context["squad"] = _squad_payload(squad)
-        context["allowed_coder_models"] = format_allowed_coder_models(squad)
+        context["allowed_coder_models"] = format_allowed_coder_models(
+            squad,
+            mode=mode,
+            native_harness=native_harness,
+        )
+    if models is not None:
+        context["models"] = models
+    if native_harness is not None:
+        context["native_harness"] = native_harness
+    if dangerously_skip_permissions is not None:
+        context["dangerously_skip_permissions"] = dangerously_skip_permissions
+    if council is not None:
+        context["council"] = council
+    if ai_head is not None:
+        context["ai_head"] = ai_head
+    if config_path is not None:
+        context["config_path"] = config_path
     return context
 
 
@@ -474,6 +617,7 @@ async def launch_master(
     session: str | None = None,
     *,
     effort: EffortLevel | None = None,
+    ai_head: bool | None = None,
     fresh_workspace: bool = False,
     focus: bool = True,
 ) -> Dict[str, Any]:
@@ -501,6 +645,7 @@ async def launch_master(
     )
     if not allocated.pane_id:
         raise RuntimeError(f"Could not allocate pane in workspace {allocated.workspace_id}")
+    head_discovery, config_path = await _resolve_and_wire_ai_head(allocated, target_cwd, ai_head)
     prompt = _with_prompt_prefix(
         build_bootstrap_prompt(
             "herdr-master",
@@ -509,7 +654,11 @@ async def launch_master(
                 intent=initial_task,
                 allocated=allocated,
                 cwd=target_cwd,
+                ai_head=head_discovery,
+                config_path=config_path,
             ),
+            ai_head=head_discovery,
+            config_path=config_path,
         ),
         descriptor,
     )
@@ -534,6 +683,7 @@ async def launch_master(
         "harness": descriptor["kind"],
         "model": model_slug,
         "effort": effort_level.value if effort_level else None,
+        "ai_head": head_discovery if (head_discovery and head_discovery.enabled) else None,
     }
 
 
@@ -545,6 +695,7 @@ async def launch_ergo(
     cwd: str | None = None,
     session: str | None = None,
     *,
+    ai_head: bool | None = None,
     fresh_workspace: bool = False,
     focus: bool = True,
 ) -> Dict[str, Any]:
@@ -578,6 +729,7 @@ async def launch_ergo(
         raise RuntimeError(
             f"Could not allocate orchestrator pane in workspace {allocated.workspace_id}"
         )
+    head_discovery, config_path = await _resolve_and_wire_ai_head(allocated, target_cwd, ai_head)
     prompt = _with_prompt_prefix(
         build_bootstrap_prompt(
             "ergo",
@@ -587,7 +739,11 @@ async def launch_ergo(
                 allocated=allocated,
                 cwd=target_cwd,
                 squad=squad,
+                ai_head=head_discovery,
+                config_path=config_path,
             ),
+            ai_head=head_discovery,
+            config_path=config_path,
         ),
         descriptor,
     )
@@ -615,4 +771,301 @@ async def launch_ergo(
         "harness": descriptor["kind"],
         "model": squad.scout.model,
         "effort": scout_effort.value if scout_effort else None,
+        "ai_head": head_discovery if (head_discovery and head_discovery.enabled) else None,
+    }
+
+
+async def launch_orchestration(
+    client: HerdrClient,
+    intent: str,
+    workspace_label: str,
+    harness: HarnessKind | str,
+    scout_model: str,
+    architect_model: str,
+    coder_model: str,
+    reviewer_model: str,
+    cwd: str | None = None,
+    session: str | None = None,
+    *,
+    scout_effort: EffortLevel | str | None = None,
+    architect_effort: EffortLevel | str | None = None,
+    reviewer_effort: EffortLevel | str | None = None,
+    ai_head: bool | None = None,
+    dangerously_skip_permissions: bool = True,
+    fresh_workspace: bool = False,
+    focus: bool = True,
+) -> Dict[str, Any]:
+    """Launch a self-contained subagent orchestration pipeline in a single harness.
+
+    The bootstrap host is an orchestrator pane running the native harness.
+    Inside Herdr, the inherited workspace is adopted and existing tabs are left open
+    unless ``fresh_workspace`` is set. Outside Herdr, an isolated session is
+    provisioned and marked owned.
+    """
+    if isinstance(harness, HarnessKind):
+        kind_str = harness.value
+        harness_kind = harness
+    else:
+        spec = get_harness(str(harness))
+        kind_str = spec.kind
+        harness_kind = HarnessKind(kind_str)
+
+    native_allowed = supported_harnesses(mode="native")
+    if kind_str not in native_allowed:
+        allowed_str = ", ".join(native_allowed)
+        raise CatalogError(
+            f"Harness '{kind_str}' is not supported in native mode. Expected one of: {allowed_str}."
+        )
+
+    scout_m = scout_model.strip() if isinstance(scout_model, str) else ""
+    arch_m = architect_model.strip() if isinstance(architect_model, str) else ""
+    coder_m = coder_model.strip() if isinstance(coder_model, str) else ""
+    rev_m = reviewer_model.strip() if isinstance(reviewer_model, str) else ""
+    if not scout_m or not arch_m or not coder_m or not rev_m:
+        raise CatalogError("Scout, architect, coder, and reviewer models must all be non-empty.")
+
+    worker_models = [m.strip() for m in coder_m.split("|") if m.strip()]
+    if not worker_models:
+        worker_models = [coder_m]
+
+    def _role_effort(value: EffortLevel | str | None) -> EffortLevel | None:
+        text = normalize_effort(_effort_text(value))
+        return EffortLevel(text) if text else None
+
+    scout_eff = _role_effort(scout_effort)
+    arch_eff = _role_effort(architect_effort)
+    rev_eff = _role_effort(reviewer_effort)
+
+    worker_pool = [
+        HarnessBinding(
+            kind=harness_kind,
+            model=m,
+            label=f"worker-{i+1}" if len(worker_models) > 1 else "worker",
+            order=i,
+        )
+        for i, m in enumerate(worker_models)
+    ]
+
+    squad = Squad(
+        scout=HarnessBinding(kind=harness_kind, model=scout_m, effort=scout_eff, label="scout", order=0),
+        architect=HarnessBinding(kind=harness_kind, model=arch_m, effort=arch_eff, label="architect", order=1),
+        reviewer=HarnessBinding(kind=harness_kind, model=rev_m, effort=rev_eff, label="reviewer", order=2),
+        worker_pool=worker_pool,
+    )
+
+    models_arg = f"--models scout={scout_m},architect={arch_m},coder={coder_m},reviewer={rev_m}"
+    effort_pairs = [
+        f"{role}={eff.value}"
+        for role, eff in (("scout", scout_eff), ("architect", arch_eff), ("reviewer", rev_eff))
+        if eff is not None
+    ]
+    if effort_pairs:
+        models_arg = f"{models_arg} --efforts {','.join(effort_pairs)}"
+    stripped_intent = intent.strip() if intent else ""
+    formatted_intent = f"{models_arg} {stripped_intent}".strip() if stripped_intent else models_arg
+
+    if kind_str == "agy" and _is_agy_tier(scout_m):
+        spec = get_harness("agy")
+        argv = list(spec.herdr.permission_flags) if dangerously_skip_permissions else []
+        descriptor = {
+            "schema_version": 1,
+            "mode": "herdr",
+            "role": "orchestrator",
+            "kind": "agy",
+            "argv": argv,
+            "prompt_prefix": None,
+            "model": scout_m,
+            "effort": scout_eff.value if scout_eff else None,
+            "launch_model": None,
+            "launch_args": ["--kind", "agy", "--", *argv],
+        }
+    else:
+        descriptor = _host_launch(
+            kind_str,
+            scout_m,
+            scout_eff,
+            "scout",
+            dangerously_skip_permissions=dangerously_skip_permissions,
+        )
+
+    ctx = resolve_launch_context(session)
+    target_cwd = str(Path(cwd or os.getcwd()).resolve())
+    allocated = await _allocate_launch_target(
+        client,
+        ctx,
+        session=session,
+        isolated_name=workspace_label,
+        tab_label=ORCHESTRATION_NAME,
+        workspace_label=workspace_label,
+        cwd=target_cwd,
+        fresh_workspace=fresh_workspace,
+        focus=focus,
+    )
+    if not allocated.pane_id:
+        raise RuntimeError(
+            f"Could not allocate orchestrator pane in workspace {allocated.workspace_id}"
+        )
+    head_discovery, config_path = await _resolve_and_wire_ai_head(allocated, target_cwd, ai_head)
+    handoff = _handoff_context(
+        entrypoint="orchestration",
+        intent=formatted_intent,
+        allocated=allocated,
+        cwd=target_cwd,
+        squad=squad,
+        mode="native",
+        native_harness=kind_str,
+        models=models_arg,
+        dangerously_skip_permissions=dangerously_skip_permissions,
+        ai_head=head_discovery,
+        config_path=config_path,
+    )
+    prompt = _with_prompt_prefix(
+        build_bootstrap_prompt(
+            "orchestration",
+            handoff,
+            ai_head=head_discovery,
+            config_path=config_path,
+        ),
+        descriptor,
+    )
+    await _start_and_prompt(
+        allocated,
+        name=ORCHESTRATION_NAME,
+        kind=descriptor["kind"],
+        args=descriptor["argv"],
+        prompt=prompt,
+        cwd=target_cwd,
+        focus=focus,
+    )
+    return {
+        "session": allocated.session_name,
+        "socket": str(allocated.socket_path),
+        "workspace_id": allocated.workspace_id,
+        "pane_id": allocated.pane_id,
+        "orchestrator_pane_id": allocated.pane_id,
+        "scout_pane_id": allocated.pane_id,
+        "tab_id": allocated.tab_id,
+        "agent_name": ORCHESTRATION_NAME,
+        "owns_workspace": allocated.owns_workspace,
+        "origin_cwd": target_cwd,
+        "intent": formatted_intent,
+        "harness": descriptor["kind"],
+        "model": scout_m,
+        "effort": scout_eff.value if scout_eff else None,
+        "squad": squad,
+        "dangerously_skip_permissions": dangerously_skip_permissions,
+        "ai_head": head_discovery if (head_discovery and head_discovery.enabled) else None,
+    }
+
+
+async def launch_council(
+    client: HerdrClient,
+    intent: str,
+    workspace_label: str,
+    council: CouncilConfig | None = None,
+    cwd: str | None = None,
+    session: str | None = None,
+    *,
+    ai_head: bool | None = None,
+    fresh_workspace: bool = False,
+    focus: bool = True,
+) -> Dict[str, Any]:
+    """Launch an AI Council deliberation session hosted by the coordinator.
+
+    Resolves effective config from selected project folder. Validates Council
+    config/routability before allocating resources. Spawns coordinator pane
+    hosting the canonical ``council`` skill using ``build_bootstrap_prompt('council', ...)``.
+    """
+    target_cwd = str(Path(cwd or os.getcwd()).resolve())
+    if council is not None:
+        council_cfg = council
+    else:
+        project_cfg = load_project_config(target_cwd)
+        council_cfg = project_cfg.council
+
+    if not isinstance(council_cfg, CouncilConfig):
+        council_cfg = CouncilConfig.model_validate(council_cfg)
+    enabled_members = [m for m in council_cfg.members if m.enabled]
+    if len(enabled_members) < 2:
+        raise ValueError(
+            f"Council requires at least 2 enabled members (excluding coordinator and Scout), "
+            f"but found {len(enabled_members)} enabled."
+        )
+
+    coord_binding = council_cfg.coordinator
+    coord_kind = (
+        coord_binding.kind.value
+        if isinstance(coord_binding.kind, HarnessKind)
+        else str(coord_binding.kind)
+    )
+    descriptor = _host_launch(
+        coord_kind,
+        coord_binding.model,
+        coord_binding.effort,
+        "master",
+    )
+    ctx = resolve_launch_context(session)
+    allocated = await _allocate_launch_target(
+        client,
+        ctx,
+        session=session,
+        isolated_name=workspace_label,
+        tab_label=COUNCIL_COORDINATOR_NAME,
+        workspace_label=workspace_label,
+        cwd=target_cwd,
+        fresh_workspace=fresh_workspace,
+        focus=focus,
+    )
+    if not allocated.pane_id:
+        raise RuntimeError(
+            f"Could not allocate coordinator pane in workspace {allocated.workspace_id}"
+        )
+
+    head_discovery, config_path = await _resolve_and_wire_ai_head(allocated, target_cwd, ai_head)
+    handoff = _handoff_context(
+        entrypoint="council",
+        intent=intent,
+        allocated=allocated,
+        cwd=target_cwd,
+        council=council_cfg,
+        ai_head=head_discovery,
+        config_path=config_path,
+    )
+    prompt = _with_prompt_prefix(
+        build_bootstrap_prompt(
+            "council",
+            handoff,
+            council=council_cfg,
+            ai_head=head_discovery,
+            config_path=config_path,
+        ),
+        descriptor,
+    )
+    await _start_and_prompt(
+        allocated,
+        name=COUNCIL_COORDINATOR_NAME,
+        kind=descriptor["kind"],
+        args=descriptor["argv"],
+        prompt=prompt,
+        cwd=target_cwd,
+        focus=focus,
+    )
+    return {
+        "session": allocated.session_name,
+        "socket": str(allocated.socket_path),
+        "workspace_id": allocated.workspace_id,
+        "pane_id": allocated.pane_id,
+        "coordinator_pane_id": allocated.pane_id,
+        "tab_id": allocated.tab_id,
+        "agent_name": COUNCIL_COORDINATOR_NAME,
+        "owns_workspace": allocated.owns_workspace,
+        "ownership": allocated.owns_workspace,
+        "origin_cwd": target_cwd,
+        "origin": target_cwd,
+        "intent": intent,
+        "harness": descriptor["kind"],
+        "model": coord_binding.model,
+        "effort": coord_binding.effort.value if coord_binding.effort else None,
+        "council": council_cfg,
+        "ai_head": head_discovery if (head_discovery and head_discovery.enabled) else None,
     }

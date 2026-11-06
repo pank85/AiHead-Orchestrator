@@ -437,3 +437,238 @@ async def test_prompt_and_start_failures_do_not_delete_or_retry():
             )
     client.start_agent.assert_not_called()
     client.prompt_agent.assert_not_called()
+
+
+@pytest.mark.asyncio
+async def test_launch_council_delivers_canonical_skill_and_bootstrap():
+    from herdr_master.core.config import CouncilConfig
+    from herdr_master.pipeline.launcher import launch_council, COUNCIL_COORDINATOR_NAME
+
+    client = _client()
+    ctx = _inside()
+    council_cfg = CouncilConfig()
+
+    with patch("herdr_master.pipeline.launcher.resolve_herdr_context", return_value=ctx):
+        res = await launch_council(
+            client=client,
+            intent="architect the cache layer",
+            workspace_label="council-cache",
+            council=council_cfg,
+            cwd="/tmp/repo",
+        )
+
+    assert res["agent_name"] == COUNCIL_COORDINATOR_NAME
+    assert res["workspace_id"] == "w9"
+    assert res["pane_id"] == "w9:p2"
+    assert res["coordinator_pane_id"] == "w9:p2"
+    assert res["tab_id"] == "w9:t2"
+    assert res["owns_workspace"] is False
+    assert res["ownership"] is False
+    assert res["origin_cwd"] == "/tmp/repo"
+    assert res["origin"] == "/tmp/repo"
+    assert res["intent"] == "architect the cache layer"
+    assert res["council"] == council_cfg
+
+    # Check start_agent
+    start_call = client.start_agent.await_args.kwargs
+    assert start_call["name"] == COUNCIL_COORDINATOR_NAME
+    assert start_call["pane_id"] == "w9:p2"
+
+    # Check prompt
+    prompt = client.prompt_agent.await_args.args[1]
+    assert prompt.startswith(load_skill_body("council").rstrip("\n"))
+    payload = _payload(prompt)
+    assert payload["entrypoint"] == "council"
+    assert payload["intent"] == "architect the cache layer"
+    assert payload["council"]["max_rounds"] == 5
+    assert len(payload["council"]["members"]) == 2
+
+
+@pytest.mark.asyncio
+async def test_launch_council_rejects_malformed_roster_before_allocation():
+    from herdr_master.core.config import CouncilConfig, CouncilMember
+    from herdr_master.pipeline.launcher import launch_council
+
+    client = _client()
+    ctx = _inside()
+
+    # Create unvalidated config with only 1 enabled member
+    bad_cfg = CouncilConfig.model_construct(
+        coordinator=HarnessBinding.from_slug("agy:gemini-3.8-flash", label="coordinator"),
+        scout=HarnessBinding.from_slug("agy:gemini-3.8-flash", label="scout"),
+        members=[
+            CouncilMember.from_slug("agy:gemini-3.8-flash", label="m1", enabled=True),
+            CouncilMember.from_slug("agy:gemini-3.8-flash", label="m2", enabled=False),
+        ],
+    )
+
+    with patch("herdr_master.pipeline.launcher.resolve_herdr_context", return_value=ctx):
+        with pytest.raises(ValueError, match="at least 2 enabled members"):
+            await launch_council(
+                client=client,
+                intent="deliberate",
+                workspace_label="council-bad",
+                council=bad_cfg,
+                cwd="/tmp/repo",
+            )
+
+    client.create_tab.assert_not_called()
+    client.start_agent.assert_not_called()
+
+
+@pytest.mark.asyncio
+async def test_launch_ergo_ai_head_tri_state():
+    client = _client()
+    ctx = _inside()
+
+    with (
+        patch("herdr_master.pipeline.launcher.resolve_herdr_context", return_value=ctx),
+        patch(
+            "herdr_master.pipeline.launcher.ensure_herdr_ai_head",
+            AsyncMock(return_value={"tab_id": "w9:t_head", "pane_id": "w9:p_head", "enabled": True}),
+        ),
+    ):
+        # Enabled
+        res_enabled = await launch_ergo(
+            client=client,
+            intent="feature",
+            workspace_label="ergo-head",
+            squad=Squad(),
+            cwd="/tmp/repo",
+            ai_head=True,
+        )
+        assert res_enabled["ai_head"] is not None
+        assert res_enabled["ai_head"].enabled is True
+        payload_enabled = _payload(client.prompt_agent.await_args.args[1])
+        assert "ai_head" in payload_enabled
+        assert payload_enabled["ai_head"]["enabled"] is True
+
+        # Disabled
+        res_disabled = await launch_ergo(
+            client=client,
+            intent="feature",
+            workspace_label="ergo-head-off",
+            squad=Squad(),
+            cwd="/tmp/repo",
+            ai_head=False,
+        )
+        assert res_disabled["ai_head"] is None
+        payload_disabled = _payload(client.prompt_agent.await_args.args[1])
+        assert "ai_head" not in payload_disabled
+
+
+@pytest.mark.asyncio
+async def test_launch_ergo_ai_head_busy_propagates_status_and_actual_model():
+    client = _client()
+    ctx = _inside()
+
+    head_info = {
+        "tab_id": "w:t",
+        "pane_id": "w:p",
+        "busy": True,
+        "reconciled": False,
+        "model": "old-running-model",
+        "enabled": True,
+    }
+
+    with (
+        patch("herdr_master.pipeline.launcher.resolve_herdr_context", return_value=ctx),
+        patch(
+            "herdr_master.pipeline.launcher.ensure_herdr_ai_head",
+            AsyncMock(return_value=head_info),
+        ),
+    ):
+        res = await launch_ergo(
+            client=client,
+            intent="feature",
+            workspace_label="ergo-head-busy",
+            squad=Squad(),
+            cwd="/tmp/repo",
+            ai_head=True,
+        )
+        discovery = res["ai_head"]
+        assert discovery is not None
+        assert discovery.status == "busy"
+        assert discovery.reconciled is False
+        assert discovery.model == "old-running-model"
+
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    "head_info,status,reconciled,model_is_bound,busy_text",
+    [
+        ({"busy": False, "reconciled": True, "status": "ready"}, "ready", True, True, False),
+        ({"busy": False, "reconciled": False, "model": "old"}, "pending", False, False, True),
+        ({"busy": True, "reconciled": True, "model": "old"}, "busy", True, False, True),
+    ],
+)
+async def test_launch_ergo_ai_head_state_reaches_bootstrap_instructions(
+    head_info, status, reconciled, model_is_bound, busy_text
+):
+    client = _client()
+    ctx = _inside()
+    info = {"tab_id": "w:t", "pane_id": "w:p", "enabled": True, **head_info}
+
+    with (
+        patch("herdr_master.pipeline.launcher.resolve_herdr_context", return_value=ctx),
+        patch(
+            "herdr_master.pipeline.launcher.ensure_herdr_ai_head",
+            AsyncMock(return_value=info),
+        ),
+    ):
+        res = await launch_ergo(
+            client=client,
+            intent="feature",
+            workspace_label="ergo-head-state",
+            squad=Squad(),
+            cwd="/tmp/repo",
+            ai_head=True,
+        )
+    discovery = res["ai_head"]
+    assert discovery.status == status
+    assert discovery.reconciled is reconciled
+    if model_is_bound:
+        from herdr_master.core.config import AiHeadConfig
+
+        assert discovery.model == AiHeadConfig().binding.model
+    else:
+        assert discovery.model == "old"
+    instructions = _payload(client.prompt_agent.await_args.args[1])["ai_head"]["instructions"]
+    assert ("Do not consult AiHead" in instructions) is busy_text
+
+
+@pytest.mark.asyncio
+async def test_launch_orchestration_passes_role_efforts_not_worker_effort():
+    from herdr_master.pipeline.launcher import launch_orchestration
+
+    client = _client()
+    with (
+        patch("herdr_master.pipeline.launcher.resolve_herdr_context", return_value=_inside()),
+        patch("herdr_master.pipeline.launcher.ensure_herdr_server", new_callable=AsyncMock),
+    ):
+        res = await launch_orchestration(
+            client=client,
+            intent="build it",
+            workspace_label="orch",
+            harness="claude",
+            scout_model="claude-sonnet-4-6",
+            architect_model="claude-opus-4-6",
+            coder_model="claude-sonnet-4-6 | claude-opus-4-6",
+            reviewer_model="claude-opus-4-6",
+            scout_effort="low",
+            architect_effort="xhigh",
+            reviewer_effort=None,
+            cwd="/tmp/repo",
+        )
+    squad = res["squad"]
+    assert squad.scout.effort == EffortLevel.LOW
+    assert squad.architect.effort == EffortLevel.MAX  # xhigh aliases to max
+    assert squad.reviewer.effort is None
+    assert [w.effort for w in squad.worker_pool] == [None, None]
+    assert len(squad.worker_pool) == 2
+    assert res["effort"] == "low"
+    assert "--efforts scout=low,architect=max" in res["intent"]
+    assert "reviewer=" not in res["intent"].split("--efforts", 1)[1]
+    prompt = client.prompt_agent.await_args.args[1]
+    assert "--efforts scout=low,architect=max" in prompt

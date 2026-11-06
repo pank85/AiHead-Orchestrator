@@ -24,7 +24,7 @@ Whether coordinating multiple background jobs simultaneously or driving a struct
 
 Herdr-Master ships with **first-class, standalone agent skills and slash commands** that can be installed directly into all four supported agent harnesses (**Antigravity**, **Pi**, **Claude Code**, and **OpenCode**).
 
-### 🎯 The Three Standalone Capabilities
+### 🎯 The Four Standalone Capabilities
 
 #### 1. `/herdr-master [task]` — Persistent Root Orchestrator (Multiple Jobs)
 
@@ -88,9 +88,29 @@ Herdr-Master ships with **first-class, standalone agent skills and slash command
 
 ---
 
+#### 4. `/council [intent]` — Multi-Agent Consensus Deliberation
+
+> **Requires:** `herdm` CLI and configured harnesses. Deliberates architectural proposals and RFCs to unanimous consensus or a decisive fallback vote. Produces actionable plans only (`final_plan.md`); never executes unreviewed code changes.
+
+* **Structured Deliberation Protocol**:
+  * **Coordinator (1)**: Impartial facilitator who drives state gate transitions, produces unified feedback, and tallies votes. Coordinator and Scout never vote.
+  * **Scout (1)**: Surfaces codebase context and surveys constraints into `context.md`.
+  * **Council Members (≥ 2 enabled)**: Distinct agent identities who draft independent Round 0 plans, cross-review peers, submit revisions addressing unified feedback, and vote on candidate plans.
+* **Protocol Invariants & Limits**:
+  * **Max 5 Feedback Cycles**: If consensus is reached in any round (1–5), deliberation stops immediately (`UNANIMOUS_CONSENSUS`). Round 6 is strictly rejected.
+  * **Fallback 1-Round Vote**: If 5 cycles complete without consensus, members cast 1 ballot each. Ties are broken deterministically by member order in the pinned roster.
+  * **Sealed Artifact**: Outputs authoritative `final_plan.md` documenting the chosen plan, rounds used, and vote tallies. Subsequent modifications are sealed.
+
+```bash
+/council "Architect event-driven telemetry pipeline"
+/council --ai-head "Refactor payment processing module"
+```
+
+---
+
 ### 📦 Installation Across All Harnesses
 
-Install all three canonical skills & slash commands (`/herdr-master`, `/ergo`, `/orchestration`)
+Install all four canonical skills & slash commands (`/herdr-master`, `/ergo`, `/orchestration`, `/council`)
 across every supported harness:
 
 ```bash
@@ -109,10 +129,10 @@ The installer detects and symlinks canonical skill definitions into the native d
 
 | Harness | Skill Type | Destination Path | Available Command |
 | :--- | :--- | :--- | :--- |
-| **Antigravity (`agy`)** | Native Skill | `~/.gemini/antigravity-cli/skills/<skill>/SKILL.md` | `/herdr-master`<br/>`/ergo`<br/>`/orchestration` |
-| **Pi (`pi`)** | Prompt / Skill | `~/.pi/agent/skills/<skill>/SKILL.md` | `/herdr-master`<br/>`/ergo`<br/>`/orchestration` |
-| **Claude Code (`claude`)** | Custom Slash Command | `~/.claude/commands/<skill>.md` | `/herdr-master`<br/>`/ergo`<br/>`/orchestration` |
-| **OpenCode (`opencode`)** | Skill & Command | `~/.config/opencode/skills/<skill>/SKILL.md`<br/>`~/.config/opencode/commands/<skill>.md` | `/herdr-master`<br/>`/ergo`<br/>`/orchestration` |
+| **Antigravity (`agy`)** | Native Skill | `~/.gemini/antigravity-cli/skills/<skill>/SKILL.md` | `/herdr-master`<br/>`/ergo`<br/>`/orchestration`<br/>`/council` |
+| **Pi (`pi`)** | Prompt / Skill | `~/.pi/agent/skills/<skill>/SKILL.md` | `/herdr-master`<br/>`/ergo`<br/>`/orchestration`<br/>`/council` |
+| **Claude Code (`claude`)** | Custom Slash Command | `~/.claude/commands/<skill>.md` | `/herdr-master`<br/>`/ergo`<br/>`/orchestration`<br/>`/council` |
+| **OpenCode (`opencode`)** | Skill & Command | `~/.config/opencode/skills/<skill>/SKILL.md`<br/>`~/.config/opencode/commands/<skill>.md` | `/herdr-master`<br/>`/ergo`<br/>`/orchestration`<br/>`/council` |
 
 ### 🔍 Inspect Installation Status
 
@@ -152,28 +172,37 @@ current socket, the default session, and named local sessions under
 - Within the current Herdr session the cockpit stays open; outside Herdr (or when switching sessions), the CLI attaches to that session after focusing the target. Run `herdm tui` to return.
 - Offline sessions are marked explicitly; retained snapshots are marked **stale** and
   cannot be navigated to. Demo mode is labeled and never controls live panes.
-- **New Master** and **New Ergo** both offer a **Project folder** field and **Browse…**
-  directory picker. Type a path (including `~`) or select a folder; each launch opens
-  a fresh workspace with that project as its working directory. The cockpit stays
+- **New Master**, **New Ergo**, and **AI Council** all offer a **Project folder** field, **Favorites** dropdown, and **Browse…**
+  directory picker. Type a path (including `~`), select from saved favorite projects, or browse folders.
+  Precedence strictly follows: **explicit folder > configured `default_folder` > current working directory**.
+  Each launch opens a fresh workspace with that project as its working directory. The cockpit stays
   open after launching, so one TUI can manage jobs across multiple projects.
-- In **New Ergo / Squad Settings**, changing folders reloads that project's squad
-  defaults (discarding unsaved squad edits). **Save Default** writes only to the
-  selected project's `.herdr-master.toml`. Invalid folders or settings block launch;
-  selecting another valid project lets you continue.
+- In **Settings** (keys **`s`** or **`c`**), five dedicated tabs manage your complete cross-harness environment:
+  1. **Projects & Folders**: Configure default directory and manage named favorite projects with path verification.
+  2. **Ergo Squad**: Configure multi-harness squad topologies and dynamic worker pools.
+  3. **Orchestration Squad**: Configure single-harness native orchestration pipelines (agy, pi, claude, opencode).
+  4. **AI Council**: Configure Council Coordinator, Scout, and dynamic peer members (≥ 2 enabled required).
+  5. **AiHead Persona**: Configure autonomous architecture decision persona, soul prompt, harness, model, and mode.
+  Saving settings writes atomically to `.herdr-master.toml` and updates active memory without launching a pipeline.
 
 ```text
- [ New Master ]           [ New Ergo ]           [ Squad Settings ]
+ [ New Master ]      [ New Ergo ]      [ AI Council ]      [ Settings ]
  [ Open in Herdr [o] ]  Workspace: project-a (default) · 2 panes
  Open switches to Herdr; another-session/outside-Herdr attach replaces this cockpit. Run `herdm tui` to return.
  2/2 sessions online · 3 workspaces · 4 agents · Click row to select; [o] to open
- ▼ ● running [Master] project-a · default · 2 panes
+ ▼ ● running [Master] project-a · default · 3 panes
    ├── ● running  Builder · Implement · w1:p1 · /projects/project-a
-   └── ○ idle     Reviewer · Review · w1:p2 · /projects/project-a
+   ├── ○ idle     Reviewer · Review · w1:p2 · /projects/project-a
+   └── ● running [AiHead] Advisor · ai-head · w1:p3 · /projects/project-a
  ▶ ○ idle  project-b · default · 1 pane
  ▶ ● running [Ergo] backend · ergo-backend · 1 pane
 
  [n] New Master  [e] New Ergo  [s/c] Settings  [o] Open in Herdr  [q] Quit
 ```
+
+**Persistent interactive AiHead.** When enabled, Herdr-Master automatically provisions or reuses a persistent agent tab labeled **`ai-head`** (badged with `[AiHead]` in the workspace browser). Operators can select the tab in the cockpit for live terminal interaction, direct chatting, or assigning ad-hoc tasks. During pipeline execution, automated decision requests delegate technical choices to AiHead autonomously without operator interruption, while genuinely ambiguous or destructive operations escalate directly to the operator. In CLI mode, `herdm aihead-cli` executes 100% Herdr-free via native headless subprocesses.
+
+> 📖 **Deep Dive**: For complete configuration examples, Council deliberation state-machine transitions, and AiHead CLI usage, see the [AI Council & AiHead Architecture Guide](docs/council-aihead.md).
 
 **Live output and replies.** Selecting a pane opens a panel beside the browser at
 110 columns or wider, or below it on narrower terminals. Scroll up to pause the

@@ -1227,6 +1227,11 @@ class LivePaneController:
             self._send_in_flight = False
             self._publish_current_state()
 
+    def _nudge_dirty(self) -> None:
+        if not self._closed and self._dirty_event is not None:
+            self._last_refresh_attempt = 0.0
+            self._dirty_event.set()
+
     async def send_terminal_input(
         self,
         lease: PaneLease,
@@ -1242,8 +1247,13 @@ class LivePaneController:
             return False
         if (
             self._active_lease is None
-            or self._active_lease != lease
+            or self._active_lease.key != lease.key
+            or self._active_lease.generation != lease.generation
             or self._epoch != lease.generation
+            or (
+                lease.terminal_id is not None
+                and self._active_lease.terminal_id != lease.terminal_id
+            )
         ):
             return False
         if self._phase not in ("live", "degraded"):
@@ -1271,7 +1281,20 @@ class LivePaneController:
         keys_arg = keys if keys else None
 
         try:
-            if hasattr(client, "pane_send_input") and callable(client.pane_send_input):
+            if isinstance(client, HerdrClient):
+                if text_arg is not None:
+                    await asyncio.wait_for(
+                        client.pane_send_text(pane_id=pane_id, text=text_arg),
+                        timeout=self._send_timeout,
+                    )
+                if text_arg is not None and keys_arg is not None:
+                    await asyncio.sleep(0.02)
+                if keys_arg is not None:
+                    await asyncio.wait_for(
+                        client.pane_send_keys(pane_id=pane_id, keys=keys_arg),
+                        timeout=self._send_timeout,
+                    )
+            elif hasattr(client, "pane_send_input") and callable(client.pane_send_input):
                 res = client.pane_send_input(pane_id=pane_id, text=text_arg, keys=keys_arg)
                 if asyncio.iscoroutine(res) or hasattr(res, "__await__"):
                     await asyncio.wait_for(res, timeout=self._send_timeout)
@@ -1302,8 +1325,13 @@ class LivePaneController:
             logger.warning("Unexpected error sending terminal input to pane %s: %s", pane_id, exc)
             return False
 
-        if self._dirty_event is not None:
-            self._dirty_event.set()
+        self._nudge_dirty()
+        try:
+            loop = asyncio.get_running_loop()
+            loop.call_later(0.08, self._nudge_dirty)
+            loop.call_later(0.25, self._nudge_dirty)
+        except RuntimeError:
+            pass
         return True
 
     async def close(self) -> None:

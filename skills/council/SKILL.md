@@ -1,0 +1,186 @@
+---
+name: council
+description: "AI Council multi-agent planning protocol: Scout discovery, independent member plans, cross-review, multi-turn synthesis feedback cycles (max 5), consensus check or 1-round vote, and final plan generation."
+argument-hint: "[--ai-head|--no-ai-head] [specifications/idea]"
+slash: false
+metadata:
+  opencode/autoinvoke: false
+---
+
+# /council — Multi-Agent AI Council Planning & Consensus Protocol
+
+Run an AI Council planning deliberation for: `${@:-$ARGUMENTS}` (if no specification, plan intent, or idea path was supplied, prompt the user for requirements and stop).
+
+The AI Council coordinates multiple specialized agent members to independently draft, cross-review, synthesize, and converge upon an optimal technical architecture and implementation plan.
+
+> **Scope Note:** The AI Council produces an authoritative **plan** (`RUN_DIR/final_plan.md`). It does NOT perform code implementation, commits, or repository integration.
+
+---
+
+## 1. Council Roster & Agent Roles
+
+The Council operates with a strictly partitioned roster:
+- **1 Coordinator**: Hosts this canonical skill session. Initializes the run, orchestrates state transitions via `herdr-master council-state`, tasks the Scout, distributes context and candidate plans to Council Members, compiles unified feedback, enforces cycle caps, conducts votes when needed, and finalizes the chosen plan. The Coordinator is a neutral facilitator and **never votes**.
+- **1 Scout**: Fast codebase discovery specialist. Operates in read-only mode to inspect existing code patterns, project guidelines, dependencies, interfaces, and constraints. Produces `RUN_DIR/context.md`. The Scout **never votes**.
+- **Dynamic Council Members (> 1)**: Two or more diverse, capable planning agents (e.g. `member-1`, `member-2`, `member-3`). Each member drafts an independent plan, reviews peer proposals, contributes constructive feedback, revises plans toward consensus, and casts exactly one ballot if deliberation reaches a tie-breaking vote.
+
+---
+
+## 2. State-Gate Coordination Commands (`council-state`)
+
+All protocol transitions are validated, run-scoped, and enforced atomically by the `herdr-master council-state` CLI. The Coordinator **MUST** execute and receive a successful transition before dispatching each round or action, and **MUST stop immediately on gate refusal**.
+
+The state gate enforces:
+1. `herdr-master council-state init --run-dir <RUN_DIR> --roster <MEMBER_LIST> [--coordinator <ID>] [--scout <ID>]`
+   - Initializes run state and locks the roster.
+   - Rejects missing run directories, empty rosters, or rosters with fewer than 2 members.
+2. `herdr-master council-state record-scout --run-dir <RUN_DIR> --context <CONTEXT_PATH>`
+   - Records Scout codebase discovery context prerequisite. Must be executed before opening Round 0.
+3. `herdr-master council-state open-round --run-dir <RUN_DIR> --round <N>`
+   - Opens drafting (`round 0`) or feedback/revision cycles (`round 1` through `5`).
+   - Strictly rejects `round 6`: the maximum number of feedback cycles is 5.
+   - Rejects premature round opening before previous round submissions are complete (and requires Scout context before opening Round 0).
+4. `herdr-master council-state submit-plan --run-dir <RUN_DIR> --member <MEMBER_ID> --plan <PLAN_PATH> --revision <REV>`
+   - Records an independently drafted (revision 0) or revised (revisions 1–5) plan for a registered member.
+   - Validates path containment within `RUN_DIR` and rejects duplicate or stale submissions.
+5. `herdr-master council-state submit-feedback --run-dir <RUN_DIR> --round <N> --member <MEMBER_ID> --feedback <FEEDBACK_PATH> --selected-plan <PLAN_ID>`
+   - Records member feedback on peer plans along with an explicit preferred plan identifier/revision for the round.
+   - Validates that the selected plan ID corresponds to a valid candidate in the active round.
+6. `herdr-master council-state consensus --run-dir <RUN_DIR> --round <N>`
+   - Verifies whether all council members explicitly support the exact same plan revision in round N.
+   - If unanimous consensus is achieved, transitions state to ready for finalization.
+   - Rejects false consensus: similar prose or coordinator preference is not consensus.
+7. `herdr-master council-state submit-unified-feedback --run-dir <RUN_DIR> --round <N> --feedback <FEEDBACK_PATH>`
+   - Records coordinator unified feedback synthesizing member reviews for round N. Prerequisite before members submit round N revisions.
+8. `herdr-master council-state vote --run-dir <RUN_DIR> --member <MEMBER_ID> --ballot <CANDIDATE_PLAN_ID>`
+   - Conducts a 1-round fallback vote if cycle 5 completes without consensus and all round 5 revisions have been submitted.
+   - Council members cast exactly one ballot each. Coordinator and Scout ballots are rejected.
+   - Calculates highest tally; breaks ties deterministically using configured candidate/member ordering recorded transparently.
+9. `herdr-master council-state finalize --run-dir <RUN_DIR>`
+   - Assembles and writes `RUN_DIR/final_plan.md` documenting the chosen plan, complete deliberation history, cycle count, consensus/vote tallies, and provenance.
+   - Seals the state; any subsequent mutation attempts are rejected.
+10. `herdr-master council-state status --run-dir <RUN_DIR>`
+    - Inspects current run status, active round, submitted artifacts, and transition readiness.
+
+---
+
+## 3. Multi-Round Council Protocol
+
+Track and execute the deliberation through the following disciplined sequence:
+
+### Step 1: Initialization & Scout Discovery
+1. Create a unique, isolated run directory: `RUN_DIR=.orchestration/council-<run-id>/`.
+2. Initialize run state:
+   ```bash
+   herdr-master council-state init --run-dir "$RUN_DIR" --roster "member-1,member-2,member-3"
+   ```
+3. Direct the **Scout** to investigate repository structure, existing conventions (`AGENTS.md`, `CLAUDE.md`, `.ai/*.md`), APIs, schemas, and test harnesses.
+4. Scout produces `RUN_DIR/context.md` detailing verified facts, module paths, interfaces, and architectural constraints.
+5. Record Scout codebase discovery context prerequisite (required before Round 0 can be opened):
+   ```bash
+   herdr-master council-state record-scout --run-dir "$RUN_DIR" --context "$RUN_DIR/context.md"
+   ```
+
+### Step 2: Independent Plan Drafting (Round 0)
+1. Open the drafting round:
+   ```bash
+   herdr-master council-state open-round --run-dir "$RUN_DIR" --round 0
+   ```
+2. Distribute the user's specification/intent and `RUN_DIR/context.md` identically to each council member.
+3. Each member independently drafts a comprehensive technical plan without visibility into other members' work.
+4. Members save their drafts to `RUN_DIR/plans/<member>_v0.md`.
+5. Register each draft:
+   ```bash
+   herdr-master council-state submit-plan --run-dir "$RUN_DIR" --member "<member>" --plan "$RUN_DIR/plans/<member>_v0.md" --revision 0
+   ```
+
+### Step 3: Cross-Review & Iterative Synthesis Feedback Loop (Max 5 Cycles: Rounds 1 to 5)
+For feedback cycles 1 through 5:
+1. Open the feedback round:
+   ```bash
+   herdr-master council-state open-round --run-dir "$RUN_DIR" --round "$CYCLE"
+   ```
+2. **Cross-Review Distribution**:
+   - Coordinator distributes every other member's current plan snapshot to each member.
+   - Each member reviews peer proposals, identifies strengths, weaknesses, edge cases, and synergy opportunities, and indicates which plan it considers best or synthesizes a stronger merged approach.
+   - Each member writes `RUN_DIR/feedback/<member>_round_<CYCLE>.md` and selects an explicit preferred plan.
+   - Submit feedback:
+     ```bash
+     herdr-master council-state submit-feedback --run-dir "$RUN_DIR" --round "$CYCLE" --member "<member>" --feedback "$RUN_DIR/feedback/<member>_round_<CYCLE>.md" --selected-plan "<preferred_plan_id>"
+     ```
+3. **Consensus Check**:
+   - Coordinator checks consensus:
+     ```bash
+     herdr-master council-state consensus --run-dir "$RUN_DIR" --round "$CYCLE"
+     ```
+   - **Immediate Stop on Consensus**: If all members explicitly agree on the same canonical plan revision, the deliberation succeeds immediately! Proceed directly to **Step 5 (Finalize)**.
+4. **Unified Feedback & Revision**:
+   - If consensus is not yet achieved:
+     - Coordinator synthesizes member reviews into a single unified feedback artifact: `RUN_DIR/feedback/unified_round_<CYCLE>.md`.
+     - Coordinator records unified feedback (required by state gate before member revisions are accepted):
+       ```bash
+       herdr-master council-state submit-unified-feedback --run-dir "$RUN_DIR" --round "$CYCLE" --feedback "$RUN_DIR/feedback/unified_round_<CYCLE>.md"
+       ```
+     - Coordinator sends this identical unified feedback document to all members.
+     - Each member revises its plan addressing the collective feedback and writes `RUN_DIR/plans/<member>_v<CYCLE>.md`.
+     - Register revised plans:
+       ```bash
+       herdr-master council-state submit-plan --run-dir "$RUN_DIR" --member "<member>" --plan "$RUN_DIR/plans/<member>_v<CYCLE>.md" --revision "$CYCLE"
+       ```
+     - If `CYCLE < 5`, advance to the next cycle (`CYCLE + 1`).
+     - If `CYCLE == 5` and unanimous consensus was not reached, all members must still complete and submit their Round 5 revised plans before deliberation transitions to **Step 4 (Fallback 1-Round Vote)**.
+
+### Step 4: Fallback 1-Round Vote (After 5 Cycles Without Consensus)
+If 5 full feedback cycles conclude without unanimous agreement (and all Round 5 revised plans have been registered):
+1. The Coordinator initiates a final single-round vote among candidate plans from the 5th cycle.
+2. Each council member casts one vote:
+   ```bash
+   herdr-master council-state vote --run-dir "$RUN_DIR" --member "<member>" --ballot "<candidate_plan_id>"
+   ```
+3. **Voting Rules**:
+   - Only registered Council Members may vote (1 ballot per member).
+   - Coordinator and Scout do NOT vote.
+   - The candidate plan with the highest tally wins.
+   - In case of a tie, deterministic tie-breaking is applied based on the configured member/candidate order and logged in the state record.
+
+### Step 5: Finalization & Plan Artifact
+1. Finalize the run:
+   ```bash
+   herdr-master council-state finalize --run-dir "$RUN_DIR"
+   ```
+2. The Coordinator presents `RUN_DIR/final_plan.md` to the user, highlighting:
+   - Selected plan overview, architecture, and task breakdown.
+   - Outcome type: `UNANIMOUS_CONSENSUS` or `MAJORITY_VOTE` (with vote tally and tie-break details if applicable).
+   - Cycles utilized (1 to 5).
+   - Provenance of ideas synthesized across all member drafts.
+
+---
+
+## 4. AiHead Availability and Autonomous Decisions
+
+The Council protocol supports automated, intelligent decision consultation via AiHead when enabled:
+
+1. **Enablement & Tri-State Flag**:
+   - `--ai-head`: Explicitly enable AiHead consultation.
+   - `--no-ai-head`: Explicitly disable AiHead consultation.
+   - Default: Discovered from project configuration (`.herdr-master.toml`) or launcher bootstrap context descriptor.
+2. **Consultation Modes**:
+   - **TUI Mode**: Consults AiHead via its persistent Herdr tab (labelled `ai-head`) in the active workspace. Automated requests are serialized with unique correlation IDs.
+   - **CLI Mode (100% Herdr-free)**: Direct execution without Herdr. Commands or harnesses calling each other invoke the harness directly via its native headless CLI runner (e.g. `opencode run`, `agy`, etc.) or native agent tool call in a direct subprocess without any Herdr daemon, socket, or workspace dependencies. Harnesses can call each other directly without Herdr.
+3. **Correlated Requests & Structured Decisions**:
+   - Every request to AiHead contains a unique correlation ID, run context, and specific technical question.
+   - AiHead returns a structured decision object containing: `{ "decision": "...", "rationale": "...", "escalated": false }`.
+4. **Delegated Scope & User Escalation**:
+   - Autonomous decisions are accepted for routine technical and architectural choices within the council's delegated scope.
+   - Genuinely ambiguous requirements, conflicting high-level business goals, or missing user specifications must escalate to the user with a concise prompt.
+   - **Destructive operations, security bypasses, or out-of-scope actions always require explicit user approval.**
+
+---
+
+## 5. Hard Protocol Rules
+
+- **Maximum 5 Cycles**: Deliberation never exceeds 5 feedback cycles. The `herdr-master council-state` gate strictly rejects any round 6 attempt.
+- **Strict Consensus Definition**: Consensus requires all members to explicitly adopt the same canonical plan revision. Similar prose or coordinator preference is NOT consensus.
+- **Voting Neutrality**: Coordinator and Scout NEVER vote. Voting is strictly reserved for Council Members.
+- **Atomic State Transitions**: Every round opening, submission, consensus check, and vote must be validated through `herdr-master council-state`.
+- **Plans Only**: The Council produces planning artifacts only. It never modifies codebase source files, runs commits, or lands branches.

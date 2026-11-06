@@ -27,6 +27,7 @@ def test_find_repo_root():
     root = find_repo_root()
     assert (root / "skills" / "herdr-master" / "SKILL.md").exists()
     assert (root / "skills" / "ergo" / "SKILL.md").exists()
+    assert (root / "skills" / "council" / "SKILL.md").exists()
 
 
 def test_find_repo_root_raises_without_hardcoded_fallback(tmp_path: Path):
@@ -109,6 +110,7 @@ def test_cli_skills_list():
     assert "/herdr-master" in result.output
     assert "/ergo" in result.output
     assert "/orchestration" in result.output
+    assert "/council" in result.output
 
 
 def test_cli_skills_install_and_remove_in_temp_home(tmp_path: Path):
