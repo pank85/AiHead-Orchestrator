@@ -91,8 +91,8 @@ class HerdrMasterApp(App):
 
     CSS = """
     Screen {
-        background: #101010;
-        color: #ffffff;
+        background: #0B0F19;
+        color: #F8FAFC;
     }
     .main-body {
         height: 1fr;

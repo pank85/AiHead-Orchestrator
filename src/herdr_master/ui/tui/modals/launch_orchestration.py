@@ -53,31 +53,32 @@ class LaunchOrchestrationModal(ModalScreen[Optional[OrchestrationLaunchParams]])
     DEFAULT_CSS = """
     LaunchOrchestrationModal {
         align: center middle;
-        background: rgba(0, 0, 0, 0.75);
+        background: rgba(11, 15, 25, 0.85);
     }
     .modal-box {
         width: 76;
         max-width: 95%;
         height: 100%;
         max-height: 100%;
-        background: #181818;
-        border: thick #00aa66;
+        background: #161E2E;
+        border: thick #10B981;
         padding: 0 1;
+        color: #F8FAFC;
     }
     .modal-fields {
         height: 1fr;
     }
     .modal-title {
-        color: #00dd88;
+        color: #10B981;
         text-style: bold;
         margin-bottom: 0;
     }
     .modal-desc {
-        color: #888888;
+        color: #94A3B8;
         margin-bottom: 1;
     }
     .field-label {
-        color: #aaaaaa;
+        color: #94A3B8;
         margin-top: 1;
         height: 1;
     }
@@ -99,11 +100,12 @@ class LaunchOrchestrationModal(ModalScreen[Optional[OrchestrationLaunchParams]])
         margin-top: 1;
         margin-bottom: 1;
         height: auto;
+        color: #F8FAFC;
     }
     .status-msg {
         height: 2;
         max-height: 2;
-        color: #ff6666;
+        color: #F59E0B;
     }
     .button-bar {
         height: 3;
@@ -111,6 +113,22 @@ class LaunchOrchestrationModal(ModalScreen[Optional[OrchestrationLaunchParams]])
     }
     .button-bar Button {
         margin: 0 1;
+        min-width: 14;
+    }
+    #btn-launch {
+        background: #059669;
+        color: #F8FAFC;
+        text-style: bold;
+    }
+    #btn-launch:hover {
+        background: #047857;
+    }
+    #btn-cancel {
+        background: #334155;
+        color: #F8FAFC;
+    }
+    #btn-cancel:hover {
+        background: #475569;
     }
     """
 

@@ -35,18 +35,19 @@ class LaunchCouncilModal(ModalScreen[Optional[CouncilLaunchParams]]):
     DEFAULT_CSS = """
     LaunchCouncilModal {
         align: center middle;
-        background: rgba(0, 0, 0, 0.75);
+        background: rgba(11, 15, 25, 0.85);
     }
     .council-shell {
         width: 92%;
         height: 92%;
-        background: #141414;
-        border: thick cyan;
+        background: #161E2E;
+        border: thick #4F46E5;
         padding: 0 1;
+        color: #F8FAFC;
     }
     .council-title {
         height: 1;
-        color: cyan;
+        color: #818CF8;
         text-style: bold;
     }
     .council-scroll {
@@ -54,7 +55,7 @@ class LaunchCouncilModal(ModalScreen[Optional[CouncilLaunchParams]]):
         padding: 1 0;
     }
     .section-label {
-        color: #aaaaaa;
+        color: #94A3B8;
         text-style: bold;
         margin-top: 1;
         height: 1;
@@ -66,6 +67,7 @@ class LaunchCouncilModal(ModalScreen[Optional[CouncilLaunchParams]]):
     .field-row Label {
         width: 18;
         padding-top: 1;
+        color: #94A3B8;
     }
     .field-row Input {
         width: 1fr;
@@ -74,19 +76,26 @@ class LaunchCouncilModal(ModalScreen[Optional[CouncilLaunchParams]]):
         width: 26;
     }
     #council-roster-summary {
-        background: #202020;
+        background: #111827;
         padding: 0 1;
-        border: solid #444444;
+        border: solid #334155;
         height: 5;
         margin-bottom: 1;
+        color: #F8FAFC;
     }
     #council-idea-input {
         height: 8;
         margin-bottom: 1;
+        background: #1E293B;
+        border: solid #334155;
+        color: #F8FAFC;
+    }
+    #council-idea-input:focus {
+        border: solid #818CF8;
     }
     .status-bar {
         height: 1;
-        color: #ff8888;
+        color: #F59E0B;
     }
     .footer-row {
         height: 3;
@@ -95,6 +104,21 @@ class LaunchCouncilModal(ModalScreen[Optional[CouncilLaunchParams]]):
     .footer-row Button {
         margin-right: 2;
         min-width: 14;
+    }
+    #btn-launch {
+        background: #4F46E5;
+        color: #F8FAFC;
+        text-style: bold;
+    }
+    #btn-launch:hover {
+        background: #4338CA;
+    }
+    #btn-cancel {
+        background: #334155;
+        color: #F8FAFC;
+    }
+    #btn-cancel:hover {
+        background: #475569;
     }
     """
 

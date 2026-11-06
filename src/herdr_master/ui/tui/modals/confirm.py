@@ -12,19 +12,20 @@ class ConfirmModal(ModalScreen[bool]):
     DEFAULT_CSS = """
     ConfirmModal {
         align: center middle;
-        background: rgba(0, 0, 0, 0.7);
+        background: rgba(11, 15, 25, 0.85);
     }
     .confirm-dialog {
         width: 60;
         height: auto;
-        background: #1e1e1e;
-        border: thick cyan;
+        background: #161E2E;
+        border: thick #38BDF8;
         padding: 1 2;
+        color: #F8FAFC;
     }
     .confirm-title {
         text-align: center;
         text-style: bold;
-        color: cyan;
+        color: #38BDF8;
         margin-bottom: 1;
     }
     .confirm-buttons {
@@ -33,6 +34,22 @@ class ConfirmModal(ModalScreen[bool]):
     }
     .confirm-buttons Button {
         margin: 0 1;
+        min-width: 12;
+    }
+    #btn-confirm {
+        background: #0284C7;
+        color: #F8FAFC;
+        text-style: bold;
+    }
+    #btn-confirm:hover {
+        background: #0369A1;
+    }
+    #btn-cancel {
+        background: #334155;
+        color: #F8FAFC;
+    }
+    #btn-cancel:hover {
+        background: #475569;
     }
     """
 

@@ -6,14 +6,14 @@ from textual.widgets import Static
 
 
 class ActionFooter(Static):
-    """Bottom footer bar indicating available keybindings and context actions."""
+    """Bottom footer bar indicating available keybindings with styled badge chips."""
 
     DEFAULT_CSS = """
     ActionFooter {
         height: 1;
         dock: bottom;
-        background: #1a1a1a;
-        color: #aaaaaa;
+        background: #161E2E;
+        color: #94A3B8;
         padding: 0 1;
         overflow: hidden hidden;
     }
@@ -55,6 +55,7 @@ class ActionFooter(Static):
                 ("s", "Set"),
             ]
         for key, label in keys:
-            t.append(f"[{key}] ", style="bold cyan")
-            t.append(f"{label}  ", style="white")
+            t.append(f"[{key}]", style="bold #0B0F19 on #38BDF8")
+            t.append(f" {label} ", style="#F8FAFC on #1E293B")
+            t.append(" ")
         self.update(t)

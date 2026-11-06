@@ -15,8 +15,10 @@ class TaskDAGWidget(Static):
     TaskDAGWidget {
         height: auto;
         padding: 0 1;
-        background: #141414;
+        background: #111827;
+        color: #F8FAFC;
         margin-top: 1;
+        border: solid #334155;
     }
     """
 

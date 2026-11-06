@@ -14,17 +14,18 @@ class PromptDialog(ModalScreen[Optional[str]]):
     DEFAULT_CSS = """
     PromptDialog {
         align: center middle;
-        background: rgba(0, 0, 0, 0.7);
+        background: rgba(11, 15, 25, 0.85);
     }
     .prompt-box {
         width: 70;
         height: auto;
-        background: #1e1e1e;
-        border: thick magenta;
+        background: #161E2E;
+        border: thick #A855F7;
         padding: 1 2;
+        color: #F8FAFC;
     }
     .prompt-title {
-        color: magenta;
+        color: #A855F7;
         text-style: bold;
         margin-bottom: 1;
     }
@@ -34,6 +35,22 @@ class PromptDialog(ModalScreen[Optional[str]]):
     }
     .prompt-buttons Button {
         margin-left: 1;
+        min-width: 12;
+    }
+    #btn-send {
+        background: #059669;
+        color: #F8FAFC;
+        text-style: bold;
+    }
+    #btn-send:hover {
+        background: #047857;
+    }
+    #btn-cancel {
+        background: #334155;
+        color: #F8FAFC;
+    }
+    #btn-cancel:hover {
+        background: #475569;
     }
     """
 

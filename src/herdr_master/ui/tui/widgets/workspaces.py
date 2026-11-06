@@ -253,10 +253,13 @@ class WorkspaceBrowser(Vertical):
         height: 1fr;
         padding: 0 1;
         overflow-x: hidden;
+        background: #161E2E;
     }
     #open-strip {
         height: 3;
         overflow: hidden hidden;
+        background: #1E293B;
+        padding: 0 1;
     }
     #open-strip-row {
         height: 1;
@@ -269,19 +272,20 @@ class WorkspaceBrowser(Vertical):
         width: auto;
         max-width: 100%;
         margin: 0 1 0 0;
-        background: #005f87;
-        color: #ffffff;
+        background: #0284C7;
+        color: #F8FAFC;
+        text-style: bold;
     }
     #btn-open-herdr:hover {
-        background: #0087af;
+        background: #0369A1;
     }
     #btn-open-herdr:focus {
-        background: #0087d7;
+        background: #0284C7;
         text-style: bold;
     }
     #btn-open-herdr:disabled {
-        background: #333333;
-        color: #777777;
+        background: #334155;
+        color: #64748B;
     }
     #btn-delete-workspace {
         border: none;
@@ -291,41 +295,53 @@ class WorkspaceBrowser(Vertical):
         width: auto;
         max-width: 100%;
         margin: 0 1 0 0;
-        background: #870000;
-        color: #ffffff;
+        background: #DC2626;
+        color: #F8FAFC;
+        text-style: bold;
     }
     #btn-delete-workspace:hover {
-        background: #af0000;
+        background: #B91C1C;
     }
     #btn-delete-workspace:focus {
-        background: #d70000;
+        background: #EF4444;
         text-style: bold;
     }
     #btn-delete-workspace:disabled {
-        background: #333333;
-        color: #777777;
+        background: #334155;
+        color: #64748B;
     }
     #open-selection {
         height: 1;
         width: 1fr;
         overflow: hidden hidden;
-        color: #cccccc;
+        color: #F8FAFC;
+        text-style: bold;
     }
     #open-help {
         height: 2;
         overflow: hidden hidden;
-        color: #aaaaaa;
+        color: #94A3B8;
     }
     #workspace-summary {
         height: 1;
-        color: #aaaaaa;
+        color: #94A3B8;
         overflow: hidden hidden;
+        background: #161E2E;
     }
     #workspace-tree {
         height: 1fr;
-        background: #111111;
+        background: #111827;
         padding: 0;
         overflow-x: hidden;
+        color: #F8FAFC;
+    }
+    #workspace-tree:focus > .tree--cursor {
+        background: #1E293B;
+        color: #38BDF8;
+        text-style: bold;
+    }
+    #workspace-tree > .tree--guides {
+        color: #334155;
     }
     """
 

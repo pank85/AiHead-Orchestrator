@@ -42,36 +42,38 @@ class LaunchMasterModal(ModalScreen[Optional[MasterLaunchParams]]):
     DEFAULT_CSS = """
     LaunchMasterModal {
         align: center middle;
-        background: rgba(0, 0, 0, 0.7);
+        background: rgba(11, 15, 25, 0.85);
     }
     .modal-box {
-        width: 70;
+        width: 72;
         height: 100%;
         max-height: 100%;
-        background: #181818;
-        border: thick cyan;
+        background: #161E2E;
+        border: thick #38BDF8;
         padding: 0 1;
+        color: #F8FAFC;
     }
     .modal-fields {
         height: 1fr;
     }
     .modal-title {
-        color: cyan;
+        color: #38BDF8;
         text-style: bold;
         margin-bottom: 1;
     }
     .modal-desc {
-        color: #888888;
+        color: #94A3B8;
         margin-bottom: 1;
     }
     .field-label {
-        color: #aaaaaa;
+        color: #94A3B8;
         margin-top: 0;
         height: 1;
     }
     .status-msg {
         height: 2;
         max-height: 2;
+        color: #F59E0B;
     }
     .button-bar {
         height: 3;
@@ -79,6 +81,22 @@ class LaunchMasterModal(ModalScreen[Optional[MasterLaunchParams]]):
     }
     .button-bar Button {
         margin: 0 1;
+        min-width: 14;
+    }
+    #btn-launch {
+        background: #0284C7;
+        color: #F8FAFC;
+        text-style: bold;
+    }
+    #btn-launch:hover {
+        background: #0369A1;
+    }
+    #btn-cancel {
+        background: #334155;
+        color: #F8FAFC;
+    }
+    #btn-cancel:hover {
+        background: #475569;
     }
     """
 

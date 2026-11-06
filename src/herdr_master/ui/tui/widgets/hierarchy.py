@@ -14,9 +14,15 @@ class HierarchyTree(Tree):
     DEFAULT_CSS = """
     HierarchyTree {
         width: 32;
-        background: #141414;
-        border-right: solid #333333;
+        background: #111827;
+        border-right: solid #334155;
         scrollbar-gutter: stable;
+        color: #F8FAFC;
+    }
+    HierarchyTree:focus > .tree--cursor {
+        background: #1E293B;
+        color: #38BDF8;
+        text-style: bold;
     }
     """
 

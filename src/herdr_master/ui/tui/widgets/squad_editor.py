@@ -70,7 +70,7 @@ class SquadEditor(Widget):
     }
     SquadEditor.top-section {
         height: 12;
-        border: solid #2a2a2a;
+        border: solid #334155;
         layout: horizontal;
     }
     .squad-summary-bar {
@@ -81,40 +81,41 @@ class SquadEditor(Widget):
     .squad-editor-layout {
         height: 100%;
         min-height: 10;
-        border: solid #2a2a2a;
+        border: solid #334155;
     }
     .left-tree-col {
         width: 32;
         height: 100%;
-        border-right: solid #333333;
-        background: #161616;
+        border-right: solid #334155;
+        background: #111827;
     }
     .col-header {
-        color: #aaaaaa;
-        background: #1f1f1f;
+        color: #94A3B8;
+        background: #1E293B;
         text-style: bold;
     }
     .squad-tree {
         height: 1fr;
-        background: #161616;
+        background: #111827;
+        color: #F8FAFC;
     }
     .right-editor-col {
         width: 1fr;
         height: 100%;
         padding: 0 1;
-        background: #181818;
+        background: #161E2E;
     }
     .editor-fields {
         height: 1fr;
     }
     .editor-heading {
         height: 1;
-        color: cyan;
+        color: #38BDF8;
         text-style: bold;
     }
     .field-label {
         height: 1;
-        color: #aaaaaa;
+        color: #94A3B8;
     }
     .options-grid {
         height: auto;
@@ -145,10 +146,16 @@ class SquadEditor(Widget):
         min-height: 1;
         border: none;
         margin-right: 1;
+        background: #334155;
+        color: #F8FAFC;
+    }
+    .worker-pool-buttons Button:hover {
+        background: #475569;
     }
     .status-msg {
         height: 1;
         max-height: 2;
+        color: #F59E0B;
     }
     SquadEditor.narrow .left-tree-col {
         width: 22;

@@ -16,7 +16,7 @@ class CenterDeck(Vertical):
     CenterDeck {
         width: 1fr;
         height: 1fr;
-        background: #111111;
+        background: #0B0F19;
     }
     CenterDeck.-full WorkspaceBrowser {
         width: 1fr;

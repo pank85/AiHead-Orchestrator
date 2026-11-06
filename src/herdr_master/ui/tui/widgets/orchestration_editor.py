@@ -84,7 +84,7 @@ class OrchestrationEditor(Widget):
     }
     OrchestrationEditor .orch-row Label {
         width: 11;
-        color: #aaaaaa;
+        color: #94A3B8;
     }
     OrchestrationEditor .orch-row Input {
         width: 1fr;
@@ -104,6 +104,11 @@ class OrchestrationEditor(Widget):
     OrchestrationEditor #orch-workers-header Button {
         margin-left: 1;
         min-width: 14;
+        background: #334155;
+        color: #F8FAFC;
+    }
+    OrchestrationEditor #orch-workers-header Button:hover {
+        background: #475569;
     }
     OrchestrationEditor #orch-workers-box {
         height: auto;
@@ -114,7 +119,7 @@ class OrchestrationEditor(Widget):
     }
     OrchestrationEditor .orch-worker-row Label {
         width: 11;
-        color: #aaaaaa;
+        color: #94A3B8;
     }
     OrchestrationEditor .orch-worker-row Input {
         width: 1fr;
@@ -122,11 +127,16 @@ class OrchestrationEditor(Widget):
     OrchestrationEditor .orch-worker-row Button {
         margin-left: 1;
         min-width: 5;
+        background: #334155;
+        color: #F8FAFC;
+    }
+    OrchestrationEditor .orch-worker-row Button:hover {
+        background: #475569;
     }
     .status-msg {
         height: 2;
         max-height: 2;
-        color: #ff6666;
+        color: #F59E0B;
     }
     """
 

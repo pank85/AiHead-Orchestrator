@@ -68,19 +68,20 @@ class SettingsModal(ModalScreen[Optional[Tuple[HerdrMasterConfig, Squad]]]):
     DEFAULT_CSS = """
     SettingsModal {
         align: center middle;
-        background: rgba(0, 0, 0, 0.75);
+        background: rgba(11, 15, 25, 0.85);
     }
     .settings-shell {
         width: 96%;
         height: 100%;
         max-height: 100%;
-        background: #141414;
-        border: thick cyan;
+        background: #161E2E;
+        border: thick #38BDF8;
         padding: 0 1;
+        color: #F8FAFC;
     }
     .settings-title {
         height: 1;
-        color: cyan;
+        color: #38BDF8;
         text-style: bold;
     }
     SettingsModal TabbedContent {
@@ -94,7 +95,7 @@ class SettingsModal(ModalScreen[Optional[Tuple[HerdrMasterConfig, Squad]]]):
         padding: 1 0;
     }
     .section-label {
-        color: #aaaaaa;
+        color: #94A3B8;
         text-style: bold;
         margin-top: 1;
         height: 1;
@@ -106,6 +107,7 @@ class SettingsModal(ModalScreen[Optional[Tuple[HerdrMasterConfig, Squad]]]):
     .field-row Label {
         width: 14;
         padding-top: 1;
+        color: #94A3B8;
     }
     .field-row Input {
         width: 1fr;
@@ -116,10 +118,17 @@ class SettingsModal(ModalScreen[Optional[Tuple[HerdrMasterConfig, Squad]]]):
     .field-row Button {
         margin-left: 1;
         min-width: 10;
+        background: #334155;
+        color: #F8FAFC;
+    }
+    .field-row Button:hover {
+        background: #475569;
     }
     .table-container {
         height: 7;
         margin-bottom: 1;
+        background: #111827;
+        border: solid #334155;
     }
     .action-row {
         height: 3;
@@ -128,15 +137,20 @@ class SettingsModal(ModalScreen[Optional[Tuple[HerdrMasterConfig, Squad]]]):
     .action-row Button {
         margin-right: 1;
         min-width: 12;
+        background: #334155;
+        color: #F8FAFC;
+    }
+    .action-row Button:hover {
+        background: #475569;
     }
     .warning-text {
-        color: #ffaa00;
+        color: #F59E0B;
         text-style: bold;
         height: 2;
     }
     .status-bar {
         height: 1;
-        color: #ff8888;
+        color: #F59E0B;
     }
     .footer-row {
         height: 1;
@@ -147,6 +161,21 @@ class SettingsModal(ModalScreen[Optional[Tuple[HerdrMasterConfig, Squad]]]):
         margin-right: 2;
         min-width: 14;
     }
+    #btn-save {
+        background: #0284C7;
+        color: #F8FAFC;
+        text-style: bold;
+    }
+    #btn-save:hover {
+        background: #0369A1;
+    }
+    #btn-cancel {
+        background: #334155;
+        color: #F8FAFC;
+    }
+    #btn-cancel:hover {
+        background: #475569;
+    }
     .compact-tab {
         padding: 0;
     }
@@ -156,7 +185,7 @@ class SettingsModal(ModalScreen[Optional[Tuple[HerdrMasterConfig, Squad]]]):
     }
     .compact-label {
         width: 13;
-        color: #aaaaaa;
+        color: #94A3B8;
     }
     .compact-harness {
         width: 14;
@@ -175,27 +204,40 @@ class SettingsModal(ModalScreen[Optional[Tuple[HerdrMasterConfig, Squad]]]):
     .compact-row Button {
         margin-right: 1;
         min-width: 8;
+        background: #334155;
+        color: #F8FAFC;
+    }
+    .compact-row Button:hover {
+        background: #475569;
     }
     .compact-row Checkbox {
         margin-left: 1;
         width: auto;
     }
     .compact-section {
-        color: #aaaaaa;
+        color: #94A3B8;
         text-style: bold;
         margin-top: 1;
         height: 1;
     }
     .compact-warning {
-        color: #ffaa00;
+        color: #F59E0B;
         height: 1;
     }
     .council-table-container {
         height: 7;
+        background: #111827;
+        border: solid #334155;
     }
     #aihead-soul-input {
         height: 6;
         margin-bottom: 1;
+        background: #1E293B;
+        border: solid #334155;
+        color: #F8FAFC;
+    }
+    #aihead-soul-input:focus {
+        border: solid #38BDF8;
     }
     """
 

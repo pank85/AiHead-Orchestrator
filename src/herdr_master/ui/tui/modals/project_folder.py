@@ -86,15 +86,19 @@ class ProjectFolderPicker(ModalScreen[Optional[Path]]):
     """Select a directory, never a file; browsing does not change process cwd."""
 
     DEFAULT_CSS = """
-    ProjectFolderPicker { align: center middle; background: rgba(0, 0, 0, 0.8); }
+    ProjectFolderPicker { align: center middle; background: rgba(11, 15, 25, 0.85); }
     ProjectFolderPicker > Vertical {
-        width: 90%; height: 90%; border: thick cyan; background: #181818; padding: 0 1;
+        width: 90%; height: 90%; border: thick #38BDF8; background: #161E2E; padding: 0 1; color: #F8FAFC;
     }
-    ProjectFolderPicker Label { height: 1; }
-    ProjectFolderPicker DirectoryTree { height: 1fr; }
-    ProjectFolderPicker Horizontal { height: 3; }
-    ProjectFolderPicker Button { margin-right: 1; min-width: 8; }
-    #folder-error { height: 2; color: #ff8888; }
+    ProjectFolderPicker Label { height: 1; color: #94A3B8; }
+    ProjectFolderPicker DirectoryTree { height: 1fr; background: #111827; color: #F8FAFC; }
+    ProjectFolderPicker DirectoryTree:focus > .tree--cursor { background: #1E293B; color: #38BDF8; }
+    ProjectFolderPicker Horizontal { height: 3; margin-top: 1; }
+    ProjectFolderPicker Button { margin-right: 1; min-width: 10; background: #334155; color: #F8FAFC; }
+    ProjectFolderPicker Button:hover { background: #475569; }
+    ProjectFolderPicker #btn-select-folder { background: #0284C7; color: #F8FAFC; text-style: bold; }
+    ProjectFolderPicker #btn-select-folder:hover { background: #0369A1; }
+    #folder-error { height: 2; color: #F59E0B; }
     """
 
     def __init__(self, folder: Path) -> None:

@@ -27,17 +27,18 @@ class ConfigDrawer(ModalScreen[Optional[Tuple[Squad, bool]]]):
     DEFAULT_CSS = """
     ConfigDrawer {
         align: right top;
-        background: rgba(0, 0, 0, 0.6);
+        background: rgba(11, 15, 25, 0.85);
     }
     .drawer-panel {
         width: 65;
         height: 100%;
-        background: #181818;
-        border-left: thick cyan;
+        background: #161E2E;
+        border-left: thick #38BDF8;
         padding: 1 2;
+        color: #F8FAFC;
     }
     .drawer-title {
-        color: cyan;
+        color: #38BDF8;
         text-style: bold;
         margin-bottom: 1;
     }
@@ -46,14 +47,15 @@ class ConfigDrawer(ModalScreen[Optional[Tuple[Squad, bool]]]):
         max-height: 3;
     }
     .field-label {
-        color: #aaaaaa;
+        color: #94A3B8;
         margin-bottom: 0;
     }
     .pool-list {
         height: 8;
         margin: 1 0;
-        background: #121212;
-        border: solid #333333;
+        background: #111827;
+        border: solid #334155;
+        color: #F8FAFC;
     }
     .button-bar {
         margin-top: 1;
@@ -61,9 +63,25 @@ class ConfigDrawer(ModalScreen[Optional[Tuple[Squad, bool]]]):
     }
     .button-bar Button {
         margin: 0 1;
+        min-width: 12;
+    }
+    #btn-save {
+        background: #0284C7;
+        color: #F8FAFC;
+        text-style: bold;
+    }
+    #btn-save:hover {
+        background: #0369A1;
+    }
+    #btn-cancel {
+        background: #334155;
+        color: #F8FAFC;
+    }
+    #btn-cancel:hover {
+        background: #475569;
     }
     .error-label {
-        color: red;
+        color: #F59E0B;
         margin: 1 0;
         height: auto;
         max-height: 3;

@@ -82,13 +82,14 @@ class TargetDetails(ModalScreen[None]):
 
     BINDINGS = [Binding("escape", "close", "Close", show=False)]
     DEFAULT_CSS = """
-    TargetDetails { align: center middle; background: rgba(0, 0, 0, 0.8); }
+    TargetDetails { align: center middle; background: rgba(11, 15, 25, 0.85); }
     TargetDetails > Vertical {
-        width: 90%; height: 75%; border: solid cyan; background: #181818; padding: 0 1;
+        width: 90%; height: 75%; border: solid #38BDF8; background: #161E2E; padding: 0 1;
     }
     #target-details-scroll { height: 1fr; width: 100%; }
-    #target-details-text { height: auto; width: 100%; }
-    #target-details-close { height: 3; min-width: 8; }
+    #target-details-text { height: auto; width: 100%; color: #F8FAFC; }
+    #target-details-close { height: 3; min-width: 8; background: #0284C7; color: #F8FAFC; text-style: bold; }
+    #target-details-close:hover { background: #0369A1; }
     """
 
     def __init__(self, target: WorkspaceTarget, lease: Optional[PaneLease], original: bool):
@@ -141,10 +142,10 @@ class LivePaneOutput(VerticalScroll):
     LivePaneOutput {
         height: 1fr;
         width: 100%;
-        background: #0c0c0c;
+        background: #0B0F19;
         overflow-y: scroll;
         overflow-x: hidden;
-        color: #dddddd;
+        color: #F8FAFC;
     }
     #live-pane-output-text {
         width: 100%;
@@ -363,57 +364,57 @@ class LivePaneView(Vertical):
     LivePaneView {
         height: 1fr;
         padding: 0 1;
-        background: #111111;
+        background: #161E2E;
         overflow-x: hidden;
     }
     #live-pane-identity {
         height: 1;
         width: 100%;
-        color: #ffffff;
+        color: #F8FAFC;
         text-style: bold;
         overflow: hidden hidden;
     }
     #live-pane-state {
         height: 1;
         width: 100%;
-        color: #aaaaaa;
+        color: #94A3B8;
         overflow: hidden hidden;
     }
     #live-pane-output {
         height: 1fr;
         width: 100%;
-        background: #0c0c0c;
+        background: #0B0F19;
         overflow-y: scroll;
         overflow-x: hidden;
-        color: #dddddd;
+        color: #F8FAFC;
     }
     #reply-text {
         height: 2;
         width: 100%;
-        border: none;
-        background: #1e1e1e;
-        color: #ffffff;
+        border: solid #334155;
+        background: #1E293B;
+        color: #F8FAFC;
         padding: 0;
         display: none;
     }
     #prompt-input {
         height: 3;
         min-height: 3;
-        border: round #444444;
+        border: round #334155;
         padding: 0 1;
-        background: #141414;
-        color: #ffffff;
+        background: #1E293B;
+        color: #F8FAFC;
         width: 100%;
         margin: 0;
     }
     #prompt-input:focus {
-        border: round #0087d7;
-        background: #1a1a1a;
+        border: round #38BDF8;
+        background: #161E2E;
     }
     #prompt-input:disabled {
-        border: round #222222;
-        background: #111111;
-        color: #555555;
+        border: round #1E293B;
+        background: #111827;
+        color: #64748B;
     }
     #live-pane-controls {
         height: 1;
@@ -430,71 +431,85 @@ class LivePaneView(Vertical):
         margin: 0 1 0 0;
     }
     #btn-reply {
-        background: #005f87;
-        color: #ffffff;
+        background: #0284C7;
+        color: #F8FAFC;
+        text-style: bold;
     }
     #btn-reply:hover {
-        background: #0087af;
+        background: #0369A1;
     }
     #btn-reply:focus {
-        background: #0087d7;
+        background: #0284C7;
         text-style: bold;
     }
     #btn-reply:disabled {
-        background: #333333;
-        color: #777777;
+        background: #334155;
+        color: #64748B;
     }
     #btn-send-reply {
-        background: #2e7d32;
-        color: #ffffff;
+        background: #059669;
+        color: #F8FAFC;
+        text-style: bold;
         display: none;
     }
     #btn-send-reply:hover {
-        background: #388e3c;
+        background: #047857;
     }
     #btn-send-reply:focus {
-        background: #43a047;
+        background: #059669;
         text-style: bold;
     }
     #btn-send-reply:disabled {
-        background: #333333;
-        color: #777777;
+        background: #334155;
+        color: #64748B;
     }
     #btn-cancel-reply {
-        background: #757575;
-        color: #ffffff;
+        background: #475569;
+        color: #F8FAFC;
         display: none;
     }
     #btn-cancel-reply:hover {
-        background: #9e9e9e;
+        background: #64748B;
     }
     #btn-cancel-reply:focus {
-        background: #bdbdbd;
-        color: #000000;
+        background: #475569;
+        color: #F8FAFC;
         text-style: bold;
     }
     #btn-cancel-reply:disabled {
-        background: #333333;
-        color: #777777;
+        background: #334155;
+        color: #64748B;
     }
     #btn-follow-output {
-        background: #424242;
-        color: #ffffff;
+        background: #334155;
+        color: #F8FAFC;
     }
     #btn-follow-output:hover {
-        background: #616161;
+        background: #475569;
     }
     #btn-follow-output:focus {
-        background: #757575;
+        background: #334155;
         text-style: bold;
     }
     #btn-follow-output:disabled {
-        background: #222222;
-        color: #555555;
+        background: #1E293B;
+        color: #64748B;
     }
-    #btn-target-details { background: #424242; color: #ffffff; }
-    #btn-target-details:focus { background: #757575; text-style: bold; }
-    #btn-target-details:disabled { background: #222222; color: #555555; }
+    #btn-target-details {
+        background: #334155;
+        color: #F8FAFC;
+    }
+    #btn-target-details:hover {
+        background: #475569;
+    }
+    #btn-target-details:focus {
+        background: #334155;
+        text-style: bold;
+    }
+    #btn-target-details:disabled {
+        background: #1E293B;
+        color: #64748B;
+    }
 
     LivePaneView.-reply-active #reply-text {
         display: block;
