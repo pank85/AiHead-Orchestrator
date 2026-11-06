@@ -158,6 +158,13 @@ class HerdrMasterApp(App):
     def _default_live_client_factory(self, session_name: str, socket_path: Path) -> HerdrClient:
         return HerdrClient(session=session_name, socket_path=Path(socket_path))
 
+    def _live_client_for_socket(self, session_name: str, socket_path: Path) -> HerdrClient:
+        """Obtain a HerdrClient for the given session and socket path via client factory."""
+        try:
+            return self._client_factory(session_name, Path(socket_path))
+        except TypeError:
+            return self._client_factory(Path(socket_path), session_name)  # type: ignore[call-arg]
+
     @staticmethod
     def _live_key(target: Optional[WorkspaceTarget]) -> Optional[tuple[str, str, str]]:
         if target is None or target.pane_id is None:

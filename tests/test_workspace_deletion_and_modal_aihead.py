@@ -1,15 +1,12 @@
 """Tests for Workspace Deletion flow and AiHead option on all launch modals except Council."""
 
-import asyncio
 from pathlib import Path
-from unittest.mock import AsyncMock, MagicMock, patch
+from unittest.mock import AsyncMock, MagicMock
 
 import pytest
 from textual.app import App, ComposeResult
 from textual.widgets import Select
 
-from herdr_master.core.config import HerdrMasterConfig
-from herdr_master.core.models import HarnessKind
 from herdr_master.herdr.client import HerdrClient
 from herdr_master.herdr.discovery import SessionInventory
 from herdr_master.herdr.snapshot import (
@@ -32,7 +29,7 @@ from herdr_master.ui.tui.widgets.workspaces import WorkspaceBrowser, WorkspaceTa
 
 @pytest.mark.asyncio
 async def test_ai_head_option_present_on_all_modals_except_council(tmp_path: Path):
-    """Verify AiHead override Select exists on Ergo, Orchestration, Master, and is absent on Council."""
+    """Verify AiHead override Select exists on Ergo, Orchestration, Master; absent on Council."""
     project_dir = tmp_path / "project"
     project_dir.mkdir()
     squad = resolve_squad(project_dir).squad
@@ -107,7 +104,7 @@ async def test_workspace_browser_delete_button_and_request(tmp_path: Path):
         def compose(self) -> ComposeResult:
             yield browser
 
-    async with BrowserApp().run_test(size=(90, 30)) as pilot:
+    async with BrowserApp().run_test(size=(90, 30)):
         del_btn = browser.query_one("#btn-delete-workspace")
         assert del_btn is not None
 
@@ -116,14 +113,39 @@ async def test_workspace_browser_delete_button_and_request(tmp_path: Path):
         browser.request_delete()  # Should notify, not crash
 
 
+def test_live_client_for_socket_delegation(tmp_path: Path):
+    """Verify _live_client_for_socket delegates to self._client_factory."""
+    mock_client = MagicMock(spec=HerdrClient)
+    mock_factory = MagicMock(return_value=mock_client)
+    app = HerdrMasterApp(demo=False, project_path=tmp_path, live_client_factory=mock_factory)
+
+    sock = Path("/tmp/herdr-test.sock")
+    res = app._live_client_for_socket("session-foo", sock)
+    assert res is mock_client
+    mock_factory.assert_called_once_with("session-foo", sock)
+
+    # Test fallback with swapped argument signature
+    swapped_factory = MagicMock(side_effect=[TypeError("wrong args"), mock_client])
+    app2 = HerdrMasterApp(demo=False, project_path=tmp_path, live_client_factory=swapped_factory)
+    res2 = app2._live_client_for_socket("session-bar", sock)
+    assert res2 is mock_client
+
+    # Test default factory produces HerdrClient
+    app_default = HerdrMasterApp(demo=False, project_path=tmp_path)
+    client = app_default._live_client_for_socket("default-sess", sock)
+    assert isinstance(client, HerdrClient)
+    assert client.session == "default-sess"
+    assert client.socket_path == sock
+
+
 @pytest.mark.asyncio
 async def test_app_delete_workspace_flow_completed_workspace(tmp_path: Path):
     """Test full delete workspace confirmation and Herdr client close_workspace execution."""
-    app = HerdrMasterApp(demo=False, project_path=tmp_path)
     mock_client = AsyncMock(spec=HerdrClient)
     mock_client.close_workspace = AsyncMock(return_value={"status": "ok"})
+    mock_factory = MagicMock(return_value=mock_client)
+    app = HerdrMasterApp(demo=False, project_path=tmp_path, live_client_factory=mock_factory)
     app.client = mock_client
-    app._live_client_for_socket = MagicMock(return_value=mock_client)
     app._schedule_inventory_refresh = MagicMock()
 
     # Setup live session inventory with a completed workspace
@@ -166,5 +188,57 @@ async def test_app_delete_workspace_flow_completed_workspace(tmp_path: Path):
         await pilot.pause()
 
         # Client close_workspace should have been called
+        mock_factory.assert_called_once_with("test-session", sock_path)
         mock_client.close_workspace.assert_awaited_once_with("ws-completed")
         assert app._schedule_inventory_refresh.call_count >= 1
+
+
+@pytest.mark.asyncio
+async def test_app_delete_workspace_flow_active_workspace(tmp_path: Path):
+    """Test delete workspace flow with running agents warns and closes workspace."""
+    mock_client = AsyncMock(spec=HerdrClient)
+    mock_client.close_workspace = AsyncMock(return_value={"status": "ok"})
+    mock_factory = MagicMock(return_value=mock_client)
+    app = HerdrMasterApp(demo=False, project_path=tmp_path, live_client_factory=mock_factory)
+    app.client = mock_client
+    app._schedule_inventory_refresh = MagicMock()
+
+    sock_path = Path("/tmp/test-herdr.sock")
+    snapshot = SessionSnapshot(
+        protocol=22,
+        workspaces=[WorkspaceSnapshot(workspace_id="ws-active", label="Active Task")],
+        tabs=[TabSnapshot(tab_id="tab-1", workspace_id="ws-active")],
+        panes=[PaneSnapshot(pane_id="pane-1", tab_id="tab-1", workspace_id="ws-active")],
+        agents=[
+            AgentSnapshot(
+                pane_id="pane-1",
+                tab_id="tab-1",
+                workspace_id="ws-active",
+                agent_status="working",
+            )
+        ],
+    )
+    inv = SessionInventory(session_name="test-session", socket_path=sock_path, snapshot=snapshot)
+    app.app_state.live_sessions = [inv]
+
+    async with app.run_test(size=(110, 35)) as pilot:
+        target = WorkspaceTarget(
+            socket_path=sock_path,
+            session_name="test-session",
+            workspace_id="ws-active",
+        )
+
+        await app._delete_workspace_flow(target)
+        await pilot.pause()
+
+        confirm_modal = pilot.app.screen
+        assert isinstance(confirm_modal, ConfirmModal)
+        assert "Close Active Workspace" in confirm_modal.title_text
+
+        await pilot.click("#btn-confirm")
+        await pilot.pause()
+
+        mock_factory.assert_called_once_with("test-session", sock_path)
+        mock_client.close_workspace.assert_awaited_once_with("ws-active")
+        assert app._schedule_inventory_refresh.call_count >= 1
+
