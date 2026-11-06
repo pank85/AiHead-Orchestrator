@@ -23,7 +23,6 @@ class CouncilLaunchParams(BaseModel):
     project_folder: Path
     workspace_label: str
     council_config: CouncilConfig
-    ai_head_override: Optional[bool] = None
 
 
 class LaunchCouncilModal(ModalScreen[Optional[CouncilLaunchParams]]):
@@ -133,20 +132,6 @@ class LaunchCouncilModal(ModalScreen[Optional[CouncilLaunchParams]]):
                 with Horizontal(classes="field-row"):
                     yield Button("Customize Roster in Settings…", id="btn-open-settings")
 
-                yield Label("AiHead Override:", classes="section-label")
-                with Horizontal(classes="field-row"):
-                    yield Label("AiHead Option:")
-                    yield Select(
-                        [
-                            ("Use Project Setting", "inherit"),
-                            ("Force Enable", "enable"),
-                            ("Force Disable", "disable"),
-                        ],
-                        value="inherit",
-                        id="council-aihead-override",
-                        allow_blank=False,
-                    )
-
                 yield Label("Feature Objective / Idea Specification:", classes="section-label")
                 yield TextArea(
                     "",
@@ -223,18 +208,10 @@ class LaunchCouncilModal(ModalScreen[Optional[CouncilLaunchParams]]):
             if not label:
                 label = self._default_label
 
-            override_val = self.query_one("#council-aihead-override", Select).value
-            ai_head_override: Optional[bool] = None
-            if override_val == "enable":
-                ai_head_override = True
-            elif override_val == "disable":
-                ai_head_override = False
-
             params = CouncilLaunchParams(
                 intent=idea,
                 project_folder=folder,
                 workspace_label=label,
                 council_config=self.council_config,
-                ai_head_override=ai_head_override,
             )
             self.dismiss(params)

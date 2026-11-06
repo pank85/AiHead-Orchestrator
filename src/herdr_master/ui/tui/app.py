@@ -50,6 +50,7 @@ from herdr_master.ui.tui.modals.project_folder import (
     initial_project_folder,
     validate_project_folder,
 )
+from herdr_master.ui.tui.modals.confirm import ConfirmModal
 from herdr_master.ui.tui.modals.settings import SettingsModal
 from herdr_master.ui.tui.state import AppState
 from herdr_master.ui.tui.widgets.deck import CenterDeck
@@ -84,6 +85,7 @@ class HerdrMasterApp(App):
         Binding("s", "open_settings", "Settings"),
         Binding("c", "open_settings", "Settings"),
         Binding("o", "open_in_herdr", "Open in Herdr", priority=False),
+        Binding("d", "delete_workspace", "Delete Workspace", priority=False),
         Binding("q", "quit", "Quit"),
     ]
 
@@ -721,6 +723,85 @@ class HerdrMasterApp(App):
         finally:
             self._navigation_pending = False
 
+    def action_delete_workspace(self) -> None:
+        """Trigger deletion of the selected workspace."""
+        if len(self.screen_stack) > 1 or isinstance(
+            self.focused, (TextArea, Input, LivePaneOutput)
+        ):
+            return
+        try:
+            browser = self.query_one(WorkspaceBrowser)
+            browser.request_delete()
+        except Exception:
+            self.notify("No workspace selected to delete.", severity="warning")
+
+    def on_workspace_browser_delete_requested(
+        self, event: WorkspaceBrowser.DeleteRequested
+    ) -> None:
+        event.stop()
+        self.run_worker(self._delete_workspace_flow(event.target), group="workspace-deletion")
+
+    async def _delete_workspace_flow(self, target: WorkspaceTarget) -> None:
+        """Confirm and delete/close the targeted workspace."""
+        if self.demo:
+            self.notify("Demo mode: deletion is disabled.", severity="warning")
+            return
+        if len(self.screen_stack) > 1:
+            return
+
+        inventory = next(
+            (
+                item
+                for item in self.app_state.live_sessions
+                if Path(item.socket_path) == Path(target.socket_path)
+            ),
+            None,
+        )
+        if not inventory or inventory.error or not inventory.snapshot:
+            self.notify("Session is offline. Cannot close workspace.", severity="warning")
+            return
+
+        ws = next(
+            (w for w in inventory.snapshot.workspaces if w.workspace_id == target.workspace_id),
+            None,
+        )
+        if not ws:
+            self.notify("Workspace has already closed or no longer exists.", severity="warning")
+            return
+
+        panes = workspace_agents(inventory, target.workspace_id)
+        has_running = any(a.agent_status == "working" for a in panes)
+        ws_name = safe_display(ws.label or ws.workspace_id)
+
+        if has_running:
+            title = f"Close Active Workspace: {ws_name}"
+            msg = (
+                f"Workspace '{ws_name}' has active/running agents.\n"
+                "Are you sure you want to forcibly close this workspace and its panes?"
+            )
+        else:
+            title = f"Delete Completed Workspace: {ws_name}"
+            msg = f"Close and delete workspace '{ws_name}' ({len(panes)} panes)?"
+
+        def _on_confirm(confirmed: bool) -> None:
+            if not confirmed:
+                return
+
+            async def _do_delete():
+                try:
+                    target_client = self._live_client_for_socket(
+                        inventory.session_name, Path(inventory.socket_path)
+                    )
+                    await target_client.close_workspace(target.workspace_id)
+                    self.notify(f"Closed workspace '{ws_name}'.", severity="information")
+                    self._schedule_inventory_refresh()
+                except Exception as exc:
+                    self.notify(f"Failed to close workspace: {exc}", severity="error")
+
+            self.run_worker(_do_delete(), group="workspace-deletion-exec")
+
+        self.push_screen(ConfirmModal(title=title, message=msg), _on_confirm)
+
     def _update_all_widgets(self) -> None:
         self._header.update_state(self.app_state)
         self._deck.update_state(self.app_state)
@@ -810,6 +891,7 @@ class HerdrMasterApp(App):
                     session=ctx.session_name,
                     effort=params.effort,
                     cwd=str(project_path),
+                    ai_head=params.ai_head_override,
                     fresh_workspace=True,
                     focus=False,
                 )
@@ -914,6 +996,7 @@ class HerdrMasterApp(App):
                     squad=params.squad or resolved.squad,
                     cwd=str(project_path),
                     session=ctx.session_name,
+                    ai_head=params.ai_head_override,
                     fresh_workspace=True,
                     focus=False,
                 )
@@ -1025,7 +1108,7 @@ class HerdrMasterApp(App):
                     council=params.council_config,
                     cwd=str(project_path),
                     session=session_name,
-                    ai_head=params.ai_head_override,
+                    ai_head=False,
                     fresh_workspace=True,
                     focus=False,
                 )
@@ -1108,6 +1191,7 @@ class HerdrMasterApp(App):
                     reviewer_effort=params.reviewer_effort,
                     cwd=str(project_path),
                     session=session_name,
+                    ai_head=params.ai_head_override,
                     dangerously_skip_permissions=params.dangerously_skip_permissions,
                 )
                 pane = _result_pane(result)

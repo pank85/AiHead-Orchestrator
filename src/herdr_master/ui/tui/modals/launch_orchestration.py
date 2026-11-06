@@ -9,7 +9,7 @@ from textual.app import ComposeResult
 from textual.binding import Binding
 from textual.containers import Horizontal, Vertical, VerticalScroll
 from textual.screen import ModalScreen
-from textual.widgets import Button, Checkbox, Input, Label, Static
+from textual.widgets import Button, Checkbox, Input, Label, Select, Static
 
 from herdr_master.core.config import OrchestrationConfig
 from herdr_master.core.models import HarnessKind
@@ -36,6 +36,7 @@ class OrchestrationLaunchParams(BaseModel):
     reviewer_effort: Optional[str] = None
     dangerously_skip_permissions: bool = True
     project_path: Optional[Path] = None
+    ai_head_override: Optional[bool] = None
 
 
 class LaunchOrchestrationModal(ModalScreen[Optional[OrchestrationLaunchParams]]):
@@ -157,6 +158,16 @@ class LaunchOrchestrationModal(ModalScreen[Optional[OrchestrationLaunchParams]])
                 value=True,
                 id="orch-skip-permissions",
             )
+            self._aihead_select = Select(
+                [
+                    ("Inherit (Config)", "inherit"),
+                    ("Enable AiHead", "enable"),
+                    ("Disable AiHead", "disable"),
+                ],
+                value="inherit",
+                allow_blank=False,
+                id="orch-aihead-override",
+            )
 
     @property
     def _harness_select(self):
@@ -201,6 +212,9 @@ class LaunchOrchestrationModal(ModalScreen[Optional[OrchestrationLaunchParams]])
                 yield self._workspace_label_input
 
                 yield self.editor
+
+                yield Label("AiHead Decision:", classes="field-label")
+                yield self._aihead_select
 
                 yield self._skip_permissions_checkbox
 
@@ -252,6 +266,8 @@ class LaunchOrchestrationModal(ModalScreen[Optional[OrchestrationLaunchParams]])
 
         orch_config = self.editor.get_config()
         skip_perms = bool(self._skip_permissions_checkbox.value)
+        aihead_val = str(self._aihead_select.value)
+        ai_head_override = True if aihead_val == "enable" else (False if aihead_val == "disable" else None)
 
         self._submitting = True
         params = OrchestrationLaunchParams(
@@ -267,6 +283,7 @@ class LaunchOrchestrationModal(ModalScreen[Optional[OrchestrationLaunchParams]])
             reviewer_effort=orch_config.reviewer_effort,
             dangerously_skip_permissions=skip_perms,
             project_path=project_path,
+            ai_head_override=ai_head_override,
         )
         self.dismiss(params)
 

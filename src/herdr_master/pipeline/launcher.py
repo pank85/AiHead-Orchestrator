@@ -617,6 +617,7 @@ async def launch_master(
     session: str | None = None,
     *,
     effort: EffortLevel | None = None,
+    ai_head: bool | None = None,
     fresh_workspace: bool = False,
     focus: bool = True,
 ) -> Dict[str, Any]:
@@ -644,6 +645,7 @@ async def launch_master(
     )
     if not allocated.pane_id:
         raise RuntimeError(f"Could not allocate pane in workspace {allocated.workspace_id}")
+    head_discovery, config_path = await _resolve_and_wire_ai_head(allocated, target_cwd, ai_head)
     prompt = _with_prompt_prefix(
         build_bootstrap_prompt(
             "herdr-master",
@@ -652,7 +654,11 @@ async def launch_master(
                 intent=initial_task,
                 allocated=allocated,
                 cwd=target_cwd,
+                ai_head=head_discovery,
+                config_path=config_path,
             ),
+            ai_head=head_discovery,
+            config_path=config_path,
         ),
         descriptor,
     )
@@ -677,6 +683,7 @@ async def launch_master(
         "harness": descriptor["kind"],
         "model": model_slug,
         "effort": effort_level.value if effort_level else None,
+        "ai_head": head_discovery if (head_discovery and head_discovery.enabled) else None,
     }
 
 

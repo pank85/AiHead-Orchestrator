@@ -283,6 +283,28 @@ class WorkspaceBrowser(Vertical):
         background: #333333;
         color: #777777;
     }
+    #btn-delete-workspace {
+        border: none;
+        height: 1;
+        min-height: 1;
+        padding: 0 1;
+        width: auto;
+        max-width: 100%;
+        margin: 0 1 0 0;
+        background: #870000;
+        color: #ffffff;
+    }
+    #btn-delete-workspace:hover {
+        background: #af0000;
+    }
+    #btn-delete-workspace:focus {
+        background: #d70000;
+        text-style: bold;
+    }
+    #btn-delete-workspace:disabled {
+        background: #333333;
+        color: #777777;
+    }
     #open-selection {
         height: 1;
         width: 1fr;
@@ -308,6 +330,13 @@ class WorkspaceBrowser(Vertical):
     """
 
     class OpenRequested(Message):
+        def __init__(self, target: WorkspaceTarget) -> None:
+            super().__init__()
+            self.target = target
+
+    class DeleteRequested(Message):
+        """Operator requested closing/deleting a workspace."""
+
         def __init__(self, target: WorkspaceTarget) -> None:
             super().__init__()
             self.target = target
@@ -344,6 +373,7 @@ class WorkspaceBrowser(Vertical):
         with Vertical(id="open-strip"):
             with Horizontal(id="open-strip-row"):
                 yield Button(Text("Open in Herdr [o]"), id="btn-open-herdr")
+                yield Button(Text("Delete [d]"), id="btn-delete-workspace")
                 yield Static("No selection", id="open-selection")
             yield Static(OPEN_BOUNDARY_HELP, id="open-help")
         yield self._summary
@@ -358,9 +388,10 @@ class WorkspaceBrowser(Vertical):
         self._update_open_strip()
 
     def _update_open_strip(self) -> None:
-        """Synchronize the open button and selection text with the active selection."""
+        """Synchronize the open button, delete button, and selection text with the active selection."""
         try:
             btn = self.query_one("#btn-open-herdr", Button)
+            del_btn = self.query_one("#btn-delete-workspace", Button)
             sel_static = self.query_one("#open-selection", Static)
             help_static = self.query_one("#open-help", Static)
         except Exception:
@@ -375,18 +406,24 @@ class WorkspaceBrowser(Vertical):
         if self.app_state.inventory_demo:
             btn.disabled = True
             btn.tooltip = "Demo mode: live terminal navigation is disabled."
+            del_btn.disabled = True
+            del_btn.tooltip = "Demo mode: deletion disabled."
             sel_static.update(Text("Demo mode (offline)", style="dim"))
             return
 
         if self._selected_target_disappeared:
             btn.disabled = True
             btn.tooltip = "Selected target has disappeared. Select a current item."
+            del_btn.disabled = True
+            del_btn.tooltip = "No target selected."
             sel_static.update(Text("Selection disappeared · reselect target", style="dim"))
             return
 
         if self._selected_target is None:
             btn.disabled = True
             btn.tooltip = "No target selected. Select a workspace or pane to open."
+            del_btn.disabled = True
+            del_btn.tooltip = "No workspace selected to delete."
             sel_static.update(Text("No selection", style="dim"))
             return
 
@@ -394,8 +431,13 @@ class WorkspaceBrowser(Vertical):
         if not target.workspace_id:
             btn.disabled = True
             btn.tooltip = "Selected item has no workspace to open."
+            del_btn.disabled = True
+            del_btn.tooltip = "Selected item has no workspace."
             sel_static.update(Text("No workspace selected", style="dim"))
             return
+
+        del_btn.disabled = False
+        del_btn.tooltip = f"Close/Delete workspace {safe_display(target.workspace_id)}"
 
         inventory = next(
             (
@@ -418,6 +460,7 @@ class WorkspaceBrowser(Vertical):
         if ws is None:
             btn.disabled = True
             btn.tooltip = "Workspace no longer exists."
+            del_btn.disabled = True
             sel_static.update(Text("Workspace closed", style="dim"))
             return
 
@@ -545,6 +588,10 @@ class WorkspaceBrowser(Vertical):
     def on_key(self, event: Key) -> None:
         if not self._tree.has_focus:
             return
+        if event.key in ("d", "x"):
+            event.stop()
+            self.request_delete()
+            return
         if event.key in (
             "up",
             "down",
@@ -614,10 +661,32 @@ class WorkspaceBrowser(Vertical):
         if self._selected_target is not None and self._selected_target.pane_id is not None:
             self.post_message(self.PaneActivated(self._selected_target))
 
+    def request_delete(self) -> None:
+        """Resolve selection and post DeleteRequested for an eligible workspace."""
+        if self.app_state.inventory_demo:
+            self.notify("Demo mode: deletion is disabled.", severity="warning")
+            return
+
+        if self._selected_target_disappeared:
+            self.notify(
+                "Selected target disappeared. Reselect a current target.",
+                severity="warning",
+            )
+            return
+
+        if self._selected_target is None or not self._selected_target.workspace_id:
+            self.notify("No workspace selected to delete.", severity="warning")
+            return
+
+        self.post_message(self.DeleteRequested(self._selected_target))
+
     def on_button_pressed(self, event: Button.Pressed) -> None:
         if event.button.id == "btn-open-herdr":
             event.stop()
             self.request_open()
+        elif event.button.id == "btn-delete-workspace":
+            event.stop()
+            self.request_delete()
 
     def update_state(self, app_state: AppState) -> None:
         self.app_state = app_state

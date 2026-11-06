@@ -60,7 +60,7 @@ async def test_deck_mode_switching_keys():
 
         # Assert removed keys are absent from app bindings
         bound_keys = {b.key for b in pilot.app.BINDINGS}
-        for key in ("0", "1", "2", "3", "4", "p", "r", "m", "k", "d"):
+        for key in ("0", "1", "2", "3", "4", "p", "r", "m", "k"):
             assert key not in bound_keys
 
         # Assert footer does not show obsolete hints
@@ -70,7 +70,7 @@ async def test_deck_mode_switching_keys():
 
         # Press removed keys on main screen: verify no state mutation or view switches occur
         before_state = pilot.app.app_state.model_dump()
-        for key in ("0", "1", "2", "3", "4", "p", "r", "m", "k", "d"):
+        for key in ("0", "1", "2", "3", "4", "p", "r", "m", "k"):
             await pilot.press(key)
             await pilot.pause()
         assert pilot.app.app_state.model_dump() == before_state
@@ -378,7 +378,7 @@ async def test_removed_main_screen_keys_produce_no_mocked_navigation_rpcs():
     app = HerdrMasterApp(demo=True)
     app._open_in_herdr = AsyncMock()
     async with app.run_test() as pilot:
-        for key in ("0", "1", "2", "3", "4", "p", "r", "m", "k", "d"):
+        for key in ("0", "1", "2", "3", "4", "p", "r", "m", "k"):
             await pilot.press(key)
             await pilot.pause()
         app._open_in_herdr.assert_not_called()

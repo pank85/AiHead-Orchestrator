@@ -52,7 +52,8 @@ async def test_council_modal_mount_and_fields(tmp_path):
         assert "Coordinator" in str(roster_summary)
         assert "Scout" in str(roster_summary)
         assert "Active Members" in str(roster_summary)
-        assert modal.query_one("#council-aihead-override", Select).value == "inherit"
+        # AI Council explicitly does not have AiHead override
+        assert not modal.query("#council-aihead-override")
 
 
 @pytest.mark.asyncio
@@ -89,7 +90,6 @@ async def test_council_modal_successful_launch(tmp_path):
             "Design decentralized pubsub message bus architecture"
         )
         modal.query_one("#council-label-input", Input).value = "council-pubsub-v1"
-        modal.query_one("#council-aihead-override", Select).value = "enable"
 
         await pilot.click("#btn-launch")
         await pilot.pause()
@@ -99,7 +99,6 @@ async def test_council_modal_successful_launch(tmp_path):
         assert isinstance(params, CouncilLaunchParams)
         assert params.intent == "Design decentralized pubsub message bus architecture"
         assert params.workspace_label == "council-pubsub-v1"
-        assert params.ai_head_override is True
         assert params.project_folder == project_dir.resolve()
         assert isinstance(params.council_config, CouncilConfig)
         assert len(params.council_config.members) >= 2

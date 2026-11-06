@@ -9,7 +9,7 @@ from textual.app import ComposeResult
 from textual.containers import Horizontal, Vertical
 from textual.events import Resize
 from textual.screen import ModalScreen
-from textual.widgets import Button, Input, Label, Static, TextArea
+from textual.widgets import Button, Input, Label, Select, Static, TextArea
 
 from herdr_master.core.models import Squad
 from herdr_master.pipeline.squad import resolve_squad, save_squad_as_default
@@ -28,6 +28,7 @@ class ErgoLaunchParams(BaseModel):
     start_pipeline: bool = True
     customize_squad_first: bool = False
     project_path: Optional[Path] = None
+    ai_head_override: Optional[bool] = None
 
 
 class LaunchErgoModal(ModalScreen[Optional[ErgoLaunchParams]]):
@@ -145,8 +146,15 @@ class LaunchErgoModal(ModalScreen[Optional[ErgoLaunchParams]]):
         width: 1fr;
     }
     .ws-col {
-        width: 24;
+        width: 22;
         margin-left: 1;
+    }
+    .aihead-col {
+        width: 22;
+        margin-left: 1;
+    }
+    .aihead-col Select {
+        width: 100%;
     }
     .prompt-row {
         height: 1fr;
@@ -249,6 +257,16 @@ class LaunchErgoModal(ModalScreen[Optional[ErgoLaunchParams]]):
             "Describe the job across multiple lines. Enter adds a line; Tab moves to the actions."
         )
         self._ws_input = Input(value=self.default_label, placeholder="Workspace label")
+        self._aihead_select = Select(
+            [
+                ("Inherit (Config)", "inherit"),
+                ("Enable AiHead", "enable"),
+                ("Disable AiHead", "disable"),
+            ],
+            value="inherit",
+            allow_blank=False,
+            id="ergo-aihead-override",
+        )
 
     @property
     def squad(self) -> Squad:
@@ -325,6 +343,9 @@ class LaunchErgoModal(ModalScreen[Optional[ErgoLaunchParams]]):
                     with Vertical(classes="ws-col"):
                         yield Label("Workspace label:", classes="field-label")
                         yield self._ws_input
+                    with Vertical(classes="aihead-col"):
+                        yield Label("AiHead Decision:", classes="field-label")
+                        yield self._aihead_select
                 yield self._preview
                 with Horizontal(classes="prompt-row"):
                     with Vertical(classes="prompt-col"):
@@ -427,6 +448,8 @@ class LaunchErgoModal(ModalScreen[Optional[ErgoLaunchParams]]):
                 self._set_status(f"[red]Validation Error: {error}[/red]")
                 return
             self._submitting = True
+            aihead_val = str(self._aihead_select.value)
+            ai_head_override = True if aihead_val == "enable" else (False if aihead_val == "disable" else None)
             self.dismiss(
                 ErgoLaunchParams(
                     intent=self._intent_input.text.strip() or "Execute standard Ergo pipeline",
@@ -434,6 +457,7 @@ class LaunchErgoModal(ModalScreen[Optional[ErgoLaunchParams]]):
                     squad=self.squad_editor.get_squad(),
                     start_pipeline=True,
                     project_path=self._project_folder.selected_path(),
+                    ai_head_override=ai_head_override,
                 )
             )
 
