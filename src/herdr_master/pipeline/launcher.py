@@ -21,15 +21,26 @@ from herdr_master.core.catalog import (
     normalize_effort,
     supported_harnesses,
 )
+from herdr_master.core.config import (
+    CouncilConfig,
+    find_project_config_path,
+    load_project_config,
+)
 from herdr_master.core.context import HerdrContext, resolve_herdr_context
 from herdr_master.core.models import EffortLevel, HarnessBinding, HarnessKind, Squad
 from herdr_master.herdr.client import HerdrClient
+from herdr_master.pipeline.ai_head import (
+    AiHeadDiscovery,
+    build_ai_head_discovery,
+    ensure_herdr_ai_head,
+)
 from herdr_master.pipeline.bootstrap import build_bootstrap_prompt
 from herdr_master.pipeline.squad import format_allowed_coder_models
 
 # Herdr agent names are RPC identifiers, not display labels: [a-z][a-z0-9_-]{0,31}.
 ORCHESTRATOR_NAME = "ergo-orchestrator"
 ORCHESTRATION_NAME = "orchestrator"
+COUNCIL_COORDINATOR_NAME = "council-coordinator"
 
 
 class LaunchContextError(RuntimeError):
@@ -482,6 +493,72 @@ async def _start_and_prompt(
         return
 
 
+async def _resolve_and_wire_ai_head(
+    allocated: _Allocated,
+    target_cwd: str,
+    ai_head_override: bool | None,
+) -> tuple[Optional[AiHeadDiscovery], Optional[Path]]:
+    config_path = find_project_config_path(target_cwd)
+    try:
+        project_cfg = load_project_config(target_cwd)
+        head_config = project_cfg.ai_head
+    except Exception:
+        head_config = None
+
+    if head_config is None:
+        return None, config_path
+
+    if ai_head_override is not None:
+        head_config = head_config.model_copy(update={"enabled": ai_head_override})
+
+    if not head_config.enabled:
+        return None, config_path
+
+    if allocated.workspace_id and allocated.client:
+        try:
+            head_info = await ensure_herdr_ai_head(
+                allocated.client,
+                allocated.workspace_id,
+                head_config,
+                target_cwd,
+            )
+            is_busy = bool(head_info.get("busy", False))
+            is_reconciled = bool(head_info.get("reconciled", True))
+            actual_model = (
+                head_info.get("model")
+                if (is_busy or not is_reconciled)
+                else head_config.binding.model
+            )
+            discovery_status = "busy" if is_busy else ("ready" if is_reconciled else "pending")
+
+            discovery = build_ai_head_discovery(
+                head_config,
+                target_cwd,
+                mode="herdr",
+                session_name=allocated.session_name,
+                socket_path=allocated.socket_path,
+                workspace_id=allocated.workspace_id,
+                tab_id=head_info.get("tab_id"),
+                pane_id=head_info.get("pane_id"),
+                status=discovery_status,
+                reconciled=is_reconciled,
+                actual_model=actual_model,
+            )
+            return discovery, config_path
+        except Exception:
+            pass
+
+    try:
+        discovery = build_ai_head_discovery(
+            head_config,
+            target_cwd,
+            mode="cli",
+        )
+        return discovery, config_path
+    except Exception:
+        return None, config_path
+
+
 def _handoff_context(
     *,
     entrypoint: str,
@@ -493,6 +570,9 @@ def _handoff_context(
     native_harness: str | None = None,
     models: str | None = None,
     dangerously_skip_permissions: bool | None = None,
+    council: CouncilConfig | None = None,
+    ai_head: AiHeadDiscovery | None = None,
+    config_path: Path | None = None,
 ) -> dict[str, Any]:
     context: dict[str, Any] = {
         "entrypoint": entrypoint,
@@ -518,6 +598,12 @@ def _handoff_context(
         context["native_harness"] = native_harness
     if dangerously_skip_permissions is not None:
         context["dangerously_skip_permissions"] = dangerously_skip_permissions
+    if council is not None:
+        context["council"] = council
+    if ai_head is not None:
+        context["ai_head"] = ai_head
+    if config_path is not None:
+        context["config_path"] = config_path
     return context
 
 
@@ -602,6 +688,7 @@ async def launch_ergo(
     cwd: str | None = None,
     session: str | None = None,
     *,
+    ai_head: bool | None = None,
     fresh_workspace: bool = False,
     focus: bool = True,
 ) -> Dict[str, Any]:
@@ -635,6 +722,7 @@ async def launch_ergo(
         raise RuntimeError(
             f"Could not allocate orchestrator pane in workspace {allocated.workspace_id}"
         )
+    head_discovery, config_path = await _resolve_and_wire_ai_head(allocated, target_cwd, ai_head)
     prompt = _with_prompt_prefix(
         build_bootstrap_prompt(
             "ergo",
@@ -644,7 +732,11 @@ async def launch_ergo(
                 allocated=allocated,
                 cwd=target_cwd,
                 squad=squad,
+                ai_head=head_discovery,
+                config_path=config_path,
             ),
+            ai_head=head_discovery,
+            config_path=config_path,
         ),
         descriptor,
     )
@@ -672,6 +764,7 @@ async def launch_ergo(
         "harness": descriptor["kind"],
         "model": squad.scout.model,
         "effort": scout_effort.value if scout_effort else None,
+        "ai_head": head_discovery if (head_discovery and head_discovery.enabled) else None,
     }
 
 
@@ -687,6 +780,7 @@ async def launch_orchestration(
     cwd: str | None = None,
     session: str | None = None,
     *,
+    ai_head: bool | None = None,
     dangerously_skip_permissions: bool = True,
     fresh_workspace: bool = False,
     focus: bool = True,
@@ -786,6 +880,7 @@ async def launch_orchestration(
         raise RuntimeError(
             f"Could not allocate orchestrator pane in workspace {allocated.workspace_id}"
         )
+    head_discovery, config_path = await _resolve_and_wire_ai_head(allocated, target_cwd, ai_head)
     handoff = _handoff_context(
         entrypoint="orchestration",
         intent=formatted_intent,
@@ -796,11 +891,15 @@ async def launch_orchestration(
         native_harness=kind_str,
         models=models_arg,
         dangerously_skip_permissions=dangerously_skip_permissions,
+        ai_head=head_discovery,
+        config_path=config_path,
     )
     prompt = _with_prompt_prefix(
         build_bootstrap_prompt(
             "orchestration",
             handoff,
+            ai_head=head_discovery,
+            config_path=config_path,
         ),
         descriptor,
     )
@@ -830,4 +929,118 @@ async def launch_orchestration(
         "effort": None,
         "squad": squad,
         "dangerously_skip_permissions": dangerously_skip_permissions,
+        "ai_head": head_discovery if (head_discovery and head_discovery.enabled) else None,
+    }
+
+
+async def launch_council(
+    client: HerdrClient,
+    intent: str,
+    workspace_label: str,
+    council: CouncilConfig | None = None,
+    cwd: str | None = None,
+    session: str | None = None,
+    *,
+    ai_head: bool | None = None,
+    fresh_workspace: bool = False,
+    focus: bool = True,
+) -> Dict[str, Any]:
+    """Launch an AI Council deliberation session hosted by the coordinator.
+
+    Resolves effective config from selected project folder. Validates Council
+    config/routability before allocating resources. Spawns coordinator pane
+    hosting the canonical ``council`` skill using ``build_bootstrap_prompt('council', ...)``.
+    """
+    target_cwd = str(Path(cwd or os.getcwd()).resolve())
+    if council is not None:
+        council_cfg = council
+    else:
+        project_cfg = load_project_config(target_cwd)
+        council_cfg = project_cfg.council
+
+    if not isinstance(council_cfg, CouncilConfig):
+        council_cfg = CouncilConfig.model_validate(council_cfg)
+    enabled_members = [m for m in council_cfg.members if m.enabled]
+    if len(enabled_members) < 2:
+        raise ValueError(
+            f"Council requires at least 2 enabled members (excluding coordinator and Scout), "
+            f"but found {len(enabled_members)} enabled."
+        )
+
+    coord_binding = council_cfg.coordinator
+    coord_kind = (
+        coord_binding.kind.value
+        if isinstance(coord_binding.kind, HarnessKind)
+        else str(coord_binding.kind)
+    )
+    descriptor = _host_launch(
+        coord_kind,
+        coord_binding.model,
+        coord_binding.effort,
+        "master",
+    )
+    ctx = resolve_launch_context(session)
+    allocated = await _allocate_launch_target(
+        client,
+        ctx,
+        session=session,
+        isolated_name=workspace_label,
+        tab_label=COUNCIL_COORDINATOR_NAME,
+        workspace_label=workspace_label,
+        cwd=target_cwd,
+        fresh_workspace=fresh_workspace,
+        focus=focus,
+    )
+    if not allocated.pane_id:
+        raise RuntimeError(
+            f"Could not allocate coordinator pane in workspace {allocated.workspace_id}"
+        )
+
+    head_discovery, config_path = await _resolve_and_wire_ai_head(allocated, target_cwd, ai_head)
+    handoff = _handoff_context(
+        entrypoint="council",
+        intent=intent,
+        allocated=allocated,
+        cwd=target_cwd,
+        council=council_cfg,
+        ai_head=head_discovery,
+        config_path=config_path,
+    )
+    prompt = _with_prompt_prefix(
+        build_bootstrap_prompt(
+            "council",
+            handoff,
+            council=council_cfg,
+            ai_head=head_discovery,
+            config_path=config_path,
+        ),
+        descriptor,
+    )
+    await _start_and_prompt(
+        allocated,
+        name=COUNCIL_COORDINATOR_NAME,
+        kind=descriptor["kind"],
+        args=descriptor["argv"],
+        prompt=prompt,
+        cwd=target_cwd,
+        focus=focus,
+    )
+    return {
+        "session": allocated.session_name,
+        "socket": str(allocated.socket_path),
+        "workspace_id": allocated.workspace_id,
+        "pane_id": allocated.pane_id,
+        "coordinator_pane_id": allocated.pane_id,
+        "tab_id": allocated.tab_id,
+        "agent_name": COUNCIL_COORDINATOR_NAME,
+        "owns_workspace": allocated.owns_workspace,
+        "ownership": allocated.owns_workspace,
+        "origin_cwd": target_cwd,
+        "origin": target_cwd,
+        "intent": intent,
+        "harness": descriptor["kind"],
+        "model": coord_binding.model,
+        "effort": coord_binding.effort.value if coord_binding.effort else None,
+        "council": council_cfg,
+        "ai_head": head_discovery if (head_discovery and head_discovery.enabled) else None,
     }

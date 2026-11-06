@@ -343,3 +343,293 @@ def test_workspace_failures_do_not_open_or_launch(monkeypatch):
         missing = runner.invoke(app, ["workspace", "--cwd", "/tmp"])
     assert missing.exit_code != 0
     opened.assert_not_called()
+
+
+def test_cli_help_includes_council_orchestration_and_ai_head():
+    council_help = runner.invoke(app, ["council", "--help"])
+    assert council_help.exit_code == 0
+    assert "--ai-head" in council_help.output
+    assert "--no-ai-head" in council_help.output
+    assert "--roster" in council_help.output
+    assert "--attach" in council_help.output
+
+    orch_help = runner.invoke(app, ["orchestration", "--help"])
+    assert orch_help.exit_code == 0
+    assert "--ai-head" in orch_help.output
+    assert "--harness" in orch_help.output
+    assert "--models" in orch_help.output
+    assert "--scout" in orch_help.output
+    assert "--architect" in orch_help.output
+    assert "--workers" in orch_help.output
+    assert "--reviewer" in orch_help.output
+
+    ergo_help = runner.invoke(app, ["ergo", "--help"])
+    assert ergo_help.exit_code == 0
+    assert "--ai-head" in ergo_help.output
+
+    aihead_help = runner.invoke(app, ["aihead-cli", "--help"])
+    assert aihead_help.exit_code == 0
+    assert "--question" in aihead_help.output
+    assert "--context" in aihead_help.output
+    assert "--choices" in aihead_help.output
+    assert "--output-file" in aihead_help.output
+    assert "--stdin" in aihead_help.output
+    assert "--request-file" in aihead_help.output
+    assert "--discover" in aihead_help.output
+
+    state_help = runner.invoke(app, ["council-state", "--help"])
+    assert state_help.exit_code == 0
+    assert "init" in state_help.output
+    assert "record-scout" in state_help.output
+    assert "open-round" in state_help.output
+    assert "submit-initial-plan" in state_help.output
+    assert "submit-feedback" in state_help.output
+    assert "check-consensus" in state_help.output
+    assert "submit-vote" in state_help.output
+    assert "finalize" in state_help.output
+    assert "status" in state_help.output
+
+    install_help = runner.invoke(app, ["install", "--help"])
+    assert install_help.exit_code == 0
+    assert "council" in install_help.output.lower()
+
+
+def test_cli_ergo_ai_head_flag():
+    launch = AsyncMock(return_value=_launch_result())
+    with (
+        patch("herdr_master.cli.main.launch_ergo", launch),
+        patch("herdr_master.cli.main.os.execvp"),
+    ):
+        result_on = runner.invoke(app, ["ergo", "test intent", "--ai-head", "--no-attach"])
+        assert result_on.exit_code == 0
+        assert launch.await_args.kwargs["ai_head"] is True
+
+        result_off = runner.invoke(app, ["ergo", "test intent", "--no-ai-head", "--no-attach"])
+        assert result_off.exit_code == 0
+        assert launch.await_args.kwargs["ai_head"] is False
+
+
+def test_cli_orchestration_command():
+    launch = AsyncMock(return_value=_launch_result())
+    with (
+        patch("herdr_master.cli.main.launch_orchestration", launch),
+        patch("herdr_master.cli.main.os.execvp"),
+    ):
+        result = runner.invoke(
+            app,
+            [
+                "orchestration",
+                "build native cache",
+                "--no-attach",
+                "--harness",
+                "agy",
+                "--scout",
+                "gemini-3.8-flash",
+                "--architect",
+                "gemini-3.8-flash",
+                "--workers",
+                "gemini-3.8-flash",
+                "--reviewer",
+                "gemini-3.8-flash",
+                "--ai-head",
+            ],
+        )
+    assert result.exit_code == 0, result.output
+    kwargs = launch.await_args.kwargs
+    assert kwargs["intent"] == "build native cache"
+    assert kwargs["harness"] == "agy"
+    assert kwargs["scout_model"] == "gemini-3.8-flash"
+    assert kwargs["coder_model"] == "gemini-3.8-flash"
+    assert kwargs["ai_head"] is True
+
+    # Workers and coder disagreement
+    disagree = runner.invoke(
+        app,
+        ["orchestration", "intent", "--workers", "m1", "--coder", "m2", "--no-attach"],
+    )
+    assert disagree.exit_code != 0
+    assert "disagree" in disagree.output
+
+
+def test_cli_council_command():
+    launch = AsyncMock(return_value=_launch_result())
+    with (
+        patch("herdr_master.cli.main.launch_council", launch),
+        patch("herdr_master.cli.main.os.execvp"),
+    ):
+        result = runner.invoke(
+            app,
+            ["council", "architect distributed consensus", "--no-attach", "--ai-head"],
+        )
+    assert result.exit_code == 0, result.output
+    kwargs = launch.await_args.kwargs
+    assert kwargs["intent"] == "architect distributed consensus"
+    assert kwargs["ai_head"] is True
+    assert kwargs["council"] is not None
+
+    # Too few members in roster override
+    bad_roster = runner.invoke(
+        app,
+        ["council", "architect", "--roster", "lone-wolf", "--no-attach"],
+    )
+    assert bad_roster.exit_code != 0
+    assert "at least 2 members" in bad_roster.output
+
+
+def test_cli_aihead_cli(tmp_path):
+    from herdr_master.pipeline.ai_head import AiHeadDecisionReply
+
+    # Test --discover
+    disc_res = runner.invoke(app, ["aihead-cli", "--discover"])
+    assert disc_res.exit_code == 0, disc_res.output
+    disc_data = json.loads(disc_res.stdout)
+    assert disc_data["mode"] == "cli"
+
+    # Test --question with execution
+    mock_reply = AiHeadDecisionReply(
+        request_id="req123",
+        status="decided",
+        decision="Use Redis for shared caching",
+        rationale="Redis provides low latency and TTL support",
+    )
+    out_file = tmp_path / "decision.json"
+    with patch(
+        "herdr_master.pipeline.ai_head.execute_cli_decision_sync",
+        return_value=mock_reply,
+    ):
+        res = runner.invoke(
+            app,
+            [
+                "aihead-cli",
+                "--question",
+                "Which cache layer to use?",
+                "--context",
+                "High write throughput expected",
+                "--choices",
+                "Redis,Memcached",
+                "--output-file",
+                str(out_file),
+            ],
+        )
+    assert res.exit_code == 0, res.output
+    assert "Decided:" in res.output
+    assert "Use Redis" in res.output
+    assert out_file.is_file()
+    saved = json.loads(out_file.read_text())
+    assert saved["decision"] == "Use Redis for shared caching"
+
+    # Missing arguments returns error
+    missing = runner.invoke(app, ["aihead-cli"])
+    assert missing.exit_code != 0
+
+
+def test_cli_council_state_e2e(tmp_path):
+    run_dir = tmp_path / "council_run"
+    context_file = tmp_path / "context.md"
+    context_file.write_text("Context facts: codebase is Python and Typer.")
+
+    # 1. init
+    res_init = runner.invoke(
+        app,
+        ["council-state", "init", "--run-dir", str(run_dir), "--roster", "m1,m2"],
+    )
+    assert res_init.exit_code == 0, res_init.output
+
+    # 2. record-scout
+    res_scout = runner.invoke(
+        app,
+        ["council-state", "record-scout", "--run-dir", str(run_dir), "--context", str(context_file)],
+    )
+    assert res_scout.exit_code == 0, res_scout.output
+
+    # 3. open-round 0
+    res_r0 = runner.invoke(
+        app,
+        ["council-state", "open-round", "--run-dir", str(run_dir), "--round", "0"],
+    )
+    assert res_r0.exit_code == 0, res_r0.output
+
+    # 4. submit-initial-plan
+    plan_m1 = tmp_path / "plan_m1.md"
+    plan_m1.write_text("Plan M1")
+    plan_m2 = tmp_path / "plan_m2.md"
+    plan_m2.write_text("Plan M2")
+
+    res_p1 = runner.invoke(
+        app,
+        ["council-state", "submit-initial-plan", "--run-dir", str(run_dir), "--member", "m1", "--plan", str(plan_m1)],
+    )
+    assert res_p1.exit_code == 0, res_p1.output
+    res_p2 = runner.invoke(
+        app,
+        ["council-state", "submit-initial-plan", "--run-dir", str(run_dir), "--member", "m2", "--plan", str(plan_m2)],
+    )
+    assert res_p2.exit_code == 0, res_p2.output
+
+    # 5. open-round 1
+    res_r1 = runner.invoke(
+        app,
+        ["council-state", "open-round", "--run-dir", str(run_dir), "--round", "1"],
+    )
+    assert res_r1.exit_code == 0, res_r1.output
+
+    # 6. submit-feedback (both agree on m1_v0)
+    fb_m1 = tmp_path / "fb_m1.md"
+    fb_m1.write_text("Feedback M1")
+    fb_m2 = tmp_path / "fb_m2.md"
+    fb_m2.write_text("Feedback M2")
+
+    res_fb1 = runner.invoke(
+        app,
+        ["council-state", "submit-feedback", "--run-dir", str(run_dir), "--round", "1", "--member", "m1", "--feedback", str(fb_m1), "--selected-plan", "m1_v0"],
+    )
+    assert res_fb1.exit_code == 0, res_fb1.output
+    res_fb2 = runner.invoke(
+        app,
+        ["council-state", "submit-feedback", "--run-dir", str(run_dir), "--round", "1", "--member", "m2", "--feedback", str(fb_m2), "--selected-plan", "m1_v0"],
+    )
+    assert res_fb2.exit_code == 0, res_fb2.output
+
+    # 7. check-consensus
+    res_cons = runner.invoke(
+        app,
+        ["council-state", "check-consensus", "--run-dir", str(run_dir), "--round", "1"],
+    )
+    assert res_cons.exit_code == 0, res_cons.output
+    assert "consensus reached" in res_cons.output.lower()
+
+    # 8. status
+    res_status = runner.invoke(
+        app,
+        ["council-state", "status", "--run-dir", str(run_dir)],
+    )
+    assert res_status.exit_code == 0, res_status.output
+    status_data = json.loads(res_status.stdout)
+    assert status_data["phase"] == "consensus_reached"
+
+    # 9. finalize
+    final_out = tmp_path / "final_plan.md"
+    res_fin = runner.invoke(
+        app,
+        ["council-state", "finalize", "--run-dir", str(run_dir), "--output", str(final_out)],
+    )
+    assert res_fin.exit_code == 0, res_fin.output
+    assert final_out.is_file()
+
+    # 10. round 6 rejection
+    res_r6 = runner.invoke(
+        app,
+        ["council-state", "open-round", "--run-dir", str(run_dir), "--round", "6"],
+    )
+    assert res_r6.exit_code != 0
+
+
+def test_cli_config_command():
+    res = runner.invoke(app, ["config"])
+    assert res.exit_code == 0, res.output
+    data = json.loads(res.stdout)
+    assert "projects" in data
+    assert "orchestration" in data
+    assert "council" in data
+    assert "ai_head" in data
+

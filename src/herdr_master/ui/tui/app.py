@@ -3,20 +3,23 @@
 import asyncio
 from dataclasses import replace
 from pathlib import Path
-from typing import Callable, Optional
+from typing import Any, Callable, Optional
 
 from textual.app import App, ComposeResult
 from textual.binding import Binding
 from textual.containers import Horizontal
 from textual.widgets import Input, TextArea
 
+from herdr_master.core.config import HerdrMasterConfig, load_project_config
 from herdr_master.core.context import resolve_herdr_context
 from herdr_master.core.models import MasterSession, PipelinePhase, PipelineRun
 from herdr_master.herdr.client import HerdrClient
 from herdr_master.herdr.discovery import SessionInventory, discover_clients
 from herdr_master.herdr.snapshot import AgentSnapshot
+from herdr_master.pipeline.ai_head import ensure_herdr_ai_head
 from herdr_master.pipeline.launcher import (
     LaunchContextError,
+    launch_council,
     launch_ergo,
     launch_master,
     launch_orchestration,
@@ -33,6 +36,10 @@ from herdr_master.ui.tui.live_pane import (
 )
 from herdr_master.ui.tui.messages import TargetSelected
 from herdr_master.ui.tui.modals.config_drawer import ConfigDrawer
+from herdr_master.ui.tui.modals.launch_council import (
+    CouncilLaunchParams,
+    LaunchCouncilModal,
+)
 from herdr_master.ui.tui.modals.launch_ergo import ErgoLaunchParams, LaunchErgoModal
 from herdr_master.ui.tui.modals.launch_master import LaunchMasterModal, MasterLaunchParams
 from herdr_master.ui.tui.modals.launch_orchestration import (
@@ -43,6 +50,7 @@ from herdr_master.ui.tui.modals.project_folder import (
     initial_project_folder,
     validate_project_folder,
 )
+from herdr_master.ui.tui.modals.settings import SettingsModal
 from herdr_master.ui.tui.state import AppState
 from herdr_master.ui.tui.widgets.deck import CenterDeck
 from herdr_master.ui.tui.widgets.footer import ActionFooter
@@ -101,6 +109,7 @@ class HerdrMasterApp(App):
         **kwargs,
     ) -> None:
         super().__init__(**kwargs)
+        self._ai_head_ensure_pending = False
         self._session_argument = session
         self.session_name = self._requested_session()
         self.socket_path: Optional[Path] = None
@@ -250,7 +259,7 @@ class HerdrMasterApp(App):
                         self._on_live_pane_frame(buffered)
 
     def _load_live_state(self) -> AppState:
-        """Resolve the project squad. Invalid settings must not become a silent default."""
+        """Resolve the project squad and config. Invalid settings must not become a silent default."""
         try:
             resolved = resolve_squad(self.project_path)
         except Exception as exc:
@@ -263,7 +272,12 @@ class HerdrMasterApp(App):
         self.squad_sources = dict(resolved.sources)
         self.squad_mode = resolved.mode
         self.native_harness = resolved.native_harness
-        return self._state(squad=resolved.squad)
+        project_cfg: Optional[HerdrMasterConfig] = None
+        try:
+            project_cfg = load_project_config(self.project_path)
+        except Exception:
+            pass
+        return self._state(squad=resolved.squad, config=project_cfg)
 
     def compose(self) -> ComposeResult:
         yield self._header
@@ -281,7 +295,50 @@ class HerdrMasterApp(App):
             else:
                 self.client = HerdrClient(session=self.session_name)
             self._schedule_inventory_refresh()
+            self._ensure_ai_head_if_enabled()
             self.set_interval(3.0, self._schedule_inventory_refresh)
+
+    def _ensure_ai_head_if_enabled(self) -> None:
+        """Ensure persistent ai-head tab exists if AiHead is enabled in config."""
+        if self.demo or self.client is None:
+            return
+        cfg = getattr(self.app_state, "config", None)
+        if not cfg or not cfg.ai_head.enabled:
+            return
+        if self._ai_head_ensure_pending:
+            return
+        self._ai_head_ensure_pending = True
+
+        async def _run_ensure() -> None:
+            try:
+                target_ws = getattr(self.app_state, "workspace_id", None)
+                if not target_ws and self.client is not None:
+                    snap = await self.client.get_snapshot()
+                    target_ws = snap.focused_workspace_id or (
+                        snap.workspaces[0].workspace_id if snap.workspaces else None
+                    )
+                if not target_ws:
+                    return
+                origin_cwd = str((self.project_path or Path.cwd()).resolve())
+                head_info = await ensure_herdr_ai_head(
+                    client=self.client,
+                    workspace_id=target_ws,
+                    head_config=cfg.ai_head,
+                    origin_cwd=origin_cwd,
+                )
+                self.app_state.ai_head_info = head_info
+                self.app_state.ai_head_busy = bool(head_info.get("busy", False))
+                self._schedule_inventory_refresh()
+            except Exception as exc:
+                info = self.app_state.ai_head_info
+                if info is not None:
+                    info["status"] = "pending"
+                    info["reconciled"] = False
+                self.notify(f"Could not initialize AiHead tab: {exc}", severity="warning")
+            finally:
+                self._ai_head_ensure_pending = False
+
+        self.run_worker(_run_ensure(), name="ensure_ai_head")
 
     def _schedule_inventory_refresh(self) -> None:
         self.run_worker(self._refresh_live_snapshot(), group="workspace-inventory")
@@ -334,6 +391,25 @@ class HerdrMasterApp(App):
                 if workspace:
                     self.app_state.workspace_id = workspace.workspace_id
                     self.app_state.workspace_label = workspace.label or workspace.workspace_id
+                head_info = self.app_state.ai_head_info
+                if head_info and head_info.get("pane_id"):
+                    agent = next(
+                        (a for a in snapshot.agents if a.pane_id == head_info["pane_id"]), None
+                    )
+                    if agent is not None:
+                        status = agent.agent_status
+                        if status in ("working", "busy"):
+                            self.app_state.ai_head_busy = True
+                            head_info["busy"] = True
+                        elif status in ("idle", "done"):
+                            was_busy = (
+                                self.app_state.ai_head_busy
+                                or head_info.get("status") == "busy"
+                                or head_info.get("reconciled") is False
+                            )
+                            if was_busy:
+                                # Only ensure_herdr_ai_head may declare ready/reconciled.
+                                self._ensure_ai_head_if_enabled()
             self._update_all_widgets()
             await self._reconcile_live_inventory()
         finally:
@@ -814,14 +890,6 @@ class HerdrMasterApp(App):
             self.focused, (TextArea, Input, LivePaneOutput)
         ):
             return
-        self.action_open_settings()
-
-    def action_open_settings(self) -> None:
-        """Open the 2-column Squad Settings & Ergo Pipeline Launcher dialog."""
-        if len(self.screen_stack) > 1 or isinstance(
-            self.focused, (TextArea, Input, LivePaneOutput)
-        ):
-            return
 
         async def _on_ergo_launch(params: ErgoLaunchParams) -> None:
             try:
@@ -902,6 +970,109 @@ class HerdrMasterApp(App):
                 native_harness=self.native_harness,
                 project_path=self.project_path,
                 config_error=self.config_error,
+            ),
+            _on_modal_dismiss,
+        )
+
+    def action_open_settings(self) -> None:
+        """Open the Settings modal."""
+        if len(self.screen_stack) > 1 or isinstance(
+            self.focused, (TextArea, Input, LivePaneOutput)
+        ):
+            return
+
+        def _on_settings_dismiss(result: Optional[tuple[HerdrMasterConfig, Any]]) -> None:
+            if result is None:
+                return
+            config, squad = result
+            self.app_state.config = config
+            self.app_state.squad = squad
+            self._settings_squad = squad.model_copy(deep=True)
+            self._update_all_widgets()
+            self._schedule_inventory_refresh()
+            self.notify("Settings saved.", severity="information")
+
+        self.push_screen(
+            SettingsModal(
+                config=getattr(self.app_state, "config", None),
+                squad=self._settings_squad,
+                project_path=self.project_path,
+            ),
+            _on_settings_dismiss,
+        )
+
+    def action_new_council(self) -> None:
+        """Open the AI Council deliberation launch modal."""
+        if len(self.screen_stack) > 1 or isinstance(
+            self.focused, (TextArea, Input, LivePaneOutput)
+        ):
+            return
+
+        async def _on_council_launch(params: CouncilLaunchParams) -> None:
+            try:
+                project_path = validate_project_folder(
+                    str(params.project_folder or initial_project_folder(self.project_path))
+                )
+                if self.demo or self.client is None:
+                    self.notify("Demo mode does not launch an orchestrator.", severity="warning")
+                    return
+                ctx = self._context_for_launch()
+                session_name = getattr(self.app_state, "session_name", ctx.session_name)
+                result = await launch_council(
+                    client=self.client,
+                    intent=params.intent,
+                    workspace_label=params.workspace_label,
+                    council=params.council_config,
+                    cwd=str(project_path),
+                    session=session_name,
+                    ai_head=params.ai_head_override,
+                    fresh_workspace=True,
+                    focus=False,
+                )
+                pane = _result_pane(result)
+                session_name = result.get("session")
+                if not pane or not session_name:
+                    self.notify(
+                        "Launch result missing pane_id. "
+                        "No run was recorded and no attach was started.",
+                        severity="error",
+                    )
+                    return
+                workspace_id = result.get("workspace_id")
+                self.app_state.workspace_label = params.workspace_label
+                self.app_state.pipeline_run = PipelineRun(
+                    run_id=f"council-{params.workspace_label}",
+                    intent=params.intent,
+                    squad=self.app_state.squad,
+                    phase=PipelinePhase.PREFLIGHT,
+                    workspace_id=str(workspace_id) if workspace_id else None,
+                    metadata={
+                        "mode": "council",
+                        "pane_id": pane,
+                        "session": session_name,
+                        "agent_name": result.get("agent_name"),
+                        "project_path": str(project_path),
+                    },
+                )
+                self._update_all_widgets()
+                self.notify(f"Council coordinator pane {pane}", severity="information")
+                self._exit_launch(ctx, str(session_name), workspace_id)
+            except LaunchContextError as exc:
+                self.notify(str(exc), severity="error")
+            except Exception as exc:
+                self.notify(f"Council launch error: {exc}", severity="error")
+            finally:
+                self._launch_pending = False
+
+        def _on_modal_dismiss(params: Optional[CouncilLaunchParams]) -> None:
+            if params is None:
+                return
+            self._begin_launch(_on_council_launch(params), "launch_council")
+
+        self.push_screen(
+            LaunchCouncilModal(
+                config=getattr(self.app_state, "config", None),
+                project_path=self.project_path,
             ),
             _on_modal_dismiss,
         )
@@ -1005,37 +1176,19 @@ class HerdrMasterApp(App):
     ) -> None:
         self.action_new_orchestration()
 
+    def on_quick_launch_bar_launch_council_requested(
+        self, event: QuickLaunchBar.LaunchCouncilRequested
+    ) -> None:
+        self.action_new_council()
+
     def on_quick_launch_bar_open_settings_requested(
         self, event: QuickLaunchBar.OpenSettingsRequested
     ) -> None:
         self.action_open_settings()
 
     def action_open_config(self) -> None:
-        """Open the configuration drawer modal."""
-        target = self.app_state.selected_target_id or "scout"
-
-        def _on_drawer_closed(result):
-            if result is not None:
-                new_squad, is_default = result
-                self.app_state.squad = new_squad
-                if self.app_state.pipeline_run:
-                    self.app_state.pipeline_run.squad = new_squad
-                self._update_all_widgets()
-                self.notify(
-                    f"Squad configuration saved {'(default)' if is_default else ''}",
-                    severity="information",
-                )
-
-        self.push_screen(
-            ConfigDrawer(
-                self.app_state.squad,
-                target=target,
-                mode=self.squad_mode,
-                native_harness=self.native_harness,
-                project_path=self.project_path,
-            ),
-            _on_drawer_closed,
-        )
+        """Route config action directly to Settings modal."""
+        self.action_open_settings()
 
     def on_target_selected(self, message: TargetSelected) -> None:
         """Update selected target across tree and deck."""

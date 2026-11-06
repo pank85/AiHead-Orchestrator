@@ -1,84 +1,24 @@
 """Modal screen for single-harness orchestration launching."""
 
-from contextlib import contextmanager
 from datetime import datetime
 from pathlib import Path
 from typing import Any, Dict, Optional, Union
 
 from pydantic import BaseModel
-from textual.app import App, ComposeResult
+from textual.app import ComposeResult
 from textual.binding import Binding
 from textual.containers import Horizontal, Vertical, VerticalScroll
 from textual.screen import ModalScreen
-from textual.widgets import Button, Checkbox, Input, Label, Select, Static
+from textual.widgets import Button, Checkbox, Input, Label, Static
 
-from herdr_master.core.config import load_project_config
+from herdr_master.core.config import OrchestrationConfig
 from herdr_master.core.models import HarnessKind
-from herdr_master.core.slug import parse_binding
 from herdr_master.ui.tui.modals.project_folder import ProjectFolderField, initial_project_folder
-from herdr_master.ui.tui.state import harness_select_options
-
-
-DEFAULT_MODELS: Dict[str, Dict[str, str]] = {
-    "agy": {
-        "scout": "flash_lite",
-        "architect": "pro",
-        "coder": "flash",
-        "reviewer": "pro",
-    },
-    "claude": {
-        "scout": "claude-sonnet-4-6",
-        "architect": "claude-opus-4-6",
-        "coder": "claude-sonnet-4-6",
-        "reviewer": "claude-opus-4-6",
-    },
-    "pi": {
-        "scout": "anthropic/claude-3-5-sonnet",
-        "architect": "openai-codex/gpt-6.1-sol",
-        "coder": "anthropic/claude-3-5-sonnet",
-        "reviewer": "xai/grok-4.7",
-    },
-    "opencode": {
-        "scout": "general",
-        "architect": "general",
-        "coder": "general",
-        "reviewer": "general",
-    },
-}
-
-
-@contextmanager
-def _ensure_active_app():
-    """Ensure an active Textual app context is present.
-
-    Textual's reactive watcher on Input selection calls `self.app.clear_selection()`.
-    When instantiated in headless scripts or unit tests without an active app or
-    with an app lacking a mounted screen, this context manager installs a safe dummy
-    App to prevent NoActiveAppError or ScreenStackError.
-    """
-    from textual._context import active_app
-
-    try:
-        current = active_app.get()
-        try:
-            _ = current.screen
-            yield
-            return
-        except Exception:
-            pass
-    except LookupError:
-        pass
-
-    class _HeadlessApp(App):
-        def clear_selection(self) -> None:
-            pass
-
-    dummy = _HeadlessApp()
-    token = active_app.set(dummy)
-    try:
-        yield
-    finally:
-        active_app.reset(token)
+from herdr_master.ui.tui.widgets.orchestration_editor import (
+    DEFAULT_MODELS,
+    OrchestrationEditor,
+    _ensure_active_app,
+)
 
 
 class OrchestrationLaunchParams(BaseModel):
@@ -98,9 +38,8 @@ class OrchestrationLaunchParams(BaseModel):
 class LaunchOrchestrationModal(ModalScreen[Optional[OrchestrationLaunchParams]]):
     """Modal screen for configuring and launching a single-harness orchestration run.
 
-    Provides directory selection, single native harness selection (agy, pi, claude, opencode),
-    squad model inputs for Scout, Architect, Coder, and Reviewer with per-harness defaults,
-    and a toggle for permission skipping.
+    Consumes reusable OrchestrationEditor for native harness and model editing.
+    Provides directory selection, intent/label specification, and permission skipping.
     """
 
     BINDINGS = [
@@ -184,9 +123,6 @@ class LaunchOrchestrationModal(ModalScreen[Optional[OrchestrationLaunchParams]])
         self.project_path = initial_project_folder(project_path)
         self.config_error = config_error
         self._submitting = False
-        self.status_text = ""
-        self._syncing = False
-        self._programmatic_models: Dict[str, str] = {}
 
         ts = datetime.now().strftime("%Y%m%d-%H%M%S")
         self.default_label = f"orch-{ts}"
@@ -208,34 +144,10 @@ class LaunchOrchestrationModal(ModalScreen[Optional[OrchestrationLaunchParams]])
                 id="orch-workspace-label",
             )
 
-            options = harness_select_options(mode="native")
-            initial_harness = (
-                str(
-                    default_harness.value
-                    if isinstance(default_harness, HarnessKind)
-                    else default_harness
-                )
-                if default_harness
-                else "agy"
+            self.editor = OrchestrationEditor(
+                project_path=self.project_path,
+                default_harness=default_harness,
             )
-            option_values = {val for _, val in options}
-            if initial_harness not in option_values and options:
-                initial_harness = options[0][1]
-
-            self._harness_select = Select(
-                options,
-                value=initial_harness,
-                allow_blank=False,
-                id="orch-harness",
-            )
-
-            self._scout_input = Input(id="orch-scout-model", placeholder="e.g. flash_lite")
-            self._architect_input = Input(id="orch-architect-model", placeholder="e.g. pro")
-            self._coder_input = Input(
-                id="orch-coder-model",
-                placeholder="e.g. flash (or flash|pro for multiple)",
-            )
-            self._reviewer_input = Input(id="orch-reviewer-model", placeholder="e.g. pro")
 
             self._skip_permissions_checkbox = Checkbox(
                 "Dangerously skip permissions (--dangerously-skip-permissions)",
@@ -243,8 +155,29 @@ class LaunchOrchestrationModal(ModalScreen[Optional[OrchestrationLaunchParams]])
                 id="orch-skip-permissions",
             )
 
-            self._status_label = Static("", id="orch-status", classes="status-msg")
-            self._apply_harness_defaults(initial_harness, force=True)
+    @property
+    def _harness_select(self):
+        return self.editor._harness_select
+
+    @property
+    def _scout_input(self):
+        return self.editor._scout_input
+
+    @property
+    def _architect_input(self):
+        return self.editor._architect_input
+
+    @property
+    def _coder_input(self):
+        return self.editor._coder_input
+
+    @property
+    def _reviewer_input(self):
+        return self.editor._reviewer_input
+
+    @property
+    def _status_label(self):
+        return self.editor._status_label
 
     def compose(self) -> ComposeResult:
         with Vertical(classes="modal-box"):
@@ -264,28 +197,10 @@ class LaunchOrchestrationModal(ModalScreen[Optional[OrchestrationLaunchParams]])
                 yield Label("Workspace Label:", classes="field-label")
                 yield self._workspace_label_input
 
-                yield Label("Native Harness:", classes="field-label")
-                yield self._harness_select
-
-                with Horizontal(classes="model-row"):
-                    with Vertical(classes="model-col"):
-                        yield Label("Scout Model:", classes="field-label")
-                        yield self._scout_input
-                    with Vertical(classes="model-col model-col-right"):
-                        yield Label("Architect Model:", classes="field-label")
-                        yield self._architect_input
-
-                with Horizontal(classes="model-row"):
-                    with Vertical(classes="model-col"):
-                        yield Label("Coder Model(s):", classes="field-label")
-                        yield self._coder_input
-                    with Vertical(classes="model-col model-col-right"):
-                        yield Label("Reviewer Model:", classes="field-label")
-                        yield self._reviewer_input
+                yield self.editor
 
                 yield self._skip_permissions_checkbox
 
-            yield self._status_label
             with Horizontal(classes="button-bar"):
                 yield Button("Launch Orchestration", id="btn-launch", variant="success")
                 yield Button("Cancel", id="btn-cancel", variant="default")
@@ -295,44 +210,7 @@ class LaunchOrchestrationModal(ModalScreen[Optional[OrchestrationLaunchParams]])
             self._set_status(self.config_error)
 
     def _set_status(self, text: str) -> None:
-        self.status_text = text
-        self._status_label.update(text)
-
-    def _get_project_model(self, harness: str, role: str) -> Optional[str]:
-        try:
-            path = self._project_folder.selected_path()
-            cfg = load_project_config(path)
-            if cfg.models and cfg.models.default_squad:
-                slug = cfg.models.default_squad.get(role)
-                if slug:
-                    b = parse_binding(slug)
-                    if b.kind.value == harness:
-                        return b.model
-        except Exception:
-            pass
-        return None
-
-    def _get_default_model(self, harness: str, role: str) -> str:
-        project_model = self._get_project_model(harness, role)
-        if project_model:
-            return project_model
-        return DEFAULT_MODELS.get(harness, {}).get(role, "general")
-
-    def _apply_harness_defaults(self, harness: str, force: bool = False) -> None:
-        with _ensure_active_app():
-            self._syncing = True
-            try:
-                for role in ("scout", "architect", "coder", "reviewer"):
-                    widget = getattr(self, f"_{role}_input")
-                    new_model = self._get_default_model(harness, role)
-                    prev_default = self._programmatic_models.get(role, "")
-                    current_val = widget.value.strip()
-                    if force or current_val == prev_default or not current_val:
-                        with self.prevent(Input.Changed):
-                            widget.value = new_model
-                        self._programmatic_models[role] = new_model
-            finally:
-                self._syncing = False
+        self.editor.set_status(text)
 
     def on_project_folder_field_changed(self, event: ProjectFolderField.Changed) -> None:
         event.stop()
@@ -340,17 +218,9 @@ class LaunchOrchestrationModal(ModalScreen[Optional[OrchestrationLaunchParams]])
         self._set_status("")
         try:
             self.project_path = self._project_folder.selected_path()
-            harness = str(self._harness_select.value)
-            self._apply_harness_defaults(harness, force=False)
+            self.editor.reload_for_project(self.project_path)
         except (ValueError, OSError) as exc:
             self._set_status(str(exc))
-
-    def on_select_changed(self, event: Select.Changed) -> None:
-        if self._syncing:
-            return
-        if event.select == self._harness_select:
-            harness = str(event.value)
-            self._apply_harness_defaults(harness, force=False)
 
     def on_button_pressed(self, event: Button.Pressed) -> None:
         if event.button.id == "btn-cancel":
@@ -372,33 +242,23 @@ class LaunchOrchestrationModal(ModalScreen[Optional[OrchestrationLaunchParams]])
 
         label = self._workspace_label_input.value.strip() or self.default_label
 
-        harness_val = str(self._harness_select.value)
-        try:
-            harness_kind = HarnessKind(harness_val)
-        except ValueError:
-            self._set_status(f"Unsupported harness: {harness_val}")
+        error = self.editor.validate()
+        if error:
+            self._set_status(error)
             return
 
-        scout_m = self._scout_input.value.strip()
-        arch_m = self._architect_input.value.strip()
-        coder_m = self._coder_input.value.strip()
-        rev_m = self._reviewer_input.value.strip()
-
-        if not scout_m or not arch_m or not coder_m or not rev_m:
-            self._set_status("All models (Scout, Architect, Coder, Reviewer) must be specified.")
-            return
-
+        orch_config = self.editor.get_config()
         skip_perms = bool(self._skip_permissions_checkbox.value)
 
         self._submitting = True
         params = OrchestrationLaunchParams(
             intent=intent,
             workspace_label=label,
-            harness=harness_kind,
-            scout_model=scout_m,
-            architect_model=arch_m,
-            coder_model=coder_m,
-            reviewer_model=rev_m,
+            harness=orch_config.harness,
+            scout_model=self.editor._scout_input.value.strip(),
+            architect_model=self.editor._architect_input.value.strip(),
+            coder_model=self.editor._coder_input.value.strip(),
+            reviewer_model=self.editor._reviewer_input.value.strip(),
             dangerously_skip_permissions=skip_perms,
             project_path=project_path,
         )

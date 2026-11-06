@@ -1,0 +1,1065 @@
+"""AiHead decision lifecycle, discovery descriptors, and execution runtimes.
+
+Supports two distinct operating modes:
+1. Herdr Mode (for interactive TUI):
+   Communicates via persistent 'ai-head' Herdr tab in the active workspace.
+   Submits correlated requests and performs bounded waits for structured
+   reply artifacts with no concurrent prompt interleaving.
+
+2. CLI Mode (100% Herdr-Free):
+   Commands and harnesses invoke the configured harness directly via its native
+   headless CLI runner (e.g. `opencode run`, `agy --prompt`, `claude -p`, `pi -p`)
+   in a direct subprocess without any Herdr daemon, socket, or workspace dependency.
+"""
+
+from __future__ import annotations
+
+import asyncio
+import inspect
+import json
+import re
+import tempfile
+import time
+import uuid
+from pathlib import Path
+from typing import Any, Callable, Dict, List, Literal, Optional, Union
+
+from pydantic import BaseModel, ConfigDict, Field
+
+from herdr_master.core.catalog import build_agent_args
+from herdr_master.core.config import DEFAULT_AI_HEAD_SOUL, AiHeadConfig
+from herdr_master.core.models import EffortLevel, HarnessKind
+from herdr_master.herdr.client import HerdrClient
+from herdr_master.herdr.snapshot import AgentSnapshot, PaneSnapshot, TabSnapshot
+
+SUPPORTED_CLI_HARNESSES = {"agy", "opencode", "claude", "pi"}
+ACTIVE_AGENT_STATUSES = {"idle", "working", "blocked", "active", "ready", "running"}
+DEAD_AGENT_STATUSES = {"dead", "stopped", "done", "exited", "terminated", "none", "terminal"}
+
+
+# ---------------------------------------------------------------------------
+# Exceptions
+# ---------------------------------------------------------------------------
+
+
+class AiHeadError(Exception):
+    """Base exception for all AiHead errors."""
+
+
+class AiHeadTimeoutError(AiHeadError, TimeoutError):
+    """Raised when an AiHead operation times out."""
+
+
+class AiHeadExecutionError(AiHeadError, RuntimeError):
+    """Raised when an AiHead subprocess exits with a non-zero exit code."""
+
+
+class AiHeadReplyValidationError(AiHeadError, ValueError):
+    """Raised when an AiHead decision reply fails schema or correlation validation."""
+
+
+# ---------------------------------------------------------------------------
+# Data Structures
+# ---------------------------------------------------------------------------
+
+
+class AiHeadDecisionRequest(BaseModel):
+    """Correlated request for an autonomous AiHead technical or product decision."""
+
+    model_config = ConfigDict(extra="allow")
+
+    request_id: str = Field(default_factory=lambda: uuid.uuid4().hex[:12])
+    run_id: str = ""
+    origin_cwd: str = ""
+    question: str
+    context: str = ""
+    choices: Optional[List[str]] = None
+    artifact_path: Optional[str] = None
+
+
+class AiHeadDecisionReply(BaseModel):
+    """Validated structured reply from AiHead."""
+
+    model_config = ConfigDict(extra="allow")
+
+    request_id: str
+    status: Literal["decided", "needs_user"]
+    decision: Optional[str] = None
+    rationale: Optional[str] = None
+    question: Optional[str] = None
+
+    @property
+    def is_decided(self) -> bool:
+        """True if AiHead resolved the decision autonomously."""
+        return self.status == "decided"
+
+    @property
+    def needs_user(self) -> bool:
+        """True if the decision escalates to the user."""
+        return self.status == "needs_user"
+
+    def __await__(self) -> Any:
+        """Allow instances to be awaited seamlessly by callers using safe-await patterns."""
+
+        async def _identity() -> AiHeadDecisionReply:
+            return self
+
+        return _identity().__await__()
+
+
+class AiHeadDiscovery(BaseModel):
+    """Endpoint and runtime discovery descriptor for AiHead."""
+
+    model_config = ConfigDict(extra="allow")
+
+    mode: Literal["herdr", "cli"]
+    enabled: bool
+    harness: str
+    model: str
+    origin_cwd: str
+    session_name: Optional[str] = None
+    socket_path: Optional[str] = None
+    workspace_id: Optional[str] = None
+    tab_id: Optional[str] = None
+    pane_id: Optional[str] = None
+    argv: List[str] = Field(default_factory=list)
+    status: str = "ready"
+    reconciled: bool = True
+    actual_model: Optional[str] = None
+
+
+# ---------------------------------------------------------------------------
+# Concurrency Management & Trust Setup
+# ---------------------------------------------------------------------------
+
+_PANE_LOCKS: Dict[str, asyncio.Lock] = {}
+_PANE_LOCKS_GUARD = asyncio.Lock()
+
+
+async def _get_pane_lock(pane_id: str) -> asyncio.Lock:
+    """Acquire a dedicated lock per pane to prevent concurrent prompt interleaving."""
+    async with _PANE_LOCKS_GUARD:
+        if pane_id not in _PANE_LOCKS:
+            _PANE_LOCKS[pane_id] = asyncio.Lock()
+        return _PANE_LOCKS[pane_id]
+
+
+def _ensure_agy_trusted(cwd: str) -> None:
+    """Ensure cwd is in agy's trustedWorkspaces to bypass startup trust dialogs."""
+    settings_path = Path.home() / ".gemini" / "antigravity-cli" / "settings.json"
+    if not settings_path.exists():
+        return
+    try:
+        with open(settings_path, "r", encoding="utf-8") as handle:
+            data = json.load(handle)
+        trusted = data.get("trustedWorkspaces", [])
+        resolved_cwd = str(Path(cwd).resolve())
+        if resolved_cwd not in trusted:
+            trusted.append(resolved_cwd)
+            data["trustedWorkspaces"] = trusted
+            with open(settings_path, "w", encoding="utf-8") as handle:
+                json.dump(data, handle, indent=2)
+    except Exception:
+        return
+
+
+# ---------------------------------------------------------------------------
+# Persona Prompt Construction
+# ---------------------------------------------------------------------------
+
+
+def build_ai_head_system_prompt(head_config: Optional[AiHeadConfig] = None) -> str:
+    """Construct system persona prompt incorporating soul and strict guardrails."""
+    soul = (
+        head_config.soul.strip()
+        if head_config and head_config.soul and head_config.soul.strip()
+        else DEFAULT_AI_HEAD_SOUL
+    )
+    return (
+        f"You are AiHead, an authoritative AI technical and product decision-maker.\n"
+        f"Your Persona & Soul:\n"
+        f"{soul}\n\n"
+        f"OPERATING INSTRUCTIONS:\n"
+        f"1. Autonomous Decisions (status: 'decided'):\n"
+        f"   - Resolve routine technical and product choices autonomously within delegated scope.\n"
+        f"   - When choices or implementation trade-offs are presented, "
+        f"make an explicit, definitive decision.\n"
+        f"   - Provide a succinct, concrete technical rationale.\n"
+        f"   - Output status: 'decided'.\n\n"
+        f"2. Escalation & Guardrails (status: 'needs_user'):\n"
+        f"   - Genuinely ambiguous requirements, conflicting specifications, "
+        f"or missing critical specifications must escalate to the user.\n"
+        f"   - NEVER authorize destructive operations (e.g. git reset --hard, unreviewed lands, "
+        f"deleting branches/worktrees, data loss, security bypasses).\n"
+        f"   - Output status: 'needs_user', explaining the reason in 'rationale' "
+        f"and the specific question for the user in 'question'.\n\n"
+        f"3. Strict JSON Response Schema:\n"
+        f"   Respond ONLY with a valid JSON object matching this schema:\n"
+        f"   {{\n"
+        f'     "request_id": "<correlated request_id>",\n'
+        f'     "status": "decided" | "needs_user",\n'
+        f'     "decision": "<decision text or selected option if decided, else null>",\n'
+        f'     "rationale": "<technical rationale explaining the choice or escalation reason>",\n'
+        f'     "question": "<clarifying question for the user if needs_user, else null>"\n'
+        f"   }}"
+    )
+
+
+def build_ai_head_decision_prompt(
+    request: AiHeadDecisionRequest,
+    head_config: Optional[AiHeadConfig] = None,
+) -> str:
+    """Construct full prompt for a decision request including system persona."""
+    sys_prompt = build_ai_head_system_prompt(head_config)
+    lines = [
+        sys_prompt,
+        "",
+        "=== DECISION REQUEST ===",
+        f"Request ID: {request.request_id}",
+    ]
+    if request.run_id:
+        lines.append(f"Run ID: {request.run_id}")
+    if request.origin_cwd:
+        lines.append(f"Origin CWD: {request.origin_cwd}")
+    lines.append(f"Question: {request.question}")
+    if request.context:
+        lines.append(f"Context: {request.context}")
+    if request.choices:
+        lines.append("Choices:")
+        for choice in request.choices:
+            lines.append(f"- {choice}")
+    lines.append("")
+    lines.append(f"Respond strictly in JSON format for request_id '{request.request_id}'.")
+    return "\n".join(lines)
+
+
+# ---------------------------------------------------------------------------
+# CLI Direct Argv Construction
+# ---------------------------------------------------------------------------
+
+
+def build_headless_cli_argv(
+    head_config: AiHeadConfig,
+    prompt: Optional[str] = None,
+) -> List[str]:
+    """Build direct CLI invocation argv without any Herdr dependency.
+
+    Harnesses execute directly via native headless CLI runner:
+    - opencode: opencode run --format json [--model <model>] [<prompt>]
+    - agy: agy --output-format json --dangerously-skip-permissions
+           [--model <model>] [--effort <effort>] [--prompt <prompt>]
+    - claude: claude -p --dangerously-skip-permissions [--model <model>] [<prompt>]
+    - pi: pi -p --mode json [--model <model>] [--thinking <effort>] [-- <prompt>]
+    """
+    kind_str = (
+        head_config.binding.kind.value
+        if isinstance(head_config.binding.kind, HarnessKind)
+        else str(head_config.binding.kind)
+    )
+    model_str = head_config.binding.model
+    effort_str = (
+        head_config.binding.effort.value
+        if isinstance(head_config.binding.effort, EffortLevel)
+        else (str(head_config.binding.effort) if head_config.binding.effort else None)
+    )
+
+    if kind_str == "opencode":
+        argv = ["opencode", "run", "--format", "json"]
+        if model_str:
+            argv.extend(["--model", model_str])
+        if prompt is not None:
+            argv.append(prompt)
+        return argv
+
+    elif kind_str == "agy":
+        argv = ["agy", "--output-format", "json", "--dangerously-skip-permissions"]
+        if model_str:
+            argv.extend(["--model", model_str])
+        if effort_str:
+            argv.extend(["--effort", effort_str])
+        if prompt is not None:
+            argv.extend(["--prompt", prompt])
+        return argv
+
+    elif kind_str == "claude":
+        argv = ["claude", "-p", "--dangerously-skip-permissions"]
+        if model_str:
+            argv.extend(["--model", model_str])
+        if prompt is not None:
+            argv.append(prompt)
+        return argv
+
+    elif kind_str == "pi":
+        argv = ["pi", "-p", "--mode", "json"]
+        if model_str:
+            argv.extend(["--model", model_str])
+        if effort_str:
+            argv.extend(["--thinking", effort_str])
+        if prompt is not None:
+            argv.extend(["--", prompt])
+        return argv
+
+    else:
+        raise ValueError(
+            f"Harness '{kind_str}' does not support headless direct CLI execution. "
+            f"Supported CLI harnesses: {', '.join(sorted(SUPPORTED_CLI_HARNESSES))}."
+        )
+
+
+# ---------------------------------------------------------------------------
+# Discovery Descriptor
+# ---------------------------------------------------------------------------
+
+
+def build_ai_head_discovery(
+    head_config: AiHeadConfig,
+    origin_cwd: str,
+    *,
+    mode: Optional[str] = None,
+    session_name: Optional[str] = None,
+    socket_path: Optional[Union[str, Path]] = None,
+    workspace_id: Optional[str] = None,
+    tab_id: Optional[str] = None,
+    pane_id: Optional[str] = None,
+    status: Optional[str] = "ready",
+    reconciled: bool = True,
+    actual_model: Optional[str] = None,
+) -> AiHeadDiscovery:
+    """Build an AiHead discovery descriptor for either Herdr or direct CLI mode."""
+    eff_mode = (mode or head_config.mode or ("herdr" if workspace_id else "cli")).lower()
+    if eff_mode not in ("herdr", "cli"):
+        raise ValueError(f"Unsupported discovery mode '{eff_mode}'. Expected 'herdr' or 'cli'.")
+
+    harness_str = (
+        head_config.binding.kind.value
+        if isinstance(head_config.binding.kind, HarnessKind)
+        else str(head_config.binding.kind)
+    )
+    eff_model = actual_model if actual_model is not None else head_config.binding.model
+    eff_status = status if status is not None else "ready"
+
+    if eff_mode == "herdr":
+        return AiHeadDiscovery(
+            mode="herdr",
+            enabled=head_config.enabled,
+            harness=harness_str,
+            model=eff_model,
+            origin_cwd=str(origin_cwd),
+            session_name=session_name,
+            socket_path=str(socket_path) if socket_path else None,
+            workspace_id=workspace_id,
+            tab_id=tab_id,
+            pane_id=pane_id,
+            argv=[],
+            status=eff_status,
+            reconciled=reconciled,
+            actual_model=actual_model,
+        )
+    else:
+        try:
+            cli_argv = build_headless_cli_argv(head_config)
+        except ValueError:
+            cli_argv = []
+        return AiHeadDiscovery(
+            mode="cli",
+            enabled=head_config.enabled,
+            harness=harness_str,
+            model=eff_model,
+            origin_cwd=str(origin_cwd),
+            session_name=None,
+            socket_path=None,
+            workspace_id=None,
+            tab_id=None,
+            pane_id=None,
+            argv=cli_argv,
+            status=eff_status,
+            reconciled=reconciled,
+            actual_model=actual_model,
+        )
+
+
+discover_ai_head = build_ai_head_discovery
+
+
+# ---------------------------------------------------------------------------
+# Response Parsing
+# ---------------------------------------------------------------------------
+
+
+def parse_ai_head_response(raw_output: str, expected_request_id: str) -> AiHeadDecisionReply:
+    """Parse structured JSON reply from harness output and validate correlation."""
+    text = raw_output.strip()
+    if not text:
+        raise AiHeadReplyValidationError(
+            f"Empty output from AI harness for request '{expected_request_id}'."
+        )
+
+    data: Optional[Dict[str, Any]] = None
+
+    # 1. Direct JSON parse
+    try:
+        parsed = json.loads(text)
+        if isinstance(parsed, dict) and "status" in parsed:
+            data = parsed
+        elif isinstance(parsed, dict):
+            for key in ("content", "text", "result", "response", "message"):
+                val = parsed.get(key)
+                if isinstance(val, str):
+                    try:
+                        inner = json.loads(val.strip())
+                        if isinstance(inner, dict) and "status" in inner:
+                            data = inner
+                            break
+                    except json.JSONDecodeError:
+                        pass
+        elif isinstance(parsed, list):
+            for item in reversed(parsed):
+                if isinstance(item, dict) and "status" in item:
+                    data = item
+                    break
+                elif isinstance(item, dict):
+                    for key in ("content", "text", "message"):
+                        val = item.get(key)
+                        if isinstance(val, str):
+                            try:
+                                inner = json.loads(val.strip())
+                                if isinstance(inner, dict) and "status" in inner:
+                                    data = inner
+                                    break
+                            except json.JSONDecodeError:
+                                pass
+                if data is not None:
+                    break
+    except json.JSONDecodeError:
+        pass
+
+    # 2. Markdown code fences ```json ... ``` or ``` ... ```
+    if data is None:
+        fence_matches = re.findall(r"```(?:json)?\s*(\{.*?\})\s*```", text, re.DOTALL)
+        for block in reversed(fence_matches):
+            try:
+                parsed = json.loads(block)
+                if isinstance(parsed, dict) and "status" in parsed:
+                    data = parsed
+                    break
+            except json.JSONDecodeError:
+                pass
+
+    # 3. Embedded JSON object {...}
+    if data is None:
+        obj_matches = re.findall(r"(\{\s*\"request_id\".*?\})", text, re.DOTALL)
+        for block in reversed(obj_matches):
+            try:
+                parsed = json.loads(block)
+                if isinstance(parsed, dict) and "status" in parsed:
+                    data = parsed
+                    break
+            except json.JSONDecodeError:
+                pass
+
+    if data is None:
+        snip = raw_output[:500]
+        raise AiHeadReplyValidationError(
+            f"Failed to extract structured JSON reply for request '{expected_request_id}'. "
+            f"Output:\n{snip}"
+        )
+
+    try:
+        reply = AiHeadDecisionReply.model_validate(data)
+    except Exception as exc:
+        raise AiHeadReplyValidationError(
+            f"Invalid decision reply schema for request '{expected_request_id}': {exc}"
+        ) from exc
+
+    if reply.request_id != expected_request_id:
+        raise AiHeadReplyValidationError(
+            f"Mismatched request_id in reply: got '{reply.request_id}', "
+            f"expected '{expected_request_id}'."
+        )
+
+    return reply
+
+
+# ---------------------------------------------------------------------------
+# Artifact Path Resolution
+# ---------------------------------------------------------------------------
+
+
+def resolve_decision_artifact_path(request: AiHeadDecisionRequest) -> Path:
+    """Resolve destination path for the decision reply JSON artifact."""
+    if request.artifact_path:
+        return Path(request.artifact_path)
+
+    if request.origin_cwd and request.run_id:
+        target_dir = Path(request.origin_cwd) / ".orchestration" / request.run_id
+        try:
+            target_dir.mkdir(parents=True, exist_ok=True)
+            return target_dir / f"aihead_decision_{request.request_id}.json"
+        except OSError:
+            pass
+
+    if request.origin_cwd and Path(request.origin_cwd).is_dir():
+        return Path(request.origin_cwd) / f".aihead_decision_{request.request_id}.json"
+
+    return Path(tempfile.gettempdir()) / f"aihead_decision_{request.request_id}.json"
+
+
+# ---------------------------------------------------------------------------
+# Herdr Mode Execution (for TUI)
+# ---------------------------------------------------------------------------
+
+
+def _resolve_agent_liveness(
+    pane: PaneSnapshot,
+    agents: List[AgentSnapshot],
+) -> tuple[bool, Optional[AgentSnapshot]]:
+    """Determine whether an agent is actively running in the specified pane."""
+    matching_agent: Optional[AgentSnapshot] = None
+    for a in agents:
+        if a.pane_id == pane.pane_id:
+            matching_agent = a
+            break
+
+    if matching_agent is not None:
+        raw_status = (matching_agent.agent_status or "").strip().lower()
+        if raw_status in ACTIVE_AGENT_STATUSES:
+            return True, matching_agent
+        if matching_agent.interactive_ready is True:
+            return True, matching_agent
+        if raw_status in DEAD_AGENT_STATUSES:
+            return False, matching_agent
+        if matching_agent.agent or matching_agent.name:
+            if raw_status and raw_status not in DEAD_AGENT_STATUSES and raw_status != "unknown":
+                return True, matching_agent
+        return False, matching_agent
+
+    pane_status = (pane.agent_status or "").strip().lower()
+    if pane_status in ACTIVE_AGENT_STATUSES:
+        return True, None
+    if pane.agent and pane_status not in DEAD_AGENT_STATUSES and pane_status not in ("", "unknown"):
+        return True, None
+
+    return False, None
+
+
+_RUNNING_HEAD_STATES: Dict[tuple[str, str], Dict[str, Any]] = {}
+
+
+def _state_file_path(origin_cwd: str) -> Optional[Path]:
+    if not origin_cwd:
+        return None
+    try:
+        p = Path(origin_cwd)
+        if p.is_dir():
+            return p / ".herdr-master.ai-head-state.json"
+    except Exception:
+        pass
+    return None
+
+
+def _load_running_head_state(
+    origin_cwd: str, workspace_id: str, pane_id: str
+) -> Optional[Dict[str, Any]]:
+    """Load cached or persisted running head state for (workspace_id, pane_id)."""
+    key = (workspace_id, pane_id)
+    if key in _RUNNING_HEAD_STATES:
+        return dict(_RUNNING_HEAD_STATES[key])
+
+    file_path = _state_file_path(origin_cwd)
+    if file_path and file_path.exists():
+        try:
+            data = json.loads(file_path.read_text(encoding="utf-8"))
+            if isinstance(data, dict):
+                entry_key = f"{workspace_id}:{pane_id}"
+                entry = data.get(entry_key)
+                if isinstance(entry, dict):
+                    _RUNNING_HEAD_STATES[key] = dict(entry)
+                    return dict(entry)
+        except Exception:
+            pass
+    return None
+
+
+def _save_running_head_state(
+    origin_cwd: str, workspace_id: str, pane_id: str, state: Dict[str, Any]
+) -> None:
+    """Save running head state to in-memory cache and persistent JSON file."""
+    key = (workspace_id, pane_id)
+    _RUNNING_HEAD_STATES[key] = dict(state)
+
+    file_path = _state_file_path(origin_cwd)
+    if file_path:
+        try:
+            existing: Dict[str, Any] = {}
+            if file_path.exists():
+                try:
+                    existing = json.loads(file_path.read_text(encoding="utf-8"))
+                    if not isinstance(existing, dict):
+                        existing = {}
+                except Exception:
+                    existing = {}
+            existing[f"{workspace_id}:{pane_id}"] = dict(state)
+            file_path.write_text(json.dumps(existing, indent=2), encoding="utf-8")
+        except Exception:
+            pass
+
+
+def _clear_running_head_states() -> None:
+    """Clear in-memory head state cache (primarily for tests)."""
+    _RUNNING_HEAD_STATES.clear()
+
+
+async def ensure_herdr_ai_head(
+    client: HerdrClient,
+    workspace_id: str,
+    head_config: AiHeadConfig,
+    origin_cwd: str,
+    *,
+    force: bool = False,
+) -> Dict[str, Any]:
+    """Ensure persistent ai-head tab exists in workspace and interactive agent is running.
+
+    Checks existing tabs in workspace for label 'ai-head'.
+    - Verifies that a pane exists for the tab.
+    - Checks agent liveness in the pane via snapshot agents and pane status.
+    - If pane exists but agent is dead, stopped, or missing, starts configured agent.
+    - If running agent is present, verifies binding matches or reuses cleanly.
+    - If no tab/pane exists, creates new tab labeled 'ai-head' and starts agent.
+    """
+    if not head_config.enabled and not force:
+        return {
+            "workspace_id": workspace_id,
+            "tab_id": None,
+            "pane_id": None,
+            "reused": False,
+            "enabled": False,
+            "label": "ai-head",
+            "busy": False,
+            "reconciled": False,
+        }
+
+    if not workspace_id:
+        raise ValueError("workspace_id must be provided to ensure_herdr_ai_head.")
+
+    kind_str = (
+        head_config.binding.kind.value
+        if isinstance(head_config.binding.kind, HarnessKind)
+        else str(head_config.binding.kind)
+    )
+    model_str = head_config.binding.model
+    effort_str = (
+        head_config.binding.effort.value
+        if isinstance(head_config.binding.effort, EffortLevel)
+        else (str(head_config.binding.effort) if head_config.binding.effort else None)
+    )
+    agent_args = build_agent_args(kind_str, model_str, effort_str, skip_permissions=True)
+    agent_name = "ai-head"
+    state_payload = {
+        "kind": kind_str,
+        "model": model_str,
+        "effort": effort_str,
+        "args": list(agent_args),
+        "soul": head_config.soul,
+    }
+
+    snapshot = await client.get_snapshot()
+
+    # Search for an existing 'ai-head' tab with an associated pane
+    target_tab: Optional[TabSnapshot] = None
+    target_pane: Optional[PaneSnapshot] = None
+    for tab in snapshot.tabs:
+        if tab.workspace_id == workspace_id and (tab.label or "").strip() == "ai-head":
+            for pane in snapshot.panes:
+                if pane.tab_id == tab.tab_id:
+                    target_tab = tab
+                    target_pane = pane
+                    break
+            if target_tab is not None:
+                break
+
+    if target_tab is not None and target_pane is not None:
+        is_alive, agent_rec = _resolve_agent_liveness(target_pane, snapshot.agents)
+        agent_kind = agent_rec.agent if agent_rec and agent_rec.agent else target_pane.agent
+
+        if is_alive:
+            # Check if agent is currently busy (e.g. working on a prior request)
+            agent_status_val = (agent_rec.agent_status or "").strip().lower() if agent_rec else ""
+            pane_status_val = (target_pane.agent_status or "").strip().lower()
+            is_busy = agent_status_val in ("working", "busy") or pane_status_val in (
+                "working",
+                "busy",
+            )
+
+            running_state = _load_running_head_state(origin_cwd, workspace_id, target_pane.pane_id)
+
+            if is_busy:
+                # Safe lifecycle policy: do not kill/replace a busy working session!
+                actual_kind = (
+                    (running_state.get("kind") if running_state else None) or agent_kind or kind_str
+                )
+                actual_model = (
+                    running_state.get("model")
+                    if (running_state and "model" in running_state)
+                    else ""
+                )
+                return {
+                    "workspace_id": workspace_id,
+                    "tab_id": target_tab.tab_id,
+                    "pane_id": target_pane.pane_id,
+                    "reused": True,
+                    "enabled": True,
+                    "label": "ai-head",
+                    "agent_name": (agent_rec.name if agent_rec and agent_rec.name else agent_name),
+                    "kind": actual_kind,
+                    "model": actual_model,
+                    "busy": True,
+                    "reconciled": False,
+                    "status": "busy",
+                }
+
+            needs_reconcile = False
+            if running_state is None:
+                # Unknown running state: do NOT assume running agent matches desired model/soul
+                needs_reconcile = True
+            else:
+                if running_state.get("kind") != kind_str:
+                    needs_reconcile = True
+                elif running_state.get("model") != model_str:
+                    needs_reconcile = True
+                elif running_state.get("effort") != effort_str:
+                    needs_reconcile = True
+                elif running_state.get("soul") != head_config.soul:
+                    needs_reconcile = True
+                elif running_state.get("args") != list(agent_args):
+                    needs_reconcile = True
+
+            if needs_reconcile:
+                if kind_str == "agy" and origin_cwd:
+                    _ensure_agy_trusted(origin_cwd)
+                await client.start_agent(
+                    name=agent_name,
+                    kind=kind_str,
+                    pane_id=target_pane.pane_id,
+                    args=agent_args,
+                    timeout_ms=30000,
+                )
+                persona_prompt = build_ai_head_system_prompt(head_config)
+                await client.prompt_agent(target_pane.pane_id, persona_prompt)
+                _save_running_head_state(
+                    origin_cwd, workspace_id, target_pane.pane_id, state_payload
+                )
+
+            return {
+                "workspace_id": workspace_id,
+                "tab_id": target_tab.tab_id,
+                "pane_id": target_pane.pane_id,
+                "reused": True,
+                "enabled": True,
+                "label": "ai-head",
+                "agent_name": (agent_rec.name if agent_rec and agent_rec.name else agent_name),
+                "kind": kind_str,
+                "model": model_str,
+                "busy": False,
+                "reconciled": True,
+                "status": "ready",
+            }
+        else:
+            # Pane exists but agent is dead / stopped / not running:
+            # Start configured agent on this pane so user gets a functioning agent!
+            if kind_str == "agy" and origin_cwd:
+                _ensure_agy_trusted(origin_cwd)
+            await client.start_agent(
+                name=agent_name,
+                kind=kind_str,
+                pane_id=target_pane.pane_id,
+                args=agent_args,
+                timeout_ms=30000,
+            )
+            persona_prompt = build_ai_head_system_prompt(head_config)
+            await client.prompt_agent(target_pane.pane_id, persona_prompt)
+            _save_running_head_state(origin_cwd, workspace_id, target_pane.pane_id, state_payload)
+            return {
+                "workspace_id": workspace_id,
+                "tab_id": target_tab.tab_id,
+                "pane_id": target_pane.pane_id,
+                "reused": True,
+                "enabled": True,
+                "label": "ai-head",
+                "agent_name": agent_name,
+                "kind": kind_str,
+                "model": model_str,
+                "busy": False,
+                "reconciled": True,
+                "status": "ready",
+            }
+
+    # Tab not found or existing tab had no pane; create new tab
+    if kind_str == "agy" and origin_cwd:
+        _ensure_agy_trusted(origin_cwd)
+
+    tab_res = await client.create_tab(
+        workspace_id=workspace_id,
+        label="ai-head",
+        cwd=origin_cwd,
+        focus=False,
+    )
+    tab_id = tab_res.get("tab_id")
+    pane_id = tab_res.get("pane_id")
+    if not pane_id and isinstance(tab_res.get("root_pane"), dict):
+        pane_id = tab_res["root_pane"].get("pane_id")
+    if not tab_id and isinstance(tab_res.get("tab"), dict):
+        tab_id = tab_res["tab"].get("tab_id")
+
+    if not pane_id or not tab_id:
+        fresh_snap = await client.get_snapshot()
+        for tab in fresh_snap.tabs:
+            if tab.workspace_id == workspace_id and (tab.label or "").strip() == "ai-head":
+                tab_id = tab_id or tab.tab_id
+                for pane in fresh_snap.panes:
+                    if pane.tab_id == tab.tab_id:
+                        pane_id = pane_id or pane.pane_id
+                        break
+                break
+
+    if not pane_id:
+        raise RuntimeError("Failed to obtain pane_id for new 'ai-head' tab.")
+
+    await client.start_agent(
+        name=agent_name,
+        kind=kind_str,
+        pane_id=pane_id,
+        args=agent_args,
+        timeout_ms=30000,
+    )
+
+    persona_prompt = build_ai_head_system_prompt(head_config)
+    await client.prompt_agent(pane_id, persona_prompt)
+    _save_running_head_state(origin_cwd, workspace_id, pane_id, state_payload)
+
+    return {
+        "workspace_id": workspace_id,
+        "tab_id": tab_id,
+        "pane_id": pane_id,
+        "reused": False,
+        "enabled": True,
+        "label": "ai-head",
+        "agent_name": agent_name,
+        "kind": kind_str,
+        "model": model_str,
+        "busy": False,
+        "reconciled": True,
+        "status": "ready",
+    }
+
+
+async def request_herdr_decision(
+    client: HerdrClient,
+    pane_id: str,
+    request: AiHeadDecisionRequest,
+    timeout_ms: int = 30000,
+    *,
+    artifact_path: Optional[Union[str, Path]] = None,
+) -> AiHeadDecisionReply:
+    """Submit correlated decision request to the Herdr ai-head pane with bounded wait.
+
+    Submits correlated request, bounded wait for reply artifact, no concurrent prompt interleaving.
+    """
+    if not pane_id:
+        raise ValueError("pane_id must be provided to request_herdr_decision.")
+
+    target_artifact = (
+        Path(artifact_path) if artifact_path else resolve_decision_artifact_path(request)
+    )
+    if target_artifact.exists():
+        try:
+            target_artifact.unlink()
+        except OSError:
+            pass
+
+    lock = await _get_pane_lock(pane_id)
+    async with lock:
+        prompt_text = (
+            f"=== CORRELATED DECISION REQUEST [{request.request_id}] ===\n"
+            f"Question: {request.question}\n"
+        )
+        if request.context:
+            prompt_text += f"Context: {request.context}\n"
+        if request.choices:
+            prompt_text += "Choices:\n" + "\n".join(f"- {c}" for c in request.choices) + "\n"
+        prompt_text += (
+            f"\nINSTRUCTION: Save your decision as a valid JSON object directly to:\n"
+            f"{target_artifact.resolve()}\n\n"
+            f"Required JSON schema:\n"
+            f'{{"request_id": "{request.request_id}", "status": "decided" | "needs_user", '
+            f'"decision": "...", "rationale": "...", "question": null}}\n'
+        )
+
+        await client.prompt_agent(pane_id, prompt_text, wait="idle", timeout_ms=timeout_ms)
+
+        deadline = time.monotonic() + (timeout_ms / 1000.0)
+        while time.monotonic() < deadline:
+            if target_artifact.exists():
+                try:
+                    content = target_artifact.read_text(encoding="utf-8").strip()
+                    if content:
+                        data = json.loads(content)
+                        if isinstance(data, dict):
+                            reply = AiHeadDecisionReply.model_validate(data)
+                            if reply.request_id != request.request_id:
+                                raise AiHeadReplyValidationError(
+                                    f"Mismatched request_id: got '{reply.request_id}', "
+                                    f"expected '{request.request_id}'."
+                                )
+                            return reply
+                except (json.JSONDecodeError, Exception) as exc:
+                    if isinstance(exc, AiHeadReplyValidationError):
+                        raise
+            await asyncio.sleep(0.1)
+
+        raise AiHeadTimeoutError(
+            f"AiHead decision timed out after {timeout_ms}ms "
+            f"waiting for artifact at {target_artifact}."
+        )
+
+
+# ---------------------------------------------------------------------------
+# CLI Mode Execution (100% Herdr-Free Direct Execution)
+# ---------------------------------------------------------------------------
+
+
+async def execute_cli_decision(
+    head_config: AiHeadConfig,
+    request: AiHeadDecisionRequest,
+    timeout_seconds: float = 60.0,
+    *,
+    runner: Optional[Callable[..., Any]] = None,
+) -> AiHeadDecisionReply:
+    """Run the configured harness directly as a real bounded headless subprocess without Herdr.
+
+    100% Herdr-free direct execution:
+    - Zero Herdr daemon or socket needed.
+    - Serializes request to a temporary file or stdin, parses structured JSON reply.
+    - Handles timeouts and non-zero exits safely with clean error reporting.
+    """
+    if not head_config.enabled:
+        return AiHeadDecisionReply(
+            request_id=request.request_id,
+            status="needs_user",
+            decision=None,
+            rationale="AiHead is disabled in configuration.",
+            question=request.question,
+        )
+
+    kind_str = (
+        head_config.binding.kind.value
+        if isinstance(head_config.binding.kind, HarnessKind)
+        else str(head_config.binding.kind)
+    )
+    if kind_str not in SUPPORTED_CLI_HARNESSES:
+        raise ValueError(
+            f"Harness '{kind_str}' does not support headless direct CLI execution. "
+            f"Supported CLI harnesses: {', '.join(sorted(SUPPORTED_CLI_HARNESSES))}."
+        )
+
+    if kind_str == "agy" and request.origin_cwd:
+        _ensure_agy_trusted(request.origin_cwd)
+
+    prompt_text = build_ai_head_decision_prompt(request, head_config)
+    cmd = build_headless_cli_argv(head_config, prompt=prompt_text)
+
+    temp_file = tempfile.NamedTemporaryFile(
+        mode="w",
+        prefix=f"aihead_req_{request.request_id}_",
+        suffix=".json",
+        delete=False,
+        encoding="utf-8",
+    )
+    temp_req_path = Path(temp_file.name)
+    try:
+        temp_file.write(request.model_dump_json(indent=2))
+        temp_file.flush()
+        temp_file.close()
+
+        cwd = (
+            request.origin_cwd if request.origin_cwd and Path(request.origin_cwd).is_dir() else None
+        )
+
+        if runner is not None:
+            try:
+                res = runner(
+                    cmd,
+                    input=prompt_text,
+                    timeout=timeout_seconds,
+                    cwd=cwd,
+                    request_file=temp_req_path,
+                )
+                if inspect.isawaitable(res):
+                    res = await res
+                if isinstance(res, AiHeadDecisionReply):
+                    return res
+                stdout, stderr, returncode = res
+            except (asyncio.TimeoutError, TimeoutError) as exc:
+                raise AiHeadTimeoutError(
+                    f"Headless CLI harness '{kind_str}' timed out after "
+                    f"{timeout_seconds}s for request '{request.request_id}'."
+                ) from exc
+        else:
+            proc = await asyncio.create_subprocess_exec(
+                *cmd,
+                stdin=asyncio.subprocess.PIPE,
+                stdout=asyncio.subprocess.PIPE,
+                stderr=asyncio.subprocess.PIPE,
+                cwd=cwd,
+            )
+            try:
+                stdout_bytes, stderr_bytes = await asyncio.wait_for(
+                    proc.communicate(input=prompt_text.encode("utf-8")),
+                    timeout=timeout_seconds,
+                )
+                stdout = stdout_bytes.decode("utf-8", errors="replace")
+                stderr = stderr_bytes.decode("utf-8", errors="replace")
+                returncode = proc.returncode
+            except asyncio.TimeoutError as exc:
+                try:
+                    proc.kill()
+                    await proc.wait()
+                except ProcessLookupError:
+                    pass
+                raise AiHeadTimeoutError(
+                    f"Headless CLI harness '{kind_str}' timed out after "
+                    f"{timeout_seconds}s for request '{request.request_id}'."
+                ) from exc
+
+        if returncode != 0:
+            err_msg = stderr.strip() or stdout.strip()
+            raise AiHeadExecutionError(
+                f"Headless CLI harness '{kind_str}' exited with return code {returncode}: {err_msg}"
+            )
+
+        reply = parse_ai_head_response(stdout, request.request_id)
+        return reply
+
+    finally:
+        if temp_req_path.exists():
+            try:
+                temp_req_path.unlink()
+            except OSError:
+                pass
+
+
+def execute_cli_decision_sync(
+    head_config: AiHeadConfig,
+    request: AiHeadDecisionRequest,
+    timeout_seconds: float = 60.0,
+    *,
+    runner: Optional[Callable[..., Any]] = None,
+) -> AiHeadDecisionReply:
+    """Synchronous wrapper for execute_cli_decision."""
+    return asyncio.run(
+        execute_cli_decision(
+            head_config=head_config,
+            request=request,
+            timeout_seconds=timeout_seconds,
+            runner=runner,
+        )
+    )

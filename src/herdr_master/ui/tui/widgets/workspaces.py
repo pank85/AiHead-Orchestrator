@@ -699,16 +699,25 @@ class WorkspaceBrowser(Vertical):
                     pane_key = (*key, agent.pane_id)
                     seen_panes.add(pane_key)
                     tab = next((t for t in snapshot.tabs if t.tab_id == agent.tab_id), None)
+                    is_head = bool(
+                        (tab and tab.label and tab.label.strip() == "ai-head")
+                        or (agent.name and agent.name.strip() == "ai-head")
+                    )
                     label = (
                         Text("× stale", style="red")
                         if inventory.error
                         else status_label(agent.agent_status)
                     )
-                    label.append(
-                        f"  {safe_display(agent.name or agent.agent or 'Terminal')}", style="bold"
-                    )
-                    tab_name = tab.label if tab and tab.label else agent.tab_id or "tab"
-                    label.append(f" · {safe_display(tab_name)}")
+                    if is_head:
+                        label.append(" [AiHead]", style="bold magenta")
+                        label.append(f"  {safe_display(agent.name or 'AiHead')}", style="bold white")
+                        label.append(" · ai-head", style="cyan")
+                    else:
+                        label.append(
+                            f"  {safe_display(agent.name or agent.agent or 'Terminal')}", style="bold"
+                        )
+                        tab_name = tab.label if tab and tab.label else agent.tab_id or "tab"
+                        label.append(f" · {safe_display(tab_name)}")
                     label.append(f" · {safe_display(agent.pane_id)}", style="dim")
                     if agent.cwd:
                         label.append(f" · {safe_display(agent.cwd)}", style="dim")

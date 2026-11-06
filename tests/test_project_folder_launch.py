@@ -12,6 +12,7 @@ from herdr_master.ui.tui.app import HerdrMasterApp
 from herdr_master.ui.tui.modals.launch_ergo import LaunchErgoModal
 from herdr_master.ui.tui.modals.launch_master import LaunchMasterModal
 from herdr_master.ui.tui.modals.project_folder import (
+    ProjectFolderField,
     ProjectFolderPicker,
     initial_project_folder,
     validate_project_folder,
@@ -221,3 +222,90 @@ async def test_invalid_startup_project_can_switch_to_valid_project(tmp_path, key
             await pilot.pause()
             launch.assert_awaited_once()
             assert launch.await_args.kwargs["cwd"] == str(good)
+
+
+def test_initial_project_folder_fallback_to_default_folder(tmp_path):
+    from herdr_master.core.config import HerdrMasterConfig, ProjectsConfig
+
+    default_dir = tmp_path / "configured_default"
+    default_dir.mkdir()
+    cfg = HerdrMasterConfig(projects=ProjectsConfig(default_folder=str(default_dir)))
+
+    assert initial_project_folder(None, config=cfg) == default_dir.resolve()
+    # Explicit project path takes precedence over default folder
+    explicit = tmp_path / "explicit"
+    explicit.mkdir()
+    assert initial_project_folder(explicit, config=cfg) == explicit.resolve()
+
+
+@pytest.mark.asyncio
+async def test_project_folder_field_favorite_selection(tmp_path):
+    from textual.app import App, ComposeResult
+    from textual.widgets import Select
+
+    from herdr_master.core.config import FavoriteProject
+
+    core_dir = tmp_path / "core_module"
+    web_dir = tmp_path / "web_module"
+    core_dir.mkdir()
+    web_dir.mkdir()
+
+    favs = [
+        FavoriteProject(name="core", path=str(core_dir)),
+        FavoriteProject(name="web", path=str(web_dir)),
+    ]
+
+    field = ProjectFolderField(favorites=favs)
+    events = []
+
+    class Host(App[None]):
+        def compose(self) -> ComposeResult:
+            yield field
+
+        def on_project_folder_field_changed(self, event: ProjectFolderField.Changed) -> None:
+            events.append(field.selected_path())
+
+    app = Host()
+    async with app.run_test() as pilot:
+        await pilot.pause()
+        select = field.query_one("#select-favorite-folder", Select)
+        assert select.display is True
+        assert field.query_one("#project-path", Input).value != ""
+
+        # Select favorite by name
+        field.select_favorite("web")
+        await pilot.pause()
+        assert field.selected_path() == web_dir.resolve()
+        assert field.query_one("#project-path", Input).value == str(web_dir.resolve())
+        assert len(events) >= 1
+        assert events[-1] == web_dir.resolve()
+
+        # Selecting another favorite
+        field.select_favorite("core")
+        await pilot.pause()
+        assert field.selected_path() == core_dir.resolve()
+        assert events[-1] == core_dir.resolve()
+
+        # Direct typing still works
+        field.query_one("#project-path", Input).value = str(web_dir.resolve())
+        await pilot.pause()
+        assert field.selected_path() == web_dir.resolve()
+
+
+@pytest.mark.asyncio
+async def test_project_folder_field_no_favorites_hidden():
+    from textual.app import App, ComposeResult
+    from textual.widgets import Select
+
+    field = ProjectFolderField(favorites=[])
+
+    class Host(App[None]):
+        def compose(self) -> ComposeResult:
+            yield field
+
+    app = Host()
+    async with app.run_test() as pilot:
+        await pilot.pause()
+        select = field.query_one("#select-favorite-folder", Select)
+        assert select.display is False
+

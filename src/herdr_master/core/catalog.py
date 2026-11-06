@@ -12,7 +12,7 @@ from enum import Enum
 from typing import Any, Literal
 
 SCHEMA_VERSION = 1
-CANONICAL_SKILLS = ("ergo", "herdr-master", "orchestration")
+CANONICAL_SKILLS = ("council", "ergo", "herdr-master", "orchestration")
 LaunchMode = Literal["herdr", "native"]
 
 _EFFORT_ALIASES = {"xhigh": "max"}

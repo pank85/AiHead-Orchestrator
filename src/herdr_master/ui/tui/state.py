@@ -5,7 +5,7 @@ the in-memory descriptor so live widgets do not keep a second model table.
 """
 
 from pathlib import Path
-from typing import Dict, List, Optional, Tuple
+from typing import Any, Dict, List, Optional, Tuple
 
 from pydantic import BaseModel, Field
 
@@ -19,6 +19,7 @@ from herdr_master.core.catalog import (
     worker_capability,
     worker_route_note,
 )
+from herdr_master.core.config import HerdrMasterConfig
 from herdr_master.core.models import (
     EffortLevel,
     HarnessBinding,
@@ -222,6 +223,9 @@ class AppState(BaseModel):
     selected_target_id: Optional[str] = "scout"
 
     squad: Squad = Field(default_factory=Squad)
+    config: Optional[HerdrMasterConfig] = None
+    ai_head_info: Optional[Dict[str, Any]] = None
+    ai_head_busy: bool = False
     pipeline_run: Optional[PipelineRun] = None
     masters: Dict[str, MasterSession] = Field(default_factory=dict)
     workers: Dict[str, WorkerSession] = Field(default_factory=dict)

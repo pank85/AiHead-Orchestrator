@@ -1,7 +1,7 @@
 ---
 name: orchestration
 description: "Run the Scout -> Architect -> parallel coders -> blind reviewer pipeline with this harness's own subagents only. No Herdr, no herdm, no external orchestrator."
-argument-hint: "[--models scout=...,architect=...,coder=...,reviewer=...] [intent]"
+argument-hint: "[--models scout=...,architect=...,coder=...,reviewer=...] [--ai-head|--no-ai-head] [intent]"
 slash: false
 metadata:
   opencode/autoinvoke: false
@@ -48,6 +48,27 @@ A parent master (for example `/herdr-master`) may hand you this job in a **new t
 
 Everything else still applies — the Scout, the Approval Gate, the blind Reviewer, and the no-`git reset --hard` rule do not get skipped just because a master is watching.
 
+### AiHead Availability and Autonomous Decisions
+
+The `/orchestration` pipeline is completely standalone and 100% Herdr-free. When AiHead consultation is configured:
+
+- **Retain Native Subagents for All Implementation Roles**:
+  Every pipeline implementation role (Scout, Architect, Coder, Reviewer) runs strictly as a native subagent spawned by this harness. AiHead is a decision-only advisor and **never** spawns, replaces, or implements any of the pipeline roles.
+- **Tri-State Flag & Discovery**:
+  - `--ai-head`: Explicitly enable autonomous decision consultation.
+  - `--no-ai-head`: Explicitly disable autonomous decision consultation.
+  - Omitted: Discovered from project configuration descriptor. When disabled, no external advisor is consulted.
+- **CLI Mode (100% Herdr-free)**:
+  Direct execution without Herdr. Commands or harnesses calling each other invoke the harness directly via its native headless CLI runner (e.g. `opencode run`, `agy`, etc.) or native agent tool call in a direct subprocess without any Herdr daemon or socket. Harnesses can call each other directly without Herdr. Enabled AiHead is a decision-only advisor accessed via `aihead-cli` (no Herdr required).
+- **TUI Mode**:
+  When invoked in an interactive terminal environment where an active AiHead session is available, consultations can query that session directly via serialized requests.
+- **Correlated Requests & Structured Decisions**:
+  Consultations issue a unique correlation ID and receive a validated structured decision (`{ "decision": "...", "rationale": "...", "escalated": false }`).
+- **Autonomous Decisions vs. Escalation**:
+  Autonomous decisions are accepted for routine technical and architectural choices within delegated scope. Genuinely ambiguous requirements, conflicting specifications, or missing requirements must escalate to the user.
+- **Strict Guardrails**:
+  Destructive operations, security bypasses, or out-of-scope actions always require explicit user approval.
+
 ---
 
 ## 1. Isolation: Worktree, Branch, Run Directory
@@ -91,6 +112,8 @@ If any task omits the persona, overlaps another task's files, or names a model t
 ## 5. User Approval Gate (never skip)
 
 Present the plan: per task, its scope, owned files, dependency, Expert Persona, and model. **STOP and wait for explicit approval.** If the user already supplied a plan file and said "go", echo that plan back in one paragraph plus the task table and ask for a single confirmation — do not treat silence as approval. No Coder starts before approval.
+
+When `--ai-head` is enabled, an authorized AiHead decision within delegated scope recorded via `aihead-cli` may satisfy routine plan approval with logged rationale; genuinely ambiguous requirements, destructive actions, or scope expansions must still STOP and wait for explicit user approval.
 
 ## 6. Parallel Specialist Coders (never code in the orchestrator)
 

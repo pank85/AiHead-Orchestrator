@@ -15,15 +15,21 @@ REPO = Path(__file__).resolve().parents[1]
 
 
 def test_source_checkout_loads_canonical_bodies():
+    council = get_skill_source("council")
     ergo = get_skill_source("ergo")
     master = get_skill_source("herdr-master")
+    assert council == (REPO / "skills/council/SKILL.md").resolve()
     assert ergo == (REPO / "skills/ergo/SKILL.md").resolve()
     assert master == (REPO / "skills/herdr-master/SKILL.md").resolve()
+    council_body = load_skill_body("council")
     ergo_body = load_skill_body("ergo")
     master_body = load_skill_body("herdr-master")
+    assert council_body.startswith("# /council")
     assert ergo_body.startswith("# /ergo")
     assert master_body.startswith("# `/herdr-master`")
+    assert "slash: false" not in council_body
     assert "slash: false" not in ergo_body
+    assert not council_body.startswith("---")
     assert not ergo_body.startswith("---")
     source = (REPO / "src/herdr_master/core/skill_resources.py").read_text(encoding="utf-8")
     assert "/home/pank/projects/herdr-master" not in source
@@ -31,7 +37,12 @@ def test_source_checkout_loads_canonical_bodies():
 
 def test_installed_package_uses_bundle_not_checkout(tmp_path, monkeypatch):
     bundle = tmp_path / "_skills"
-    for name, heading in (("ergo", "# bundled ergo"), ("herdr-master", "# bundled master")):
+    for name, heading in (
+        ("council", "# bundled council"),
+        ("ergo", "# bundled ergo"),
+        ("herdr-master", "# bundled master"),
+        ("orchestration", "# bundled orchestration"),
+    ):
         skill_dir = bundle / name
         skill_dir.mkdir(parents=True)
         (skill_dir / "SKILL.md").write_text(
@@ -40,8 +51,11 @@ def test_installed_package_uses_bundle_not_checkout(tmp_path, monkeypatch):
         )
     monkeypatch.setattr(skill_resources, "_source_checkout_skills", lambda: None)
     monkeypatch.setattr(skill_resources, "_bundled_skills_dir", lambda: bundle)
+    assert get_skill_source("council") == (bundle / "council" / "SKILL.md").resolve()
+    assert load_skill_body("council") == "# bundled council\n"
     assert get_skill_source("ergo") == (bundle / "ergo" / "SKILL.md").resolve()
     assert load_skill_body("herdr-master") == "# bundled master\n"
+    assert "/home/pank/projects/herdr-master" not in str(get_skill_source("council"))
     assert "/home/pank/projects/herdr-master" not in str(get_skill_source("ergo"))
 
 
