@@ -1193,6 +1193,8 @@ class HerdrMasterApp(App):
                     session=session_name,
                     ai_head=params.ai_head_override,
                     dangerously_skip_permissions=params.dangerously_skip_permissions,
+                    fresh_workspace=True,
+                    focus=False,
                 )
                 pane = _result_pane(result)
                 session_name = result.get("session")
