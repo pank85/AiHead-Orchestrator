@@ -847,20 +847,38 @@ def tui(
         help="Run TUI in demo mode with pre-populated Ergo pipeline data",
     ),
 ):
-    """Launch the interactive terminal management dashboard (TUI)."""
-    from herdr_master.ui.tui.app import HerdrMasterApp
+    """Launch the interactive terminal management cockpit (AiHeadDev)."""
+    import shutil
+    executable = shutil.which("aiheaddev") or shutil.which("aihead")
+    if executable:
+        argv = [executable]
+        if session:
+            argv.extend(["--session", session])
+        if demo:
+            argv.append("--demo")
+        os.execvp(executable, argv)
 
-    tui_app = HerdrMasterApp(session=session, demo=demo)
-    result = tui_app.run()
-    if isinstance(result, dict) and result.get("action") == "attach":
-        target_session = result.get("session", session)
-        console.print(
-            f"[yellow]Attaching to isolated Herdr session '{target_session}'...[/yellow]"
-        )
-        os.execvp("herdr", ["herdr", "--session", target_session])
-    elif isinstance(result, dict) and result.get("action") == "done":
-        ws_id = result.get("workspace_id")
-        console.print(f"[green]✓[/green] Active in workspace [cyan]{ws_id}[/cyan]")
+    # Check if module is importable via current python
+    try:
+        import importlib.util
+        if importlib.util.find_spec("aiheaddev") is not None:
+            cmd = [sys.executable, "-m", "aiheaddev.cli"]
+            if session:
+                cmd.extend(["--session", session])
+            if demo:
+                cmd.append("--demo")
+            os.execvp(sys.executable, cmd)
+    except Exception:
+        pass
+
+    console.print(
+        "[bold red]AiHeadDev cockpit is not installed.[/bold red]\n"
+        "The TUI cockpit has been decoupled into an independent distribution.\n\n"
+        "Install it via:\n"
+        "  [cyan]pip install aiheaddev[/cyan] (or [cyan]uv pip install aiheaddev[/cyan])\n"
+        "Repository: https://github.com/pank85/AiHeadDev"
+    )
+    raise typer.Exit(code=1)
 
 
 def _workspace_id(result: dict) -> Optional[str]:

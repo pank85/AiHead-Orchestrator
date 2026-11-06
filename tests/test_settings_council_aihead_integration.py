@@ -14,7 +14,6 @@ from pathlib import Path
 from unittest.mock import AsyncMock, patch
 
 import pytest
-from textual.app import App, ComposeResult
 from typer.testing import CliRunner
 
 from herdr_master.cli.main import app
@@ -65,10 +64,6 @@ from herdr_master.pipeline.launcher import (
     launch_council,
     launch_ergo,
     launch_orchestration,
-)
-from herdr_master.ui.tui.modals.project_folder import (
-    ProjectFolderField,
-    initial_project_folder,
 )
 
 runner = CliRunner()
@@ -272,35 +267,6 @@ async def test_integration_named_folder_precedence_and_field_selection(tmp_path)
         explicit_folder=None, config=empty_cfg, anchor_dir=cwd_dir
     )
     assert eff_anchor == cwd_dir.resolve()
-
-    # 4. initial_project_folder fallback integration
-    assert initial_project_folder(None, config=cfg) == default_dir.resolve()
-    assert (
-        initial_project_folder(explicit_dir, config=cfg) == explicit_dir.resolve()
-    )
-
-    # 5. ProjectFolderField favorite dropdown selection & typing override in active Textual app
-    field = ProjectFolderField(config=cfg)
-
-    class Host(App[None]):
-        def compose(self) -> ComposeResult:
-            yield field
-
-    host_app = Host()
-    async with host_app.run_test() as pilot:
-        await pilot.pause()
-        assert field._select.display is True
-
-        # Select favorite by name
-        field.select_favorite("explicit-fav")
-        await pilot.pause()
-        assert field.selected_path() == explicit_dir.resolve()
-        assert field._input.value == str(explicit_dir.resolve())
-
-        # Direct typing overrides favorite
-        field._input.value = str(default_dir.resolve())
-        await pilot.pause()
-        assert field.selected_path() == default_dir.resolve()
 
 
 # ==============================================================================
