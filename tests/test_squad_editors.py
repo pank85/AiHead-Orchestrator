@@ -10,7 +10,7 @@ from textual.containers import Vertical
 from textual.widgets import Input, Select
 
 from herdr_master.core.catalog import HarnessKind
-from herdr_master.core.config import OrchestrationConfig
+from herdr_master.core.config import HarnessOrchestrationSettings, OrchestrationConfig
 from herdr_master.core.models import EffortLevel, HarnessBinding, Squad
 from herdr_master.ui.tui.modals.launch_ergo import ErgoLaunchParams, LaunchErgoModal
 from herdr_master.ui.tui.modals.launch_orchestration import (
@@ -49,7 +49,9 @@ class OrchestrationEditorHostApp(App[None]):
     def compose(self) -> ComposeResult:
         yield self.editor
 
-    def on_orchestration_editor_changed(self, event: OrchestrationEditor.Changed) -> None:
+    def on_orchestration_editor_changed(
+        self, event: OrchestrationEditor.Changed
+    ) -> None:
         self.changed_events.append(event.config)
 
 
@@ -72,7 +74,9 @@ class DualEditorHostApp(App[None]):
     def on_squad_editor_changed(self, event: SquadEditor.Changed) -> None:
         self.squad_events.append(event.squad)
 
-    def on_orchestration_editor_changed(self, event: OrchestrationEditor.Changed) -> None:
+    def on_orchestration_editor_changed(
+        self, event: OrchestrationEditor.Changed
+    ) -> None:
         self.orch_events.append(event.config)
 
 
@@ -247,7 +251,10 @@ async def test_orchestration_editor_worker_list_and_config():
         editor.reload_config(new_cfg)
         await pilot.pause()
         assert editor._harness_select.value == "pi"
-        assert [i.value for i in editor._worker_inputs] == ["anthropic/claude-3-5-sonnet", "xai/grok-4.7"]
+        assert [i.value for i in editor._worker_inputs] == [
+            "anthropic/claude-3-5-sonnet",
+            "xai/grok-4.7",
+        ]
 
 
 @pytest.mark.asyncio
@@ -451,3 +458,121 @@ async def test_launch_orchestration_modal_integration():
         assert res.harness == HarnessKind.PI
         assert res.scout_model == "anthropic/claude-3-5-sonnet"
         assert res.architect_model == "openai-codex/gpt-6.1-sol"
+
+
+@pytest.mark.asyncio
+async def test_orchestration_editor_preserves_per_harness_settings_on_switch():
+    """Switching harness dropdown preserves custom models, efforts, and workers across switches."""
+    app = OrchestrationEditorHostApp()
+
+    async with app.run_test(size=(90, 30)) as pilot:
+        editor = app.editor
+        assert editor._harness_select.value == "agy"
+
+        # 1. Customize AGY
+        editor._scout_input.value = "gemini-3.8-flash-custom"
+        editor.query_one("#orch-architect-effort", Select).value = "xhigh"
+        editor.add_worker("gemini-3.8-flash-worker")
+        await pilot.pause()
+
+        assert editor.worker_count == 2
+        assert editor._worker_inputs[0].value == "flash"
+        assert editor._worker_inputs[1].value == "gemini-3.8-flash-worker"
+
+        # 2. Switch to Claude
+        editor._harness_select.value = "claude"
+        await pilot.pause()
+
+        # Claude gets fresh defaults on first view
+        assert editor._scout_input.value == "claude-sonnet-4-6"
+        assert editor.query_one("#orch-architect-effort", Select).value == "none"
+        assert editor.worker_count == 1
+        assert editor._worker_inputs[0].value == "claude-sonnet-4-6"
+
+        # 3. Customize Claude
+        editor._scout_input.value = "claude-haiku-custom"
+        editor.query_one("#orch-reviewer-effort", Select).value = "high"
+        editor._worker_inputs[0].value = "claude-opus-worker"
+        await pilot.pause()
+
+        # 4. Switch back to AGY
+        editor._harness_select.value = "agy"
+        await pilot.pause()
+
+        # AGY custom settings must be completely preserved!
+        assert editor._scout_input.value == "gemini-3.8-flash-custom"
+        assert editor.query_one("#orch-architect-effort", Select).value == "xhigh"
+        assert editor.worker_count == 2
+        assert editor._worker_inputs[0].value == "flash"
+        assert editor._worker_inputs[1].value == "gemini-3.8-flash-worker"
+
+        # 5. Switch back to Claude
+        editor._harness_select.value = "claude"
+        await pilot.pause()
+
+        # Claude custom settings must be completely preserved!
+        assert editor._scout_input.value == "claude-haiku-custom"
+        assert editor.query_one("#orch-reviewer-effort", Select).value == "high"
+        assert editor.worker_count == 1
+        assert editor._worker_inputs[0].value == "claude-opus-worker"
+
+        # 6. Verify get_config produces multi-harness settings
+        cfg = editor.get_config()
+        assert cfg.harness == HarnessKind.CLAUDE
+        assert cfg.scout_model == "claude-haiku-custom"
+        assert cfg.reviewer_effort == "high"
+        assert "agy" in cfg.harnesses
+        assert cfg.harnesses["agy"].scout_model == "gemini-3.8-flash-custom"
+        assert cfg.harnesses["agy"].architect_effort == "xhigh"
+        assert cfg.harnesses["agy"].worker_models == [
+            "flash",
+            "gemini-3.8-flash-worker",
+        ]
+        assert "claude" in cfg.harnesses
+        assert cfg.harnesses["claude"].scout_model == "claude-haiku-custom"
+        assert cfg.harnesses["claude"].worker_models == ["claude-opus-worker"]
+
+
+@pytest.mark.asyncio
+async def test_orchestration_editor_initializes_from_multi_harness_config():
+    """OrchestrationEditor accurately restores pre-existing per-harness configurations."""
+    multi_cfg = OrchestrationConfig(
+        harness=HarnessKind.PI,
+        default_harness=HarnessKind.PI,
+        scout_model="pi-scout-custom",
+        architect_model="pi-arch-custom",
+        worker_models=["pi-worker-custom"],
+        reviewer_model="pi-rev-custom",
+        scout_effort="low",
+        harnesses={
+            "pi": HarnessOrchestrationSettings(
+                scout_model="pi-scout-custom",
+                architect_model="pi-arch-custom",
+                worker_models=["pi-worker-custom"],
+                reviewer_model="pi-rev-custom",
+                scout_effort="low",
+            ),
+            "claude": HarnessOrchestrationSettings(
+                scout_model="claude-scout-pre",
+                architect_model="claude-arch-pre",
+                worker_models=["claude-worker-pre"],
+                reviewer_model="claude-rev-pre",
+                architect_effort="xhigh",
+            ),
+        },
+    )
+
+    app = OrchestrationEditorHostApp(config=multi_cfg)
+
+    async with app.run_test(size=(90, 30)) as pilot:
+        editor = app.editor
+        assert editor._harness_select.value == "pi"
+        assert editor._scout_input.value == "pi-scout-custom"
+        assert editor.query_one("#orch-scout-effort", Select).value == "low"
+
+        # Switch to claude
+        editor._harness_select.value = "claude"
+        await pilot.pause()
+        assert editor._scout_input.value == "claude-scout-pre"
+        assert editor.query_one("#orch-architect-effort", Select).value == "xhigh"
+        assert [i.value for i in editor._worker_inputs] == ["claude-worker-pre"]

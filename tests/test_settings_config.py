@@ -17,6 +17,7 @@ from herdr_master.core.config import (
     CouncilMember,
     FavoriteProject,
     GeneralConfig,
+    HarnessOrchestrationSettings,
     HerdrMasterConfig,
     ModelsConfig,
     OrchestrationConfig,
@@ -292,8 +293,12 @@ def test_council_config_members_may_share_model_but_not_identity():
     """Council members may use identical model bindings as long as identities are unique."""
     cfg = CouncilConfig(
         members=[
-            CouncilMember.from_slug("pi:openai-codex/gpt-6.1-sol:max", label="member-1"),
-            CouncilMember.from_slug("pi:openai-codex/gpt-6.1-sol:max", label="member-2"),
+            CouncilMember.from_slug(
+                "pi:openai-codex/gpt-6.1-sol:max", label="member-1"
+            ),
+            CouncilMember.from_slug(
+                "pi:openai-codex/gpt-6.1-sol:max", label="member-2"
+            ),
         ]
     )
     assert len(cfg.members) == 2
@@ -335,7 +340,9 @@ def test_council_invalid_roster_duplicate_or_blank_identities():
     with pytest.raises(ValidationError, match="Duplicate Council member identity"):
         CouncilConfig(
             members=[
-                CouncilMember.from_slug("pi:openai-codex/gpt-6.1-sol:max", label="lead"),
+                CouncilMember.from_slug(
+                    "pi:openai-codex/gpt-6.1-sol:max", label="lead"
+                ),
                 CouncilMember.from_slug("pi:xai/grok-4.7:high", label="LEAD"),
             ]
         )
@@ -614,3 +621,138 @@ def test_orchestration_role_effort_rejects_invalid_and_workers_stay_effortless()
     assert "worker_effort" not in OrchestrationConfig.model_fields
     with pytest.raises(ValidationError):
         OrchestrationConfig(worker_models=["flash:xhigh"])
+
+
+def test_orchestration_per_harness_config_roundtrip(tmp_path):
+    """OrchestrationConfig supports per-harness settings and tracks default_harness."""
+    cfg = HerdrMasterConfig()
+    cfg.orchestration.default_harness = HarnessKind.CLAUDE
+    cfg.orchestration.harness = HarnessKind.CLAUDE
+
+    # Configure claude
+    cfg.orchestration.set_harness_settings(
+        "claude",
+        HarnessOrchestrationSettings(
+            scout_model="claude-haiku",
+            architect_model="claude-opus-custom",
+            worker_models=["claude-sonnet-custom", "claude-3-opus"],
+            reviewer_model="claude-opus-custom",
+            architect_effort="xhigh",
+        ),
+    )
+    # Configure agy
+    cfg.orchestration.set_harness_settings(
+        "agy",
+        HarnessOrchestrationSettings(
+            scout_model="flash_lite",
+            architect_model="gemini-3.8-pro",
+            worker_models=["gemini-3.8-flash"],
+            reviewer_model="gemini-3.8-pro",
+            scout_effort="low",
+            architect_effort="high",
+        ),
+    )
+    # Configure pi
+    cfg.orchestration.set_harness_settings(
+        "pi",
+        HarnessOrchestrationSettings(
+            scout_model="anthropic/claude-3-5-sonnet",
+            architect_model="openai-codex/gpt-6.1-sol",
+            worker_models=["xai/grok-4.7"],
+            reviewer_model="xai/grok-4.7",
+            reviewer_effort="max",
+        ),
+    )
+
+    save_path = tmp_path / ".herdr-master.toml"
+    save_project_config(cfg, save_path)
+
+    reloaded = load_project_config(save_path).orchestration
+    assert reloaded.default_harness == HarnessKind.CLAUDE
+    assert reloaded.harness == HarnessKind.CLAUDE
+    assert reloaded.scout_model == "claude-haiku"
+    assert reloaded.architect_effort == "xhigh"
+
+    # Per-harness settings retained
+    assert "claude" in reloaded.harnesses
+    assert "agy" in reloaded.harnesses
+    assert "pi" in reloaded.harnesses
+
+    agy_settings = reloaded.for_harness("agy")
+    assert agy_settings.architect_model == "gemini-3.8-pro"
+    assert agy_settings.scout_effort == "low"
+    assert agy_settings.architect_effort == "high"
+
+    pi_settings = reloaded.for_harness("pi")
+    assert pi_settings.reviewer_effort == "max"
+    assert pi_settings.worker_models == ["xai/grok-4.7"]
+
+
+def test_orchestration_backward_compat_flat_keys():
+    """Flat [orchestration] keys correctly populate active harness and harnesses mapping."""
+    raw = {
+        "harness": "pi",
+        "scout_model": "anthropic/claude-3-5-sonnet",
+        "architect_model": "openai-codex/gpt-6.1-sol",
+        "worker_models": ["anthropic/claude-3-5-sonnet"],
+        "reviewer_model": "xai/grok-4.7",
+        "architect_effort": "max",
+    }
+    cfg = OrchestrationConfig.model_validate(raw)
+    assert cfg.harness == HarnessKind.PI
+    assert cfg.default_harness == HarnessKind.PI
+    assert cfg.scout_model == "anthropic/claude-3-5-sonnet"
+    assert cfg.architect_effort == "max"
+    assert "pi" in cfg.harnesses
+    assert cfg.harnesses["pi"].architect_effort == "max"
+
+
+def test_orchestration_switch_harness_preserves_settings():
+    """switch_harness swaps active fields while preserving in-memory settings for other harnesses."""
+    cfg = OrchestrationConfig(harness=HarnessKind.AGY)
+    cfg.scout_model = "flash_lite_custom"
+    cfg.architect_effort = "high"
+
+    # Switch to claude and customize
+    cfg.switch_harness("claude")
+    assert cfg.harness == HarnessKind.CLAUDE
+    assert cfg.architect_effort is None  # fresh defaults for claude
+    cfg.scout_model = "claude-haiku"
+    cfg.architect_effort = "xhigh"
+    cfg.worker_models = ["claude-3-opus", "claude-3-sonnet"]
+
+    # Switch back to agy
+    cfg.switch_harness("agy")
+    assert cfg.harness == HarnessKind.AGY
+    assert cfg.scout_model == "flash_lite_custom"
+    assert cfg.architect_effort == "high"
+
+    # Switch back to claude
+    cfg.switch_harness("claude")
+    assert cfg.harness == HarnessKind.CLAUDE
+    assert cfg.scout_model == "claude-haiku"
+    assert cfg.architect_effort == "xhigh"
+    assert cfg.worker_models == ["claude-3-opus", "claude-3-sonnet"]
+
+
+def test_orchestration_profiles_and_per_harness_aliases():
+    """per_harness and profiles aliases are coerced into harnesses mapping."""
+    data_per_harness = {
+        "harness": "agy",
+        "per_harness": {
+            "claude": {"scout_model": "claude-sonnet-4-6"},
+        },
+    }
+    cfg1 = OrchestrationConfig.model_validate(data_per_harness)
+    assert "claude" in cfg1.harnesses
+    assert cfg1.harnesses["claude"].scout_model == "claude-sonnet-4-6"
+
+    data_profiles = {
+        "harness": "agy",
+        "profiles": {
+            "pi": {"scout_model": "anthropic/claude-3-5-sonnet"},
+        },
+    }
+    cfg2 = OrchestrationConfig.model_validate(data_profiles)
+    assert "pi" in cfg2.harnesses
+    assert cfg2.harnesses["pi"].scout_model == "anthropic/claude-3-5-sonnet"

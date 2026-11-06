@@ -41,7 +41,6 @@ from herdr_master.ui.tui.state import harness_select_options
 from herdr_master.ui.tui.widgets.orchestration_editor import OrchestrationEditor
 from herdr_master.ui.tui.widgets.squad_editor import SquadEditor
 
-
 COUNCIL_EFFORT_OPTIONS = [
     ("Unset", "none"),
     ("Low", "low"),
@@ -209,9 +208,8 @@ class SettingsModal(ModalScreen[Optional[Tuple[HerdrMasterConfig, Squad]]]):
     ) -> None:
         super().__init__(**kwargs)
         self.project_path = project_path
-        self.project_config_path = (
-            find_project_config_path(project_path)
-            or ((project_path or Path.cwd()).resolve() / ".herdr-master.toml")
+        self.project_config_path = find_project_config_path(project_path) or (
+            (project_path or Path.cwd()).resolve() / ".herdr-master.toml"
         )
 
         # Deep copy config to prevent mutation on cancellation
@@ -232,7 +230,9 @@ class SettingsModal(ModalScreen[Optional[Tuple[HerdrMasterConfig, Squad]]]):
         self.squad_editor = SquadEditor(self.squad, include_summary=True)
 
         # Tab 3 widget: OrchestrationEditor
-        self.orchestration_editor = OrchestrationEditor(config=self.config.orchestration)
+        self.orchestration_editor = OrchestrationEditor(
+            config=self.config.orchestration
+        )
 
         # Local state for Tab 4 (Council)
         self._council_config = self.config.council.model_copy(deep=True)
@@ -260,7 +260,9 @@ class SettingsModal(ModalScreen[Optional[Tuple[HerdrMasterConfig, Squad]]]):
                             )
                             yield Button("Browse…", id="btn-browse-default-folder")
 
-                        yield Label("Favorite Projects / Workspaces:", classes="section-label")
+                        yield Label(
+                            "Favorite Projects / Workspaces:", classes="section-label"
+                        )
                         with Vertical(classes="table-container"):
                             yield DataTable(id="favorites-table", cursor_type="row")
 
@@ -280,9 +282,15 @@ class SettingsModal(ModalScreen[Optional[Tuple[HerdrMasterConfig, Squad]]]):
                             yield Button("Browse…", id="btn-browse-favorite-path")
 
                         with Horizontal(classes="action-row"):
-                            yield Button("Add Favorite", id="btn-add-favorite", variant="success")
-                            yield Button("Update", id="btn-edit-favorite", variant="warning")
-                            yield Button("Remove", id="btn-remove-favorite", variant="error")
+                            yield Button(
+                                "Add Favorite", id="btn-add-favorite", variant="success"
+                            )
+                            yield Button(
+                                "Update", id="btn-edit-favorite", variant="warning"
+                            )
+                            yield Button(
+                                "Remove", id="btn-remove-favorite", variant="error"
+                            )
                             yield Button("Test Path", id="btn-test-favorite")
 
                         yield Static("", id="favorite-test-status")
@@ -303,7 +311,9 @@ class SettingsModal(ModalScreen[Optional[Tuple[HerdrMasterConfig, Squad]]]):
                             ("scout", self._council_config.scout),
                         ):
                             with Horizontal(classes="compact-row"):
-                                yield Label(f"{role.capitalize()}:", classes="compact-label")
+                                yield Label(
+                                    f"{role.capitalize()}:", classes="compact-label"
+                                )
                                 yield Select(
                                     harness_select_options(),
                                     value=binding.kind.value,
@@ -319,17 +329,27 @@ class SettingsModal(ModalScreen[Optional[Tuple[HerdrMasterConfig, Squad]]]):
                                 )
                                 yield Select(
                                     COUNCIL_EFFORT_OPTIONS,
-                                    value=binding.effort.value if binding.effort else "none",
+                                    value=(
+                                        binding.effort.value
+                                        if binding.effort
+                                        else "none"
+                                    ),
                                     allow_blank=False,
                                     compact=True,
                                     classes="compact-effort",
                                     id=f"council-{role}-effort",
                                 )
 
-                        yield Label("Council Members (Deliberators):", classes="compact-section")
-                        yield Static("", id="council-warning", classes="compact-warning")
+                        yield Label(
+                            "Council Members (Deliberators):", classes="compact-section"
+                        )
+                        yield Static(
+                            "", id="council-warning", classes="compact-warning"
+                        )
                         with Vertical(classes="council-table-container"):
-                            yield DataTable(id="council-members-table", cursor_type="row")
+                            yield DataTable(
+                                id="council-members-table", cursor_type="row"
+                            )
 
                         with Horizontal(classes="compact-row"):
                             yield Input(
@@ -359,13 +379,22 @@ class SettingsModal(ModalScreen[Optional[Tuple[HerdrMasterConfig, Squad]]]):
                             )
                         with Horizontal(classes="compact-row"):
                             yield Button(
-                                "Add", id="btn-add-member", variant="success", compact=True
+                                "Add",
+                                id="btn-add-member",
+                                variant="success",
+                                compact=True,
                             )
                             yield Button(
-                                "Update", id="btn-edit-member", variant="warning", compact=True
+                                "Update",
+                                id="btn-edit-member",
+                                variant="warning",
+                                compact=True,
                             )
                             yield Button(
-                                "Remove", id="btn-remove-member", variant="error", compact=True
+                                "Remove",
+                                id="btn-remove-member",
+                                variant="error",
+                                compact=True,
                             )
                             yield Button("Up", id="btn-member-up", compact=True)
                             yield Button("Down", id="btn-member-down", compact=True)
@@ -378,7 +407,9 @@ class SettingsModal(ModalScreen[Optional[Tuple[HerdrMasterConfig, Squad]]]):
                             value=self._aihead_config.enabled,
                             id="aihead-enabled",
                         )
-                        yield Label("Persona Soul / System Prompt:", classes="section-label")
+                        yield Label(
+                            "Persona Soul / System Prompt:", classes="section-label"
+                        )
                         yield TextArea(
                             self._aihead_config.soul or DEFAULT_AI_HEAD_SOUL,
                             soft_wrap=True,
@@ -399,7 +430,9 @@ class SettingsModal(ModalScreen[Optional[Tuple[HerdrMasterConfig, Squad]]]):
 
             yield Static("", id="settings-status", classes="status-bar")
             with Horizontal(classes="footer-row"):
-                yield Button("Save Settings", id="btn-save", variant="primary", compact=True)
+                yield Button(
+                    "Save Settings", id="btn-save", variant="primary", compact=True
+                )
                 yield Button("Cancel", id="btn-cancel", compact=True)
 
     def on_mount(self) -> None:
@@ -436,9 +469,13 @@ class SettingsModal(ModalScreen[Optional[Tuple[HerdrMasterConfig, Squad]]]):
                 self._selected_member_idx = idx
                 m = self._council_members[idx]
                 self.query_one("#council-member-label-input", Input).value = m.label
-                self.query_one("#council-member-harness-select", Select).value = m.kind.value
+                self.query_one("#council-member-harness-select", Select).value = (
+                    m.kind.value
+                )
                 self.query_one("#council-member-model-input", Input).value = m.model
-                self.query_one("#council-member-enabled-checkbox", Checkbox).value = m.enabled
+                self.query_one("#council-member-enabled-checkbox", Checkbox).value = (
+                    m.enabled
+                )
 
     # --------------------------------------------------------------------------
     # Tab 4: Council logic
@@ -538,7 +575,9 @@ class SettingsModal(ModalScreen[Optional[Tuple[HerdrMasterConfig, Squad]]]):
             if available:
                 status_widget.update(f"✓ Available: {resolved}")
             else:
-                status_widget.update(f"✗ Path does not exist or is not a directory: {resolved}")
+                status_widget.update(
+                    f"✗ Path does not exist or is not a directory: {resolved}"
+                )
             return
 
         # Council tab buttons
@@ -549,8 +588,13 @@ class SettingsModal(ModalScreen[Optional[Tuple[HerdrMasterConfig, Squad]]]):
             if any(m.label.lower() == label.lower() for m in self._council_members):
                 self._set_status(f"Council member '{label}' already exists.")
                 return
-            harness = str(self.query_one("#council-member-harness-select", Select).value)
-            model = self.query_one("#council-member-model-input", Input).value.strip() or "pro"
+            harness = str(
+                self.query_one("#council-member-harness-select", Select).value
+            )
+            model = (
+                self.query_one("#council-member-model-input", Input).value.strip()
+                or "pro"
+            )
             enabled = self.query_one("#council-member-enabled-checkbox", Checkbox).value
             m = CouncilMember(
                 kind=HarnessKind(harness),
@@ -580,7 +624,9 @@ class SettingsModal(ModalScreen[Optional[Tuple[HerdrMasterConfig, Squad]]]):
             ):
                 self._set_status(f"Council member '{label}' already exists.")
                 return
-            harness = str(self.query_one("#council-member-harness-select", Select).value)
+            harness = str(
+                self.query_one("#council-member-harness-select", Select).value
+            )
             model = self.query_one("#council-member-model-input", Input).value.strip()
             if not model:
                 self._set_status("Member model cannot be blank.")
@@ -681,9 +727,12 @@ class SettingsModal(ModalScreen[Optional[Tuple[HerdrMasterConfig, Squad]]]):
             tabbed.active = "tab-orchestration"
             return
         new_orch = self.orchestration_editor.get_config()
+        new_orch.default_harness = new_orch.harness
 
         # Tab 4: Council validation
-        coord_harness = str(self.query_one("#council-coordinator-harness", Select).value)
+        coord_harness = str(
+            self.query_one("#council-coordinator-harness", Select).value
+        )
         coord_model = self.query_one("#council-coordinator-model", Input).value.strip()
         scout_harness = str(self.query_one("#council-scout-harness", Select).value)
         scout_model = self.query_one("#council-scout-model", Input).value.strip()

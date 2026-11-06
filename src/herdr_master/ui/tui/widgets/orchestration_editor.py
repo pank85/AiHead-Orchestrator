@@ -13,6 +13,7 @@ from textual.widgets import Button, Input, Label, Select, Static
 from herdr_master.core.catalog import get_harness, native_binding_error
 from herdr_master.core.config import (
     DEFAULT_ORCHESTRATION_MODELS,
+    HarnessOrchestrationSettings,
     HerdrMasterConfig,
     OrchestrationConfig,
     load_project_config,
@@ -151,22 +152,64 @@ class OrchestrationEditor(Widget):
         self._worker_seq = 0
         self._worker_rows: List[Horizontal] = []
         self._worker_inputs: List[Input] = []
+        self._harness_configs: Dict[str, HarnessOrchestrationSettings] = {}
 
         if config is not None:
             self._config = config.model_copy(deep=True)
+        elif self.project_path:
+            try:
+                loaded = load_project_config(self.project_path)
+                self._config = loaded.orchestration.model_copy(deep=True)
+                if default_harness:
+                    self._config.harness = HarnessKind(default_harness)
+            except Exception:
+                initial_harness = (
+                    HarnessKind(default_harness) if default_harness else HarnessKind.AGY
+                )
+                self._config = OrchestrationConfig(harness=initial_harness)
         else:
             initial_harness = (
-                HarnessKind(default_harness)
-                if default_harness
-                else HarnessKind.AGY
+                HarnessKind(default_harness) if default_harness else HarnessKind.AGY
             )
             self._config = OrchestrationConfig(harness=initial_harness)
+
+        self._default_harness: HarnessKind = (
+            HarnessKind(default_harness)
+            if default_harness
+            else (self._config.default_harness or self._config.harness)
+        )
+
+        for k, v in self._config.harnesses.items():
+            self._harness_configs[k] = v.model_copy(deep=True)
+
+        active_key = self._config.harness.value
+        if active_key not in self._harness_configs:
+            if (
+                self._config.scout_model
+                or self._config.architect_model
+                or self._config.worker_models
+                or self._config.reviewer_model
+                or self._config.scout_effort
+                or self._config.architect_effort
+                or self._config.reviewer_effort
+            ):
+                self._harness_configs[active_key] = HarnessOrchestrationSettings(
+                    scout_model=self._config.scout_model,
+                    architect_model=self._config.architect_model,
+                    worker_models=list(self._config.worker_models),
+                    reviewer_model=self._config.reviewer_model,
+                    scout_effort=self._config.scout_effort,
+                    architect_effort=self._config.architect_effort,
+                    reviewer_effort=self._config.reviewer_effort,
+                )
 
         options = harness_select_options(mode="native")
         initial_val = self._config.harness.value
         option_values = {val for _, val in options}
         if initial_val not in option_values and options:
             initial_val = options[0][1]
+
+        self._current_harness = initial_val
 
         with _ensure_active_app():
             self._harness_select = Select(
@@ -215,13 +258,16 @@ class OrchestrationEditor(Widget):
             for model in self._config.worker_models:
                 self._create_worker_row(model)
 
-            # Apply defaults if fields are empty
-            self._apply_harness_defaults(initial_val, force=not (
+            has_explicit_models = bool(
                 self._config.scout_model
                 or self._config.architect_model
                 or self._config.worker_models
                 or self._config.reviewer_model
-            ))
+            )
+            if not has_explicit_models:
+                self._load_harness_into_ui(initial_val)
+            else:
+                self._save_current_to_harness(initial_val)
 
     # ------------------------------------------------------------------
     # Worker list
@@ -268,7 +314,9 @@ class OrchestrationEditor(Widget):
         if self.is_mounted:
             self._workers_box.mount(row)
             self._workers_box.scroll_end(animate=False)
-            self._notify_changed()
+            if not self._syncing:
+                self._save_current_to_harness(self._current_harness)
+                self._notify_changed()
 
     def remove_worker(self, index: Optional[int] = None) -> bool:
         """Remove a worker row (default: last). At least one worker is kept."""
@@ -284,7 +332,8 @@ class OrchestrationEditor(Widget):
             row.remove()
         self._relabel_workers()
         self.set_status("")
-        if self.is_mounted:
+        if self.is_mounted and not self._syncing:
+            self._save_current_to_harness(self._current_harness)
             self._notify_changed()
         return True
 
@@ -356,38 +405,92 @@ class OrchestrationEditor(Widget):
             return project_model
         return DEFAULT_MODELS.get(harness, {}).get(role, "general")
 
-    def _apply_harness_defaults(self, harness: str, force: bool = False) -> None:
+    def _save_current_to_harness(self, harness: str) -> None:
+        """Capture current editor inputs into per-harness in-memory storage."""
+        worker_models = [m for m in self._worker_values() if m]
+        fields = dict(
+            scout_model=self._scout_input.value.strip() or None,
+            architect_model=self._architect_input.value.strip() or None,
+            worker_models=worker_models,
+            reviewer_model=self._reviewer_input.value.strip() or None,
+            scout_effort=self._effort_value("scout"),
+            architect_effort=self._effort_value("architect"),
+            reviewer_effort=self._effort_value("reviewer"),
+        )
+        try:
+            self._harness_configs[harness] = HarnessOrchestrationSettings(**fields)
+        except Exception:
+            self._harness_configs[harness] = (
+                HarnessOrchestrationSettings.model_construct(**fields)
+            )
+
+    def _update_worker_rows(self, models: List[str]) -> None:
+        """Update worker input rows to match the desired model list."""
+        models = list(models) or [""]
+        while len(self._worker_inputs) > len(models) and len(self._worker_inputs) > 1:
+            idx = len(self._worker_inputs) - 1
+            self._worker_inputs.pop(idx)
+            row = self._worker_rows.pop(idx)
+            if row.is_attached:
+                row.remove()
+        while len(self._worker_inputs) < len(models):
+            row = self._create_worker_row("")
+            if self.is_mounted:
+                self._workers_box.mount(row)
+        for inp, m in zip(self._worker_inputs, models):
+            with self.prevent(Input.Changed):
+                inp.value = m
+        self._relabel_workers()
+
+    def _load_harness_into_ui(self, harness: str) -> None:
+        """Swap inputs to the saved configuration for harness, or sensible defaults."""
+        saved = self._harness_configs.get(harness)
+        if saved is not None:
+            scout = (
+                saved.scout_model
+                if saved.scout_model is not None
+                else self._get_default_model(harness, "scout")
+            )
+            arch = (
+                saved.architect_model
+                if saved.architect_model is not None
+                else self._get_default_model(harness, "architect")
+            )
+            rev = (
+                saved.reviewer_model
+                if saved.reviewer_model is not None
+                else self._get_default_model(harness, "reviewer")
+            )
+            workers = (
+                list(saved.worker_models)
+                if saved.worker_models
+                else [self._get_default_model(harness, "coder")]
+            )
+            scout_eff = saved.scout_effort or "none"
+            arch_eff = saved.architect_effort or "none"
+            rev_eff = saved.reviewer_effort or "none"
+        else:
+            scout = self._get_default_model(harness, "scout")
+            arch = self._get_default_model(harness, "architect")
+            rev = self._get_default_model(harness, "reviewer")
+            workers = [self._get_default_model(harness, "coder")]
+            scout_eff = "none"
+            arch_eff = "none"
+            rev_eff = "none"
+
         with _ensure_active_app():
             self._syncing = True
             try:
-                for role in ("scout", "architect", "reviewer"):
-                    widget = getattr(self, f"_{role}_input")
-                    new_model = self._get_default_model(harness, role)
-                    prev_default = self._programmatic_models.get(role, "")
-                    current_val = widget.value.strip()
-                    if force or current_val == prev_default or not current_val:
-                        with self.prevent(Input.Changed):
-                            widget.value = new_model
-                        self._programmatic_models[role] = new_model
-
-                new_model = self._get_default_model(harness, "coder")
-                prev_default = self._programmatic_models.get("coder", "")
-                if force and not self._worker_inputs:
-                    self._create_worker_row(new_model)
-                    if self.is_mounted:
-                        self._workers_box.mount(self._worker_rows[-1])
-                elif self._worker_inputs and (
-                    force
-                    or all(v in ("", prev_default) for v in self._worker_values())
-                ):
-                    for inp in self._worker_inputs:
-                        with self.prevent(Input.Changed):
-                            inp.value = new_model
-                elif not self._worker_inputs:
-                    self._create_worker_row(new_model)
-                    if self.is_mounted:
-                        self._workers_box.mount(self._worker_rows[-1])
-                self._programmatic_models["coder"] = new_model
+                with self.prevent(Input.Changed):
+                    self._scout_input.value = scout
+                    self._architect_input.value = arch
+                    self._reviewer_input.value = rev
+                with self.prevent(Select.Changed):
+                    self._effort_selects["scout"].value = scout_eff
+                    self._effort_selects["architect"].value = arch_eff
+                    self._effort_selects["reviewer"].value = rev_eff
+                self._update_worker_rows(workers)
+                self._save_current_to_harness(harness)
             finally:
                 self._syncing = False
 
@@ -395,15 +498,20 @@ class OrchestrationEditor(Widget):
         if self._syncing or not self.is_mounted:
             return
         if event.select == self._harness_select:
-            harness = str(event.value)
-            self._apply_harness_defaults(harness, force=False)
+            new_harness = str(event.value)
+            if new_harness != self._current_harness:
+                self._save_current_to_harness(self._current_harness)
+                self._current_harness = new_harness
+                self._load_harness_into_ui(new_harness)
             self._notify_changed()
         elif event.select in self._effort_selects.values():
+            self._save_current_to_harness(self._current_harness)
             self._notify_changed()
 
     def on_input_changed(self, event: Input.Changed) -> None:
         if self._syncing or not self.is_mounted:
             return
+        self._save_current_to_harness(self._current_harness)
         self._notify_changed()
 
     def _notify_changed(self) -> None:
@@ -416,8 +524,15 @@ class OrchestrationEditor(Widget):
     def reload_for_project(self, project_path: Optional[Path]) -> None:
         """Reload project overrides when project folder changes."""
         self.project_path = project_path
+        if project_path:
+            try:
+                cfg = load_project_config(project_path)
+                self.reload_config(cfg.orchestration, project_path=project_path)
+                return
+            except Exception:
+                pass
         harness = str(self._harness_select.value)
-        self._apply_harness_defaults(harness, force=False)
+        self._load_harness_into_ui(harness)
         self._notify_changed()
 
     def reload_config(
@@ -429,26 +544,32 @@ class OrchestrationEditor(Widget):
         """Reload orchestration config and update inputs."""
         self.project_path = project_path
         self._config = config.model_copy(deep=True)
-        self._syncing = True
-        try:
-            self._harness_select.value = config.harness.value
-            self._scout_input.value = config.scout_model or ""
-            self._architect_input.value = config.architect_model or ""
-            self._reviewer_input.value = config.reviewer_model or ""
-            for role in _EFFORT_ROLES:
-                self._effort_selects[role].value = getattr(config, f"{role}_effort", None) or "none"
-            while len(self._worker_inputs) > 1:
-                self.remove_worker()
-            models = list(config.worker_models) or [""]
-            while len(self._worker_inputs) < len(models):
-                row = self._create_worker_row("")
-                if self.is_mounted:
-                    self._workers_box.mount(row)
-            for inp, model in zip(self._worker_inputs, models):
-                inp.value = model
-            self.set_status("")
-        finally:
-            self._syncing = False
+        self._default_harness = config.default_harness or config.harness
+        self._harness_configs.clear()
+        for k, v in self._config.harnesses.items():
+            self._harness_configs[k] = v.model_copy(deep=True)
+
+        active_key = self._config.harness.value
+        if active_key not in self._harness_configs:
+            self._harness_configs[active_key] = HarnessOrchestrationSettings(
+                scout_model=self._config.scout_model,
+                architect_model=self._config.architect_model,
+                worker_models=list(self._config.worker_models),
+                reviewer_model=self._config.reviewer_model,
+                scout_effort=self._config.scout_effort,
+                architect_effort=self._config.architect_effort,
+                reviewer_effort=self._config.reviewer_effort,
+            )
+
+        self._current_harness = active_key
+        with _ensure_active_app():
+            self._syncing = True
+            try:
+                self._harness_select.value = active_key
+                self._load_harness_into_ui(active_key)
+                self.set_status("")
+            finally:
+                self._syncing = False
         self._notify_changed()
 
     def _effort_value(self, role: str) -> Optional[str]:
@@ -463,9 +584,18 @@ class OrchestrationEditor(Widget):
         except ValueError:
             harness_kind = HarnessKind.AGY
 
+        self._save_current_to_harness(harness_val)
+
         worker_models = [m for m in self._worker_values() if m]
+        harnesses_dump = {
+            k: v.model_copy(deep=True) for k, v in self._harness_configs.items()
+        }
+
+        default_harness = self._default_harness or harness_kind
+
         fields: Dict[str, Any] = dict(
             harness=harness_kind,
+            default_harness=default_harness,
             scout_model=self._scout_input.value.strip() or None,
             architect_model=self._architect_input.value.strip() or None,
             worker_models=worker_models,
@@ -473,6 +603,7 @@ class OrchestrationEditor(Widget):
             scout_effort=self._effort_value("scout"),
             architect_effort=self._effort_value("architect"),
             reviewer_effort=self._effort_value("reviewer"),
+            harnesses=harnesses_dump,
         )
         try:
             return OrchestrationConfig(**fields)
@@ -515,12 +646,16 @@ class OrchestrationEditor(Widget):
             ("architect", arch_m),
             ("reviewer", rev_m),
         ):
-            err = native_binding_error(kind.value, model, role=role, native_harness=kind.value)
+            err = native_binding_error(
+                kind.value, model, role=role, native_harness=kind.value
+            )
             if err:
                 return err
 
         for worker in worker_models:
-            err = native_binding_error(kind.value, worker, role="coder", native_harness=kind.value)
+            err = native_binding_error(
+                kind.value, worker, role="coder", native_harness=kind.value
+            )
             if err:
                 return err
 
