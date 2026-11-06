@@ -30,6 +30,9 @@ _OPTIONAL = (
     "tab_id",
     "squad",
     "allowed_coder_models",
+    "models",
+    "native_harness",
+    "dangerously_skip_permissions",
     "worktree",
     "run_dir",
 )

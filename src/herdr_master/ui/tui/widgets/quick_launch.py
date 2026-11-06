@@ -39,6 +39,9 @@ class QuickLaunchBar(Static):
     class LaunchErgoRequested(Message):
         """User requested to launch a new Ergo Pipeline."""
 
+    class LaunchOrchestrationRequested(Message):
+        """User requested to launch a single-harness Orchestration pipeline."""
+
     class OpenSettingsRequested(Message):
         """User requested to configure squad/settings."""
 
@@ -62,6 +65,14 @@ class QuickLaunchBar(Static):
                 yield Static("Run one planned pipeline", classes="launch-description")
             with Vertical(classes="launch-action"):
                 yield Button(
+                    "Orchestrate",
+                    id="btn-new-orchestration",
+                    variant="success",
+                    tooltip="[o] Run Scout -> Architect -> Coders -> Reviewer with subagents in a single harness.",
+                )
+                yield Static("Single-harness subagents", classes="launch-description")
+            with Vertical(classes="launch-action"):
+                yield Button(
                     "Squad Settings",
                     id="btn-settings",
                     variant="warning",
@@ -73,5 +84,7 @@ class QuickLaunchBar(Static):
             self.post_message(self.LaunchMasterRequested())
         elif event.button.id == "btn-new-ergo":
             self.post_message(self.LaunchErgoRequested())
+        elif event.button.id == "btn-new-orchestration":
+            self.post_message(self.LaunchOrchestrationRequested())
         elif event.button.id == "btn-settings":
             self.post_message(self.OpenSettingsRequested())

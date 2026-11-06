@@ -19,6 +19,7 @@ from herdr_master.pipeline.launcher import (
     LaunchContextError,
     launch_ergo,
     launch_master,
+    launch_orchestration,
     resolve_launch_context,
 )
 from herdr_master.pipeline.squad import resolve_squad
@@ -34,6 +35,10 @@ from herdr_master.ui.tui.messages import TargetSelected
 from herdr_master.ui.tui.modals.config_drawer import ConfigDrawer
 from herdr_master.ui.tui.modals.launch_ergo import ErgoLaunchParams, LaunchErgoModal
 from herdr_master.ui.tui.modals.launch_master import LaunchMasterModal, MasterLaunchParams
+from herdr_master.ui.tui.modals.launch_orchestration import (
+    LaunchOrchestrationModal,
+    OrchestrationLaunchParams,
+)
 from herdr_master.ui.tui.modals.project_folder import (
     initial_project_folder,
     validate_project_folder,
@@ -476,19 +481,22 @@ class HerdrMasterApp(App):
             self._live_submit_pending = False
 
     def action_open_in_herdr(self) -> None:
-        """Open selected workspace or pane in Herdr."""
+        """Open selected workspace or pane in Herdr, or trigger Orchestration if no target selected."""
         if len(self.screen_stack) > 1 or isinstance(
             self.focused, (TextArea, Input, LivePaneOutput)
         ):
             return
-        if self.demo:
-            self.notify("Demo mode: live terminal navigation is disabled.", severity="warning")
-            return
         try:
             browser = self.query_one(WorkspaceBrowser)
-            browser.request_open()
+            if browser._selected_target is not None or browser._selected_target_disappeared:
+                if self.demo:
+                    self.notify("Demo mode: live terminal navigation is disabled.", severity="warning")
+                    return
+                browser.request_open()
+                return
         except Exception:
             pass
+        self.action_new_orchestration()
 
     def on_workspace_browser_open_requested(
         self, event: WorkspaceBrowser.OpenRequested
@@ -898,6 +906,90 @@ class HerdrMasterApp(App):
             _on_modal_dismiss,
         )
 
+    def action_new_orchestration(self) -> None:
+        """Open the single-harness Orchestration launch modal."""
+        if len(self.screen_stack) > 1 or isinstance(
+            self.focused, (TextArea, Input, LivePaneOutput)
+        ):
+            return
+
+        async def _on_orchestration_launch(params: OrchestrationLaunchParams) -> None:
+            try:
+                project_path = validate_project_folder(
+                    str(params.project_path or initial_project_folder(self.project_path))
+                )
+                if self.demo or self.client is None:
+                    self.notify("Demo mode does not launch an orchestrator.", severity="warning")
+                    return
+                ctx = self._context_for_launch()
+                session_name = getattr(self.app_state, "session_name", ctx.session_name)
+                result = await launch_orchestration(
+                    client=self.client,
+                    intent=params.intent,
+                    workspace_label=params.workspace_label,
+                    harness=params.harness,
+                    scout_model=params.scout_model,
+                    architect_model=params.architect_model,
+                    coder_model=params.coder_model,
+                    reviewer_model=params.reviewer_model,
+                    cwd=str(project_path),
+                    session=session_name,
+                    dangerously_skip_permissions=params.dangerously_skip_permissions,
+                )
+                pane = _result_pane(result)
+                session_name = result.get("session")
+                if not pane or not session_name:
+                    self.notify(
+                        "Launch result missing pane_id. "
+                        "No run was recorded and no attach was started.",
+                        severity="error",
+                    )
+                    return
+                workspace_id = result.get("workspace_id")
+                squad = result["squad"]
+                self.app_state.squad = squad
+                self.app_state.workspace_label = params.workspace_label
+                self.app_state.pipeline_run = PipelineRun(
+                    run_id=f"orch-{params.workspace_label}",
+                    intent=params.intent,
+                    squad=squad,
+                    phase=PipelinePhase.PREFLIGHT,
+                    workspace_id=str(workspace_id) if workspace_id else None,
+                    orchestrator_pane_id=result.get("orchestrator_pane_id") or pane,
+                    metadata={
+                        "mode": "native",
+                        "native_harness": params.harness,
+                        "dangerously_skip_permissions": params.dangerously_skip_permissions,
+                        "pane_id": pane,
+                        "orchestrator_pane_id": result.get("orchestrator_pane_id") or pane,
+                        "session": session_name,
+                        "agent_name": result.get("agent_name"),
+                        "project_path": str(project_path),
+                    },
+                )
+                self._update_all_widgets()
+                self.notify(f"Orchestration pane {pane}", severity="information")
+                self._exit_launch(ctx, str(session_name), workspace_id)
+            except LaunchContextError as exc:
+                self.notify(str(exc), severity="error")
+            except Exception as exc:
+                self.notify(f"Orchestration launch error: {exc}", severity="error")
+            finally:
+                self._launch_pending = False
+
+        def _on_modal_dismiss(params: Optional[OrchestrationLaunchParams]) -> None:
+            if params is None:
+                return
+            self._begin_launch(_on_orchestration_launch(params), "launch_orchestration")
+
+        self.push_screen(
+            LaunchOrchestrationModal(
+                project_path=self.project_path,
+                config_error=self.config_error,
+            ),
+            _on_modal_dismiss,
+        )
+
     def on_quick_launch_bar_launch_master_requested(
         self, event: QuickLaunchBar.LaunchMasterRequested
     ) -> None:
@@ -907,6 +999,11 @@ class HerdrMasterApp(App):
         self, event: QuickLaunchBar.LaunchErgoRequested
     ) -> None:
         self.action_new_ergo()
+
+    def on_quick_launch_bar_launch_orchestration_requested(
+        self, event: QuickLaunchBar.LaunchOrchestrationRequested
+    ) -> None:
+        self.action_new_orchestration()
 
     def on_quick_launch_bar_open_settings_requested(
         self, event: QuickLaunchBar.OpenSettingsRequested
