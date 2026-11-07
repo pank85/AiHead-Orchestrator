@@ -852,6 +852,7 @@ class AiHeadConfig(BaseModel):
     soul: str = DEFAULT_AI_HEAD_SOUL
     binding: HarnessBinding = Field(default_factory=default_ai_head_binding)
     mode: Optional[str] = None
+    split: bool = True
 
     @property
     def harness(self) -> HarnessKind:
@@ -909,7 +910,33 @@ class AiHeadConfig(BaseModel):
                 "label": "ai-head",
                 "description": base.description,
             }
+        if "split" in d:
+            val = d["split"]
+            if isinstance(val, str):
+                s = val.strip().lower()
+                if s in ("true", "1", "yes", "on"):
+                    d["split"] = True
+                elif s in ("false", "0", "no", "off"):
+                    d["split"] = False
+            elif isinstance(val, (int, float)):
+                d["split"] = bool(val)
         return d
+
+    @field_validator("split", mode="before")
+    @classmethod
+    def _validate_split(cls, v: Any) -> bool:
+        if isinstance(v, bool):
+            return v
+        if isinstance(v, str):
+            s = v.strip().lower()
+            if s in ("true", "1", "yes", "on"):
+                return True
+            if s in ("false", "0", "no", "off"):
+                return False
+            raise ValueError(f"Invalid boolean value for split: {v}")
+        if isinstance(v, (int, float)):
+            return bool(v)
+        return bool(v)
 
     @field_validator("mode")
     @classmethod

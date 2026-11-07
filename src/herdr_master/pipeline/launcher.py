@@ -32,6 +32,7 @@ from herdr_master.herdr.client import HerdrClient
 from herdr_master.pipeline.ai_head import (
     AiHeadDiscovery,
     build_ai_head_discovery,
+    build_interactive_ai_head_prompt,
     ensure_herdr_ai_head,
 )
 from herdr_master.pipeline.bootstrap import build_bootstrap_prompt
@@ -1069,3 +1070,255 @@ async def launch_council(
         "council": council_cfg,
         "ai_head": head_discovery if (head_discovery and head_discovery.enabled) else None,
     }
+
+
+async def launch_ai_head(
+    client: HerdrClient,
+    harness: Optional[HarnessKind] = None,
+    model: Optional[str] = None,
+    effort: Optional[EffortLevel] = None,
+    split: bool = True,
+    workspace: Optional[str] = None,
+    initial_task: Optional[str] = None,
+    session: Optional[str] = None,
+    cwd: Optional[str] = None,
+    config_path: Optional[Path] = None,
+    name: str = "ai-head",
+    focus: bool = True,
+) -> Dict[str, Any]:
+    """Launch an interactive AiHead terminal session.
+
+    Resolves configuration from .herdr-master.toml ([ai_head]) with CLI overrides.
+    Resolves coordinator binding using AiHead settings.
+    Adopts or allocates launch context.
+
+    Layout Management:
+    - If split=True and inside Herdr (ctx.is_inside_herdr and active pane):
+      Calls client.split_pane(direction="right", target_pane_id=active_pane, cwd=target_cwd, focus=True).
+      Extracts newly created pane ID.
+      Calls client.swap_panes(source_pane_id=active_pane, target_pane_id=new_pane_id) so caller's pane
+      moves to the right (secondary) and newly spawned AiHead pane becomes primary/main screen.
+      Calls client.focus_pane(new_pane_id) if focus is True.
+    - Else (split=False, workspace specified, or outside Herdr):
+      Allocates standalone tab or workspace via _allocate_launch_target or workspace creation.
+
+    Spawns interactive agent and delivers interactive bootstrap prompt.
+    Returns dict with keys: session, socket, workspace_id, pane_id, tab_id, agent_name, split, secondary_pane_id (if split).
+    """
+    target_cwd = str(Path(cwd or os.getcwd()).resolve())
+
+    head_config = None
+    try:
+        project_cfg = load_project_config(config_path or target_cwd)
+        head_config = project_cfg.ai_head
+    except Exception:
+        head_config = None
+
+    eff_harness = (
+        harness
+        if harness is not None
+        else (head_config.binding.kind if head_config and head_config.binding else None)
+    )
+    eff_model = (
+        model
+        if model is not None
+        else (head_config.binding.model if head_config and head_config.binding else None)
+    )
+    eff_effort = (
+        effort
+        if effort is not None
+        else (head_config.binding.effort if head_config and head_config.binding else None)
+    )
+    effective_split = (
+        split
+        if split is not None
+        else (head_config.split if head_config is not None else True)
+    )
+
+    kind, model_slug, effort_level = resolve_coordinator_binding(eff_harness, eff_model, eff_effort)
+    descriptor = _host_launch(kind.value, model_slug, effort_level, "master")
+
+    ctx = resolve_launch_context(session)
+
+    is_split_applied = False
+    secondary_pane_id: Optional[str] = None
+    allocated: Optional[_Allocated] = None
+
+    active_pane = ctx.pane_id
+    if not active_pane and ctx.is_inside_herdr:
+        try:
+            curr = await _safe_await(client.current_pane)
+            if isinstance(curr, dict):
+                active_pane = curr.get("pane_id") or (curr.get("pane") or {}).get("pane_id")
+        except Exception:
+            pass
+
+    if effective_split and not workspace and ctx.is_inside_herdr and active_pane:
+        split_res = await _safe_await(
+            client.split_pane,
+            direction="right",
+            target_pane_id=active_pane,
+            cwd=target_cwd,
+            focus=True,
+        )
+        new_pane_id = None
+        if isinstance(split_res, dict):
+            new_pane_id = (
+                split_res.get("pane_id")
+                or split_res.get("new_pane_id")
+                or split_res.get("id")
+                or (split_res.get("pane") if isinstance(split_res.get("pane"), dict) else {}).get("pane_id")
+                or (split_res.get("root_pane") if isinstance(split_res.get("root_pane"), dict) else {}).get("pane_id")
+            )
+        if not new_pane_id:
+            snap = await _safe_await(client.get_snapshot)
+            if hasattr(snap, "panes") and isinstance(snap.panes, list):
+                for p in snap.panes:
+                    p_id = getattr(p, "pane_id", None) or (p.get("pane_id") if isinstance(p, dict) else None)
+                    p_tab = getattr(p, "tab_id", None) or (p.get("tab_id") if isinstance(p, dict) else None)
+                    if p_tab == ctx.tab_id and p_id != active_pane:
+                        new_pane_id = p_id
+                        break
+
+        if not new_pane_id:
+            raise RuntimeError(f"Could not determine new pane ID from split_pane result: {split_res}")
+
+        await _safe_await(client.swap_panes, source_pane_id=active_pane, target_pane_id=new_pane_id)
+        if focus:
+            await _safe_await(client.focus_pane, new_pane_id)
+
+        is_split_applied = True
+        secondary_pane_id = active_pane
+        allocated = _Allocated(
+            client=client,
+            session_name=str(ctx.session_name or "default"),
+            socket_path=Path(ctx.socket_path or "/tmp/herdr.sock"),
+            workspace_id=ctx.workspace_id,
+            pane_id=new_pane_id,
+            tab_id=ctx.tab_id,
+            owns_workspace=False,
+        )
+    else:
+        if workspace:
+            if ctx.is_inside_herdr:
+                active = _adopt_client(client, ctx)
+                snap = await _safe_await(active.get_snapshot)
+                target_ws_id = None
+                if hasattr(snap, "workspaces"):
+                    for ws in snap.workspaces:
+                        if getattr(ws, "workspace_id", None) == workspace or getattr(ws, "label", None) == workspace:
+                            target_ws_id = ws.workspace_id
+                            break
+                if target_ws_id:
+                    tab_res = await _safe_await(
+                        active.create_tab,
+                        workspace_id=target_ws_id,
+                        label=name,
+                        focus=focus,
+                        cwd=target_cwd,
+                    )
+                    allocated = _Allocated(
+                        client=active,
+                        session_name=str(ctx.session_name),
+                        socket_path=Path(ctx.socket_path),
+                        workspace_id=target_ws_id,
+                        pane_id=_pane_id(tab_res),
+                        tab_id=_tab_id(tab_res),
+                        owns_workspace=False,
+                    )
+                else:
+                    allocated = await _create_owned_workspace(
+                        active,
+                        session_name=str(ctx.session_name),
+                        socket_path=Path(ctx.socket_path),
+                        workspace_label=workspace,
+                        cwd=target_cwd,
+                        focus=focus,
+                    )
+            else:
+                session_name = _isolated_session_name(session, workspace)
+                socket_path = _session_socket(session_name)
+                await ensure_herdr_server(socket_path, session_name=session_name)
+                active = HerdrClient(session=session_name, socket_path=socket_path)
+                snap = await active.get_snapshot()
+                target_ws_id = None
+                if hasattr(snap, "workspaces"):
+                    for ws in snap.workspaces:
+                        if getattr(ws, "workspace_id", None) == workspace or getattr(ws, "label", None) == workspace:
+                            target_ws_id = ws.workspace_id
+                            break
+                if target_ws_id:
+                    tab_res = await active.create_tab(
+                        workspace_id=target_ws_id,
+                        label=name,
+                        focus=focus,
+                        cwd=target_cwd,
+                    )
+                    allocated = _Allocated(
+                        client=active,
+                        session_name=session_name,
+                        socket_path=socket_path,
+                        workspace_id=target_ws_id,
+                        pane_id=_pane_id(tab_res),
+                        tab_id=_tab_id(tab_res),
+                        owns_workspace=False,
+                    )
+                else:
+                    allocated = await _create_owned_workspace(
+                        active,
+                        session_name=session_name,
+                        socket_path=socket_path,
+                        workspace_label=workspace,
+                        cwd=target_cwd,
+                        focus=focus,
+                    )
+        else:
+            allocated = await _allocate_launch_target(
+                client,
+                ctx,
+                session=session,
+                isolated_name=f"aihead-{name}",
+                tab_label=name,
+                workspace_label=name,
+                cwd=target_cwd,
+                fresh_workspace=False,
+                focus=focus,
+            )
+
+    if not allocated.pane_id:
+        raise RuntimeError(f"Could not allocate AiHead pane in workspace {allocated.workspace_id}")
+
+    prompt_text = build_interactive_ai_head_prompt(
+        head_config=head_config,
+        initial_task=initial_task,
+        origin_cwd=target_cwd,
+    )
+    prompt = _with_prompt_prefix(prompt_text, descriptor)
+
+    await _start_and_prompt(
+        allocated,
+        name=name,
+        kind=descriptor["kind"],
+        args=descriptor["argv"],
+        prompt=prompt,
+        cwd=target_cwd,
+        focus=focus,
+    )
+
+    res: Dict[str, Any] = {
+        "session": allocated.session_name,
+        "socket": str(allocated.socket_path),
+        "workspace_id": allocated.workspace_id,
+        "pane_id": allocated.pane_id,
+        "tab_id": allocated.tab_id,
+        "agent_name": name,
+        "split": is_split_applied,
+        "origin_cwd": target_cwd,
+        "harness": descriptor["kind"],
+        "model": model_slug,
+        "effort": effort_level.value if effort_level else None,
+    }
+    if is_split_applied:
+        res["secondary_pane_id"] = secondary_pane_id
+
+    return res

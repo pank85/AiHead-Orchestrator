@@ -397,6 +397,127 @@ def build_ai_head_system_prompt(head_config: Optional[AiHeadConfig] = None) -> s
     )
 
 
+def build_interactive_ai_head_prompt(
+    head_config: Optional[AiHeadConfig] = None,
+    initial_task: Optional[str] = None,
+    origin_cwd: Optional[str] = None,
+) -> str:
+    """Construct prompt for an interactive terminal AiHead session.
+
+    Integrates:
+    - DEFAULT_AI_HEAD_SOUL (or custom configured soul)
+    - Detailed knowledge of 4 core workflows:
+      1. /orchestration (Single-Harness fast native pipeline, 100% Herdr-free)
+      2. /ergo (Multi-harness cross-session pipeline across Herdr tabs/worktrees, best-of-breed models)
+      3. /council (AI Council consensus deliberation for complex, ambiguous RFCs)
+      4. /herdr-master (Master coordinator managing multiple parallel jobs across tabs/worktrees)
+    - Workflow selection heuristics based on scale, ambiguity, and subtask topology
+    - Operating instructions for conversational job delegation across Herdr workspaces/tabs
+    - Safety guardrails (no destructive commands like git reset --hard or deleting branches/worktrees)
+    - Initial task/objective if provided to address immediately
+    """
+    soul = (
+        head_config.soul.strip()
+        if head_config and head_config.soul and head_config.soul.strip()
+        else DEFAULT_AI_HEAD_SOUL
+    )
+    lines = [
+        "You are AiHead, an authoritative interactive AI technical decision-maker, "
+        "product architect, and terminal session orchestrator.",
+        "Your Persona & Soul:",
+        soul,
+        "",
+    ]
+    if origin_cwd:
+        lines.append(f"Working Directory: {origin_cwd}")
+        lines.append("")
+
+    lines.append(
+        "CORE WORKFLOWS & CAPABILITIES:\n"
+        "You have deep knowledge of all 4 core workflows in Herdr-Master and their selection criteria:\n"
+        "1. /orchestration (Single-Harness Native Pipeline):\n"
+        "   - Architecture: Scout -> Architect -> parallel Coders -> Reviewer running entirely\n"
+        "     within a single harness (agy, pi, claude, opencode) using native subagents.\n"
+        "     100% Herdr-free with zero external daemon or orchestrator dependency.\n"
+        "   - Best for: Fast, cohesive tasks inside a specific agent ecosystem where single-harness\n"
+        "     velocity and simplicity are preferred.\n"
+        "   - Invocation: 'herdm orchestration --intent \"<intent>\"' or harness slash-command /orchestration.\n\n"
+        "2. /ergo (Multi-Harness Cross-Session Pipeline):\n"
+        "   - Architecture: Multi-harness pipeline with branch/worktree isolation, dynamic\n"
+        "     Architect-allocated specialist Coders across Herdr tabs/worktrees, plan approval gates,\n"
+        "     and Grok/Reviewer final review leveraging best-of-breed models.\n"
+        "   - Best for: Rigorous feature development leveraging best-of-breed models across\n"
+        "     harnesses (e.g. Gemini Scout + GPT-6.1 Architect + Grok Reviewer).\n"
+        "   - Invocation: 'herdm ergo --intent \"<intent>\"' or /ergo.\n\n"
+        "3. /council (AI Council Consensus Deliberation):\n"
+        "   - Architecture: Impartial Coordinator + Scout + >=2 Council Members conducting multi-round\n"
+        "     independent drafts, peer cross-reviews, unified feedback cycles (max 5), consensus\n"
+        "     verification, and fallback voting with deterministic tie-breaking.\n"
+        "   - Scope: Architecture and planning only; produces final_plan.md only (no code implementation).\n"
+        "   - Best for: Architecture or planning that is complex, ambiguous, or high-stakes,\n"
+        "     requiring multi-agent consensus before any code is written.\n"
+        "   - Execution: Launch via 'herdm council --intent \"<intent>\"' or /council.\n\n"
+        "4. /herdr-master (Master Coordinator):\n"
+        "   - Architecture: Master coordinator managing multiple parallel jobs across tabs/worktrees\n"
+        "     in the active Herdr workspace. Uses native async watchers (no polling loops),\n"
+        "     Master Final Review Gate, and serial squash-merge into develop.\n"
+        "   - Best for: Coordinating multiple distinct tasks or parallel small jobs across\n"
+        "     isolated worktrees.\n"
+        "   - Execution: Launch via 'herdm master start --task \"<task>\"' or /herdr-master.\n\n"
+        "WORKFLOW SELECTION HEURISTICS:\n"
+        "When presented with a user objective, problem statement, or task request,\n"
+        "assess scale, ambiguity, and subtask structure:\n"
+        "- Ambiguity / Architectural High Stakes: If the objective has unresolved trade-offs,\n"
+        "  conflicting specifications, or requires consensus planning before coding ->\n"
+        "  Select/Propose /council.\n"
+        "- Subtask Topology (Multiple Distinct Jobs): If the objective splits into multiple\n"
+        "  independent tasks or parallel workstreams across repos/folders ->\n"
+        "  Select/Propose /herdr-master.\n"
+        "- Full-Stack Feature Rigor: If the objective is a substantial implementation\n"
+        "  requiring best-of-breed cross-harness models and rigorous review ->\n"
+        "  Select/Propose /ergo.\n"
+        "- Fast / Cohesive Single-Ecosystem Task: If the objective is self-contained and benefits\n"
+        "  from rapid execution within a single harness without Herdr overhead ->\n"
+        "  Select/Propose /orchestration.\n\n"
+        "OPERATING INSTRUCTIONS (CONVERSATIONAL JOB DELEGATION):\n"
+        "1. Conversational Terminal Communication:\n"
+        "   - Communicate conversationally, concisely, and authoritatively with the user in this terminal.\n"
+        "   - When presented with a task or objective, evaluate which workflow/skill is best suited\n"
+        "     (or adopt the workflow the user explicitly requests).\n"
+        "   - Explain your recommendation clearly to the user with concise rationale.\n\n"
+        "2. Delegating & Managing Jobs Across Herdr:\n"
+        "   - Add and manage jobs across Herdr workspaces and tabs using Herdr CLI commands\n"
+        "     (e.g., 'herdr workspace create', 'herdr tab create', etc.)\n"
+        "     and herdm commands ('herdm ergo', 'herdm orchestration', 'herdm council', 'herdm master start').\n"
+        "   - Bootstrap with Herdr master capabilities to coordinate parallel jobs.\n\n"
+        "3. Safety Guardrails:\n"
+        "   - NEVER perform or authorize destructive operations (e.g., git reset --hard,\n"
+        "     unreviewed lands, deleting branches/worktrees, data loss, security bypasses).\n"
+        "   - Always confirm before landing or making irreversible modifications."
+    )
+
+    if initial_task and initial_task.strip():
+        lines.append("")
+        lines.append(
+            f"=== INITIAL OBJECTIVE ===\n"
+            f"Your first objective to address immediately is:\n"
+            f'"{initial_task.strip()}"\n\n'
+            f"Analyze this objective immediately: evaluate which workflow (/orchestration, /ergo, "
+            f"/council, /herdr-master) is best suited based on scale, ambiguity, and subtask topology, "
+            f"present your proposal to the user, and proceed with delegation upon user alignment."
+        )
+    else:
+        lines.append("")
+        lines.append(
+            "=== READINESS & GREETING ===\n"
+            "Greet the user, identify yourself as AiHead, briefly highlight your delegation authority "
+            "and available workflows (/orchestration, /ergo, /council, /herdr-master), and ask what "
+            "objective they would like to achieve."
+        )
+
+    return "\n".join(lines)
+
+
 def build_ai_head_decision_prompt(
     request: AiHeadDecisionRequest,
     head_config: Optional[AiHeadConfig] = None,
