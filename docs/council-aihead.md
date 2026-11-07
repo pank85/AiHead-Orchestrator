@@ -11,7 +11,8 @@ This guide details the multi-agent deliberation protocol (**AI Council**), auton
 4. [Named Folder Precedence](#4-named-folder-precedence)
 5. [AI Council Protocol & Deliberation Workflow](#5-ai-council-protocol--deliberation-workflow)
 6. [AiHead Persona & Execution Modes](#6-aihead-persona--execution-modes)
-7. [Command-Line Reference](#7-command-line-reference)
+7. [AiHead Workflow Orchestration & Selection Intelligence](#7-aihead-workflow-orchestration--selection-intelligence)
+8. [Command-Line Reference](#8-command-line-reference)
 
 ---
 
@@ -148,8 +149,10 @@ order = 2
 [ai_head]
 enabled = true
 mode = "herdr"   # Options: "herdr" (TUI tab) or "cli" (100% Herdr-free subprocess)
-soul = """Software Architect obsessed with UX best practices, accessibility, \
-clear interaction design, and code reusability without speculative abstraction"""
+soul = """Software Architect and Workflow Orchestrator obsessed with UX best practices, \
+accessibility, clear interaction design, code reusability without speculative abstraction, \
+and intelligent workflow selection across Herdr-Master capabilities (/orchestration, /ergo, /council, /herdr-master) \
+with dynamic model and harness discovery from project configuration (models.default_squad, orchestration, catalog)"""
 binding = "pi:openai-codex/gpt-6.1-sol:max"
 ```
 
@@ -246,7 +249,7 @@ sequenceDiagram
 AiHead provides continuous architectural guidance and UX assurance without operator fatigue.
 
 ### Core Persona Soul
-> *"Software Architect obsessed with UX best practices, accessibility, clear interaction design, and code reusability without speculative abstraction"*
+> *"Software Architect and Workflow Orchestrator obsessed with UX best practices, accessibility, clear interaction design, code reusability without speculative abstraction, and intelligent workflow selection across Herdr-Master capabilities (/orchestration, /ergo, /council, /herdr-master) with dynamic model and harness discovery from project configuration (models.default_squad, orchestration, catalog)"*
 
 ### Decision Delegation Protocol
 Every decision exchange is structured and correlated:
@@ -296,7 +299,137 @@ Every decision exchange is structured and correlated:
 
 ---
 
-## 7. Command-Line Reference
+## 7. AiHead Workflow Orchestration & Selection Intelligence
+
+AiHead serves not only as an architectural and UX advisor, but as an active **workflow recommendation and orchestration engine**. When presented with a task or user objective, AiHead analyzes project topology, problem complexity, ambiguity, and model requirements to guide the operator or autonomous supervisor to the optimal execution workflow.
+
+### The 4 Core Workflows
+
+Herdr-Master provides four complementary workflows designed for distinct operational envelopes:
+
+```mermaid
+flowchart TD
+    UserReq["User Objective / Intent"] --> AssessNode{"Assess Scale, Ambiguity<br/>& Subtask Structure"}
+
+    AssessNode -- "Ambiguous requirements,<br/>architectural trade-offs, RFCs" --> FlowCouncil["/council<br/>AI Council Consensus Deliberation"]
+    AssessNode -- "Multiple distinct tasks,<br/>parallel decoupled jobs" --> FlowMaster["/herdr-master<br/>Master Tab & Worktree Orchestrator"]
+    AssessNode -- "Substantial feature development,<br/>best-of-breed cross-harness models" --> FlowErgo["/ergo<br/>Cross-Harness Multi-Agent Pipeline"]
+    AssessNode -- "Fast, cohesive single-task,<br/>single-harness ecosystem" --> FlowOrch["/orchestration<br/>Single-Harness Native Pipeline"]
+```
+
+#### 1. `/orchestration` — Single-Harness Native Pipeline
+- **Topology**: `Scout -> Architect -> parallel Coders -> Reviewer` running entirely within a single harness (`agy`, `pi`, `claude`, or `opencode`).
+- **Execution Mechanism**: 100% Herdr-free. Uses the active harness's native subagent tool (`invoke_subagent` in `agy`, `Agent` in `claude`, `subagent` in `pi`/`opencode`).
+- **Key Characteristics**:
+  - Zero external daemons, sockets, or background server dependencies.
+  - Workers run concurrently with reasoning effort allocated per task by the Architect.
+  - Reviewer is read-only and blind to the planning conversation.
+- **When to Choose (Best For)**:
+  - Fast, cohesive tasks inside a specific agent ecosystem where single-harness velocity, prompt caching, and tool simplicity are prioritized.
+  - Scenarios where running or installing the Herdr daemon is unwanted or impossible.
+
+#### 2. `/ergo` — Multi-Harness Cross-Session Pipeline
+- **Topology**: `Scout -> Architect -> parallel specialist Coders -> Reviewer` executing across distinct harnesses.
+- **Execution Mechanism**: Defaults to Herdr mode running across interactive tabs and isolated Git worktrees. (Supports `--native` for single-harness fallback).
+- **Key Characteristics**:
+  - Leverages best-of-breed model capabilities: Gemini 3.8 Flash Medium (fast Scout discovery), OpenAI GPT-6.1-sol (deep Architect design), and xAI Grok 4.7 (rigorous, skeptical Reviewer).
+  - Dynamic worker pool allocating specialized coders per task (e.g. Gemini for rapid boilerplate, Grok for complex logic).
+  - Explicit Human/AiHead **Approval Gate** between Architect planning and Coder execution.
+  - Single squash-commit landing into `develop` with branch and worktree isolation.
+- **When to Choose (Best For)**:
+  - Rigorous, production-grade feature development where quality assurance is paramount and tasks benefit from the complementary strengths of different LLM architectures.
+  - Projects requiring strict worktree isolation so parallel implementation attempts cannot pollute the primary checkout.
+
+#### 3. `/council` — AI Council Consensus Deliberation
+- **Topology**: 1 Impartial Coordinator + 1 Scout + $\ge$ 2 Council Members.
+- **Execution Mechanism**: Multi-round consensus deliberation protocol enforced by the `council-state` CLI state machine. Deliberation only; **no code implementation**.
+- **Key Characteristics**:
+  - Independent initial plan formulation (Round 0) ensuring diverse architectural perspectives.
+  - Up to 5 iterative peer cross-review and unified feedback cycles.
+  - Early exit on unanimous consensus; fallback 1-round ballot with deterministic tie-breaking.
+  - Generates an immutable, sealed `final_plan.md` documenting consensus reasoning, trade-offs, and rejected alternatives.
+- **When to Choose (Best For)**:
+  - Complex, ambiguous, or high-stakes system architecture, database migrations, security redesigns, or RFCs that require multi-model consensus and adversarial critique before any code is written.
+  - Resolving contentious architectural debates without bias from a single model family.
+
+#### 4. `/herdr-master` — Master Orchestrator
+- **Topology**: 1 Master Coordinator managing $N$ child tabs and worktrees in the same Herdr workspace.
+- **Execution Mechanism**: Communicates via the Herdr socket, spawning isolated tabs for each job, launching native async watchers to monitor completion without busy-waiting, enforcing the Master Final Review Gate, and serially squash-merging into `develop`.
+- **Key Characteristics**:
+  - Can forward subtasks into `/ergo` or `/orchestration` tabs.
+  - Native async watchers (`herdr agent wait`) eliminate polling CPU waste.
+  - Master Final Review Gate blocks integration if any child introduces regressions or cross-job conflicts.
+- **When to Choose (Best For)**:
+  - Coordinating multiple distinct tasks, decoupled microservice updates, or parallel small jobs that must progress concurrently in isolated worktrees before serial integration into `develop`.
+
+---
+
+### Workflow Comparison Matrix
+
+| Workflow | Execution Model | Multi-Harness? | Herdr Daemon Req? | Output Artifact | Primary Sweet Spot |
+| :--- | :--- | :--- | :--- | :--- | :--- |
+| **`/orchestration`** | Native subagents | No (Single harness) | **No** (100% Free) | Reviewed commit on branch | Fast, cohesive tasks within a single ecosystem |
+| **`/ergo`** | Tabs & Worktrees | **Yes** (Best-of-breed) | Yes (Default) / No (`--native`) | Reviewed commit on branch | Rigorous feature engineering across specialized models |
+| **`/council`** | Deliberation rounds | **Yes** (Multi-member) | Optional (CLI state-gate) | Authoritative `final_plan.md` | Ambiguous, complex, high-stakes planning & RFCs |
+| **`/herdr-master`** | Multi-tab coordinator | **Yes** (Delegated jobs) | **Yes** (Workspace tabs) | Serial squash into `develop` | Coordinating multiple distinct parallel jobs |
+
+---
+
+### Model & Harness Discovery Intelligence
+
+AiHead dynamically queries and respects model bindings and harness configurations rather than relying on stale or hardcoded model identifiers:
+
+```mermaid
+flowchart LR
+    subgraph ConfigSources["Configuration Sources"]
+        TomlSquad["[models.default_squad]<br/>Project overrides"]
+        TomlOrch["[orchestration]<br/>Native harness squad"]
+        Catalog["herdm catalog squad / agent<br/>Authoritative product catalog"]
+    end
+
+    subgraph DiscoveryLayer["AiHead Discovery Layer"]
+        Resolver["Resolution & Routing Engine"]
+        AiHeadDesc["build_ai_head_discovery()<br/>AiHead Runtime Descriptor"]
+    end
+
+    subgraph Runtimes["Execution Runtimes"]
+        HerdrTab["Herdr Mode (Persistent Tab)"]
+        HeadlessCLI["CLI Mode (Native Headless)"]
+    end
+
+    TomlSquad --> Resolver
+    TomlOrch --> Resolver
+    Catalog --> Resolver
+    Resolver --> AiHeadDesc
+    AiHeadDesc --> HerdrTab
+    AiHeadDesc --> HeadlessCLI
+```
+
+1. **Project Squad Overrides (`models.default_squad`)**:
+   - Configured in `.herdr-master.toml`:
+     ```toml
+     [models.default_squad]
+     scout = "agy:gemini-3.8-flash-medium:medium"
+     architect = "pi:openai-codex/gpt-6.1-sol:max"
+     reviewer = "pi:xai/grok-4.7:high"
+     ```
+   - AiHead inspects these bindings via `squad_from_project_config()`, preserving custom model selections while inheriting missing roles from the product catalog.
+2. **Orchestration Squad (`[orchestration]`)**:
+   - Defines single-harness native settings: `harness` (`agy`, `claude`, `pi`, `opencode`), `scout_model`, `architect_model`, `worker_models`, and `reviewer_model`, along with role reasoning efforts (`scout_effort`, `architect_effort`, `reviewer_effort`).
+   - AiHead understands that worker models in `/orchestration` omit fixed effort levels because the native Architect dynamically assigns effort per task in `plan.md`.
+3. **Product Catalog (`herdm catalog`)**:
+   - The authoritative source of truth for model bindings, routing rules, and tool adapters.
+   - AiHead leverages standard binding syntax: `<kind>:<model>[:<effort>]` (e.g. `agy:gemini-3.8-flash-medium:medium`, `pi:openai-codex/gpt-6.1-sol:max`, `pi:xai/grok-4.7:high`).
+   - Coder models are strictly validated against `.allowed_coder_models` generated by the catalog.
+4. **AiHead Runtime Discovery (`build_ai_head_discovery`)**:
+   - AiHead automatically discovers its active endpoint and execution profile:
+     - In **Herdr Mode**, checks socket reachability, adopts the active workspace, and locates or launches the dedicated `ai-head` tab.
+     - In **CLI Mode**, resolves the headless runner command arguments (e.g. `agy --output-format json`, `claude -p`, `pi -p --mode json`, `opencode run --format json`).
+   - Can be verified at any time with `herdm aihead-cli --discover`.
+
+---
+
+## 8. Command-Line Reference
 
 ### Top-Level Commands
 ```bash

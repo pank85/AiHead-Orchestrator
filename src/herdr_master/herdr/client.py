@@ -87,6 +87,73 @@ class HerdrClient:
         resp = await self._rpc("pane.focus", {"pane_id": pane_id})
         return resp.get("result", {})
 
+    async def split_pane(
+        self,
+        direction: str = "right",
+        target_pane_id: Optional[str] = None,
+        workspace_id: Optional[str] = None,
+        ratio: Optional[float] = None,
+        cwd: Optional[str] = None,
+        env: Optional[Dict[str, str]] = None,
+        focus: bool = False,
+    ) -> Dict[str, Any]:
+        """Split a pane (Protocol 22 pane.split)."""
+        params: Dict[str, Any] = {
+            "direction": direction,
+            "focus": focus,
+        }
+        if target_pane_id is not None:
+            params["target_pane_id"] = target_pane_id
+        if workspace_id is not None:
+            params["workspace_id"] = workspace_id
+        if ratio is not None:
+            params["ratio"] = ratio
+        if cwd is not None:
+            params["cwd"] = cwd
+        if env is not None:
+            params["env"] = env
+        resp = await self._rpc("pane.split", params)
+        return resp.get("result", {})
+
+    async def swap_panes(
+        self,
+        source_pane_id: Optional[str] = None,
+        target_pane_id: Optional[str] = None,
+        direction: Optional[str] = None,
+    ) -> Dict[str, Any]:
+        """Swap two panes or move a pane in a direction (Protocol 22 pane.swap)."""
+        params: Dict[str, Any] = {}
+        if source_pane_id is not None:
+            params["source_pane_id"] = source_pane_id
+        if target_pane_id is not None:
+            params["target_pane_id"] = target_pane_id
+        if direction is not None:
+            params["direction"] = direction
+        resp = await self._rpc("pane.swap", params)
+        return resp.get("result", {})
+
+    async def current_pane(
+        self,
+        caller_pane_id: Optional[str] = None,
+    ) -> Dict[str, Any]:
+        """Get the current active pane (Protocol 22 pane.current)."""
+        params: Dict[str, Any] = {}
+        if caller_pane_id is not None:
+            params["caller_pane_id"] = caller_pane_id
+        resp = await self._rpc("pane.current", params)
+        return resp.get("result", {})
+
+    async def get_pane_layout(
+        self,
+        pane_id: Optional[str] = None,
+    ) -> Dict[str, Any]:
+        """Get layout information for a pane or active layout (Protocol 22 pane.layout)."""
+        params: Dict[str, Any] = {}
+        if pane_id is not None:
+            params["pane_id"] = pane_id
+        resp = await self._rpc("pane.layout", params)
+        return resp.get("result", {})
+
     async def create_tab(
         self,
         workspace_id: Optional[str] = None,

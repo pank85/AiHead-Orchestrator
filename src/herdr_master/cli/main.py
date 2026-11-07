@@ -27,6 +27,7 @@ from herdr_master.pipeline.council import CouncilError
 from herdr_master.pipeline.launcher import (
     COUNCIL_COORDINATOR_NAME,
     LaunchContextError,
+    launch_ai_head,
     launch_council,
     launch_ergo,
     launch_master,
@@ -446,6 +447,148 @@ def run_council(
         os.execvp("herdr", ["herdr", "--session", target_session])
 
 
+@app.command("aihead")
+@app.command("head")
+def run_aihead(
+    harness: Optional[str] = typer.Option(
+        None,
+        "--harness",
+        help="Harness override (agy, pi, claude, opencode).",
+    ),
+    model: Optional[str] = typer.Option(
+        None,
+        "--model",
+        help="Model slug override.",
+    ),
+    effort: Optional[str] = typer.Option(
+        None,
+        "--effort",
+        help="Reasoning effort override (low, medium, high, max).",
+    ),
+    split: Optional[bool] = typer.Option(
+        None,
+        "--split/--no-split",
+        help="Split active Herdr terminal screen so AiHead becomes primary and active pane becomes secondary.",
+    ),
+    secondary: bool = typer.Option(
+        False,
+        "--secondary",
+        help="Enforce screen split with active pane becoming secondary.",
+    ),
+    workspace: Optional[str] = typer.Option(
+        None,
+        "--workspace",
+        "-w",
+        help="Target workspace label or ID (creates standalone tab/workspace).",
+    ),
+    task: Optional[str] = typer.Option(
+        None,
+        "--task",
+        "-t",
+        help="Initial instruction or objective for AiHead.",
+    ),
+    session: Optional[str] = typer.Option(
+        None,
+        "--session",
+        help=_SESSION_HELP,
+    ),
+    attach: bool = typer.Option(
+        True,
+        "--attach/--no-attach",
+        help="Attach to Herdr if outside Herdr",
+    ),
+    config: Optional[Path] = typer.Option(
+        None,
+        "--config",
+        help="Optional path to .herdr-master.toml configuration file.",
+    ),
+):
+    """Launch an interactive AiHead terminal session."""
+    try:
+        ctx = resolve_launch_context(session)
+        project_cfg = load_project_config(config)
+        head_cfg = project_cfg.ai_head
+
+        eff_harness = (
+            harness
+            if harness is not None
+            else (head_cfg.binding.kind.value if head_cfg.binding and head_cfg.binding.kind else None)
+        )
+        eff_model = (
+            model
+            if model is not None
+            else (head_cfg.binding.model if head_cfg.binding else None)
+        )
+        eff_effort = (
+            effort
+            if effort is not None
+            else (head_cfg.binding.effort.value if head_cfg.binding and head_cfg.binding.effort else None)
+        )
+
+        if secondary:
+            effective_split = True
+        elif split is not None:
+            effective_split = split
+        else:
+            effective_split = head_cfg.split if head_cfg is not None else True
+
+        kind, model_slug, effort_level = resolve_coordinator_binding(eff_harness, eff_model, eff_effort)
+    except _RESOLVE_ERRORS as err:
+        _abort(str(err))
+
+    client = HerdrClient(session=ctx.session_name, socket_path=ctx.socket_path)
+
+    async def _run():
+        return await launch_ai_head(
+            client=client,
+            harness=kind,
+            model=model_slug,
+            effort=effort_level,
+            split=effective_split,
+            workspace=workspace,
+            initial_task=task,
+            session=session,
+            config_path=config,
+        )
+
+    shown = f"{kind.value} {model_slug}"
+    if effort_level is not None:
+        shown = f"{shown} effort {effort_level.value}"
+    console.print(f"[bold cyan]🤖 Launching AiHead[/bold cyan] ({shown})...")
+    res = asyncio.run(_run())
+
+    if isinstance(res, dict):
+        ws_id = res.get("workspace_id")
+        pane_id = res.get("pane_id")
+        target_session = res.get("session", ctx.session_name)
+        is_split = res.get("split", False)
+        sec_pane = res.get("secondary_pane_id")
+    else:
+        ws_id = None
+        pane_id = None
+        target_session = ctx.session_name
+        is_split = False
+        sec_pane = None
+
+    if is_split and sec_pane:
+        console.print(
+            f"[green]✓[/green] AiHead active in session [cyan]{target_session}[/cyan], "
+            f"workspace [cyan]{ws_id}[/cyan], primary pane [cyan]{pane_id}[/cyan] "
+            f"(split layout, secondary pane [cyan]{sec_pane}[/cyan])"
+        )
+    else:
+        console.print(
+            f"[green]✓[/green] AiHead active in session [cyan]{target_session}[/cyan], "
+            f"workspace [cyan]{ws_id}[/cyan], pane [cyan]{pane_id}[/cyan]"
+        )
+
+    if not ctx.is_inside_herdr and attach:
+        console.print(
+            f"[yellow]Attaching to isolated Herdr session '{target_session}'...[/yellow]"
+        )
+        os.execvp("herdr", ["herdr", "--session", target_session])
+
+
 @app.command("aihead-cli")
 def aihead_cli_cmd(
     request_file: Optional[Path] = typer.Option(
@@ -847,20 +990,38 @@ def tui(
         help="Run TUI in demo mode with pre-populated Ergo pipeline data",
     ),
 ):
-    """Launch the interactive terminal management dashboard (TUI)."""
-    from herdr_master.ui.tui.app import HerdrMasterApp
+    """Launch the interactive terminal management cockpit (AiHeadDev)."""
+    import shutil
+    executable = shutil.which("aiheaddev") or shutil.which("aihead")
+    if executable:
+        argv = [executable]
+        if session:
+            argv.extend(["--session", session])
+        if demo:
+            argv.append("--demo")
+        os.execvp(executable, argv)
 
-    tui_app = HerdrMasterApp(session=session, demo=demo)
-    result = tui_app.run()
-    if isinstance(result, dict) and result.get("action") == "attach":
-        target_session = result.get("session", session)
-        console.print(
-            f"[yellow]Attaching to isolated Herdr session '{target_session}'...[/yellow]"
-        )
-        os.execvp("herdr", ["herdr", "--session", target_session])
-    elif isinstance(result, dict) and result.get("action") == "done":
-        ws_id = result.get("workspace_id")
-        console.print(f"[green]✓[/green] Active in workspace [cyan]{ws_id}[/cyan]")
+    # Check if module is importable via current python
+    try:
+        import importlib.util
+        if importlib.util.find_spec("aiheaddev") is not None:
+            cmd = [sys.executable, "-m", "aiheaddev.cli"]
+            if session:
+                cmd.extend(["--session", session])
+            if demo:
+                cmd.append("--demo")
+            os.execvp(sys.executable, cmd)
+    except Exception:
+        pass
+
+    console.print(
+        "[bold red]AiHeadDev cockpit is not installed.[/bold red]\n"
+        "The TUI cockpit has been decoupled into an independent distribution.\n\n"
+        "Install it via:\n"
+        "  [cyan]pip install aiheaddev[/cyan] (or [cyan]uv pip install aiheaddev[/cyan])\n"
+        "Repository: https://github.com/pank85/AiHeadDev"
+    )
+    raise typer.Exit(code=1)
 
 
 def _workspace_id(result: dict) -> Optional[str]:
