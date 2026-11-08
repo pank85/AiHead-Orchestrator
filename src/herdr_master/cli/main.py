@@ -497,6 +497,13 @@ def run_aihead(
         "--attach/--no-attach",
         help="Attach to Herdr if outside Herdr",
     ),
+    cwd: Optional[Path] = typer.Option(
+        None,
+        "--cwd",
+        "--folder",
+        "-C",
+        help="Initial folder/directory for AiHead to work in.",
+    ),
     config: Optional[Path] = typer.Option(
         None,
         "--config",
@@ -548,6 +555,7 @@ def run_aihead(
             workspace=workspace,
             initial_task=task,
             session=session,
+            cwd=str(cwd.resolve()) if cwd else None,
             config_path=config,
         )
 
