@@ -237,3 +237,47 @@ async def test_prompt_agent_custom_max_attempts(monkeypatch: pytest.MonkeyPatch)
 
     assert client._rpc.call_count == 2
     assert len(sleep_calls) == 1
+
+
+@pytest.mark.asyncio
+async def test_client_start_agent_agent_name_taken_clears_authority_and_retries(
+    monkeypatch: pytest.MonkeyPatch,
+):
+    """Verify that start_agent extracts candidate panes on agent_name_taken and clears authority."""
+    client = HerdrClient(socket_path="/tmp/fake.sock")
+    taken_err = HerdrRPCError(
+        "agent_name_taken",
+        "agent name ai-head is already used; candidates: terminal_id=t1 pane_id=wF:p99 workspace_id=wF status=Unknown",
+    )
+    rpc_calls = []
+
+    async def mock_rpc(method: str, params: dict, **kwargs):
+        rpc_calls.append((method, params))
+        if method == "agent.start" and len(rpc_calls) == 1:
+            raise taken_err
+        return {"result": {"type": "ok"}}
+
+    client._rpc = AsyncMock(side_effect=mock_rpc)
+    monkeypatch.setattr(asyncio, "sleep", AsyncMock())
+
+    res = await client.start_agent("ai-head", "opencode", "wF:p10")
+    assert res == {"type": "ok"}
+    # Verify pane.clear_agent_authority was called on candidate pane and target pane
+    cleared_panes = [p["pane_id"] for m, p in rpc_calls if m == "pane.clear_agent_authority"]
+    assert "wF:p99" in cleared_panes
+    assert "wF:p10" in cleared_panes
+
+
+@pytest.mark.asyncio
+async def test_client_close_pane_and_clear_agent_authority():
+    """Verify close_pane and clear_agent_authority RPC calls."""
+    client = HerdrClient(socket_path="/tmp/fake.sock")
+    client._rpc = AsyncMock(return_value={"result": {"type": "ok"}})
+
+    res_close = await client.close_pane("pane-1")
+    assert res_close == {"type": "ok"}
+    client._rpc.assert_called_with("pane.close", {"pane_id": "pane-1"})
+
+    res_clear = await client.clear_agent_authority("pane-1")
+    assert res_clear == {"type": "ok"}
+    client._rpc.assert_called_with("pane.clear_agent_authority", {"pane_id": "pane-1"})

@@ -2,6 +2,7 @@
 
 import asyncio
 from pathlib import Path
+import re
 from typing import Any, Dict, List, Optional, Union
 
 from herdr_master.core.context import resolve_herdr_context
@@ -178,6 +179,18 @@ class HerdrClient:
         resp = await self._rpc("tab.close", params)
         return resp.get("result", {})
 
+    async def close_pane(self, pane_id: str) -> Dict[str, Any]:
+        """Close an existing pane."""
+        params = {"pane_id": pane_id}
+        resp = await self._rpc("pane.close", params)
+        return resp.get("result", {})
+
+    async def clear_agent_authority(self, pane_id: str) -> Dict[str, Any]:
+        """Clear agent authority on a pane if a dead or crashed agent held it."""
+        params = {"pane_id": pane_id}
+        resp = await self._rpc("pane.clear_agent_authority", params)
+        return resp.get("result", {})
+
     async def focus_tab(self, tab_id: str) -> Dict[str, Any]:
         """Focus a specific tab within its workspace."""
         params = {"tab_id": tab_id}
@@ -216,6 +229,16 @@ class HerdrClient:
                 last_err = err
                 if err.code == "agent_pane_busy" or "not an available shell" in err.message:
                     if attempt < 24:
+                        await asyncio.sleep(0.3)
+                        continue
+                if err.code == "agent_name_taken":
+                    cand_panes = set(re.findall(r"pane_id=([^\s,]+)", err.message)) | {pane_id}
+                    for p in cand_panes:
+                        try:
+                            await self._rpc("pane.clear_agent_authority", {"pane_id": p})
+                        except Exception:
+                            pass
+                    if attempt < 2:
                         await asyncio.sleep(0.3)
                         continue
                 raise

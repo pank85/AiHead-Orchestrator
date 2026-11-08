@@ -1348,3 +1348,51 @@ async def test_ensure_herdr_ai_head_reconciles_unknown_workspace_id():
         focus=False,
     )
 
+
+@pytest.mark.asyncio
+async def test_ensure_herdr_ai_head_falls_back_to_new_tab_on_stale_pane_failure():
+    """Verify that when start_agent fails on a stale dead pane, the stale tab is closed and a new one is created."""
+    client = MagicMock(spec=HerdrClient)
+    cfg = AiHeadConfig(enabled=True)
+
+    dead_snap = SessionSnapshot(
+        protocol=22,
+        workspaces=[WorkspaceSnapshot(workspace_id="ws-1", label="default")],
+        tabs=[TabSnapshot(tab_id="tab-stale", workspace_id="ws-1", label="ai-head")],
+        panes=[PaneSnapshot(pane_id="pane-stale", workspace_id="ws-1", tab_id="tab-stale")],
+        agents=[
+            AgentSnapshot(
+                pane_id="pane-stale",
+                name="ai-head",
+                agent_status="dead",
+            )
+        ],
+    )
+    client.get_snapshot = AsyncMock(return_value=dead_snap)
+    client.close_tab = AsyncMock(return_value={"type": "ok"})
+    client.create_tab = AsyncMock(return_value={"tab_id": "tab-new", "pane_id": "pane-new"})
+    client.prompt_agent = AsyncMock(return_value={"type": "agent_prompted"})
+
+    # First start_agent call on pane-stale fails, second call on pane-new succeeds
+    call_count = 0
+
+    async def mock_start_agent(**kwargs):
+        nonlocal call_count
+        call_count += 1
+        if kwargs.get("pane_id") == "pane-stale":
+            raise HerdrRPCError("agent_launch_failed", "shell process died")
+        return {"status": "started"}
+
+    client.start_agent = AsyncMock(side_effect=mock_start_agent)
+
+    res = await ensure_herdr_ai_head(
+        client, workspace_id="ws-1", head_config=cfg, origin_cwd="/repo"
+    )
+
+    assert res["reused"] is False
+    assert res["tab_id"] == "tab-new"
+    assert res["pane_id"] == "pane-new"
+    client.close_tab.assert_called_once_with("tab-stale")
+    client.create_tab.assert_called_once()
+    assert client.start_agent.call_count == 2
+

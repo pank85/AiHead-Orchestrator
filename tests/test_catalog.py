@@ -231,8 +231,12 @@ def test_prompt_effort_is_not_an_invented_flag():
     assert "--thinking" not in claude["argv"]
     assert claude["prompt_prefix"] == "think harder"
     opencode = describe_herdr_agent("opencode", "opencode-go/deepseek-v4.1-flash", "low", "coder")
-    assert opencode["argv"] == ["--model", "opencode-go/deepseek-v4.1-flash"]
+    assert opencode["argv"] == ["mini", "--model", "opencode-go/deepseek-v4.1-flash"]
     assert opencode["prompt_prefix"] == "think"
+    opencode_aliased = describe_herdr_agent(
+        "opencode", "openai-codex/gpt-6.1-sol", None, "architect"
+    )
+    assert opencode_aliased["argv"] == ["mini", "--model", "openai/gpt-6.1-sol"]
     with pytest.raises(ValueError, match="explicit --model"):
         build_agent_args("codex", "", None)
     with pytest.raises(ValueError, match="no effort flag"):

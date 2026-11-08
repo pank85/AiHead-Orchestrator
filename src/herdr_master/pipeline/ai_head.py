@@ -17,6 +17,7 @@ from __future__ import annotations
 import asyncio
 import inspect
 import json
+import os
 import re
 import tempfile
 import time
@@ -579,7 +580,12 @@ def build_headless_cli_argv(
     if kind_str == "opencode":
         argv = ["opencode", "run", "--format", "json"]
         if model_str:
-            argv.extend(["--model", model_str])
+            norm_model = (
+                "openai/" + model_str[len("openai-codex/") :]
+                if model_str.startswith("openai-codex/")
+                else model_str
+            )
+            argv.extend(["--model", norm_model])
         if prompt is not None:
             argv.append(prompt)
         return argv
@@ -1075,6 +1081,48 @@ async def ensure_herdr_ai_head(
             if needs_reconcile:
                 if kind_str == "agy" and effective_cwd:
                     _ensure_agy_trusted(effective_cwd)
+                try:
+                    await client.start_agent(
+                        name=agent_name,
+                        kind=kind_str,
+                        pane_id=target_pane.pane_id,
+                        args=agent_args,
+                        timeout_ms=30000,
+                    )
+                    persona_prompt = build_ai_head_system_prompt(head_config)
+                    await client.prompt_agent(target_pane.pane_id, persona_prompt)
+                    _save_running_head_state(
+                        effective_cwd, workspace_id, target_pane.pane_id, state_payload
+                    )
+                except Exception:
+                    try:
+                        await client.close_tab(target_tab.tab_id)
+                    except Exception:
+                        pass
+                    target_tab = None
+                    target_pane = None
+
+            if target_tab is not None and target_pane is not None:
+                return {
+                    "workspace_id": workspace_id,
+                    "tab_id": target_tab.tab_id,
+                    "pane_id": target_pane.pane_id,
+                    "reused": True,
+                    "enabled": True,
+                    "label": "ai-head",
+                    "agent_name": (agent_rec.name if agent_rec and agent_rec.name else agent_name),
+                    "kind": kind_str,
+                    "model": model_str,
+                    "busy": False,
+                    "reconciled": True,
+                    "status": "ready",
+                }
+        else:
+            # Pane exists but agent is dead / stopped / not running:
+            # Start configured agent on this pane so user gets a functioning agent!
+            if kind_str == "agy" and effective_cwd:
+                _ensure_agy_trusted(effective_cwd)
+            try:
                 await client.start_agent(
                     name=agent_name,
                     kind=kind_str,
@@ -1084,53 +1132,29 @@ async def ensure_herdr_ai_head(
                 )
                 persona_prompt = build_ai_head_system_prompt(head_config)
                 await client.prompt_agent(target_pane.pane_id, persona_prompt)
-                _save_running_head_state(
-                    effective_cwd, workspace_id, target_pane.pane_id, state_payload
-                )
-
-            return {
-                "workspace_id": workspace_id,
-                "tab_id": target_tab.tab_id,
-                "pane_id": target_pane.pane_id,
-                "reused": True,
-                "enabled": True,
-                "label": "ai-head",
-                "agent_name": (agent_rec.name if agent_rec and agent_rec.name else agent_name),
-                "kind": kind_str,
-                "model": model_str,
-                "busy": False,
-                "reconciled": True,
-                "status": "ready",
-            }
-        else:
-            # Pane exists but agent is dead / stopped / not running:
-            # Start configured agent on this pane so user gets a functioning agent!
-            if kind_str == "agy" and effective_cwd:
-                _ensure_agy_trusted(effective_cwd)
-            await client.start_agent(
-                name=agent_name,
-                kind=kind_str,
-                pane_id=target_pane.pane_id,
-                args=agent_args,
-                timeout_ms=30000,
-            )
-            persona_prompt = build_ai_head_system_prompt(head_config)
-            await client.prompt_agent(target_pane.pane_id, persona_prompt)
-            _save_running_head_state(effective_cwd, workspace_id, target_pane.pane_id, state_payload)
-            return {
-                "workspace_id": workspace_id,
-                "tab_id": target_tab.tab_id,
-                "pane_id": target_pane.pane_id,
-                "reused": True,
-                "enabled": True,
-                "label": "ai-head",
-                "agent_name": agent_name,
-                "kind": kind_str,
-                "model": model_str,
-                "busy": False,
-                "reconciled": True,
-                "status": "ready",
-            }
+                _save_running_head_state(effective_cwd, workspace_id, target_pane.pane_id, state_payload)
+                return {
+                    "workspace_id": workspace_id,
+                    "tab_id": target_tab.tab_id,
+                    "pane_id": target_pane.pane_id,
+                    "reused": True,
+                    "enabled": True,
+                    "label": "ai-head",
+                    "agent_name": agent_name,
+                    "kind": kind_str,
+                    "model": model_str,
+                    "busy": False,
+                    "reconciled": True,
+                    "status": "ready",
+                }
+            except Exception:
+                # If reusing stale dead pane fails, close stale tab and recreate below
+                try:
+                    await client.close_tab(target_tab.tab_id)
+                except Exception:
+                    pass
+                target_tab = None
+                target_pane = None
 
     # Tab not found or existing tab had no pane; create new tab
     if kind_str == "agy" and effective_cwd:
