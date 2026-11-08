@@ -1038,7 +1038,14 @@ def load_project_config(path: Optional[Union[str, Path]] = None) -> HerdrMasterC
     Returns default HerdrMasterConfig when the file does not exist.
     Raises errors on malformed files to prevent overwriting user configuration.
     """
-    config_path = Path(path).resolve() if path else find_project_config_path()
+    resolved_path = Path(path).resolve() if path else None
+    if resolved_path and resolved_path.is_dir():
+        config_path = find_project_config_path(resolved_path)
+    elif resolved_path:
+        config_path = resolved_path
+    else:
+        config_path = find_project_config_path()
+
     if config_path is None or not config_path.is_file():
         return HerdrMasterConfig()
 
