@@ -854,6 +854,10 @@ class AiHeadConfig(BaseModel):
     mode: Optional[str] = None
     split: bool = True
     cwd: Optional[str] = None
+    lesson_paths: List[str] = Field(default_factory=lambda: ["~/.herdr-master/lessons"])
+    brief_before_action: bool = True
+    autonomy: str = "routine"
+    close_foreign_tabs: bool = False
 
     @property
     def folder(self) -> Optional[str]:
@@ -976,6 +980,41 @@ class AiHeadConfig(BaseModel):
         if s not in ("herdr", "cli"):
             raise ValueError(
                 f"Unsupported execution mode '{v}'. Expected 'herdr' or 'cli'."
+            )
+        return s
+
+    @field_validator("lesson_paths", mode="before")
+    @classmethod
+    def _validate_lesson_paths(cls, v: Any) -> List[str]:
+        if not isinstance(v, list):
+            raise ValueError(
+                f"lesson_paths must be a list of path strings, got {type(v).__name__}"
+            )
+        validated: List[str] = []
+        for i, item in enumerate(v):
+            if not isinstance(item, str):
+                raise ValueError(
+                    f"lesson_paths entry at index {i} must be a string, got {type(item).__name__}"
+                )
+            stripped = item.strip()
+            if not stripped:
+                raise ValueError(
+                    f"lesson_paths entry at index {i} cannot be blank or empty"
+                )
+            validated.append(stripped)
+        return validated
+
+    @field_validator("autonomy")
+    @classmethod
+    def _validate_autonomy(cls, v: Any) -> str:
+        if not isinstance(v, str):
+            raise ValueError(
+                f"Unsupported autonomy '{v}'. Expected 'routine' or 'ask'."
+            )
+        s = v.strip().lower()
+        if s not in ("routine", "ask"):
+            raise ValueError(
+                f"Unsupported autonomy '{v}'. Expected 'routine' or 'ask'."
             )
         return s
 
