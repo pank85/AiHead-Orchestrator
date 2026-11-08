@@ -11,6 +11,7 @@ from pydantic import ValidationError
 from herdr_master.core.config import DEFAULT_AI_HEAD_SOUL, AiHeadConfig
 from herdr_master.core.models import EffortLevel, HarnessBinding, HarnessKind
 from herdr_master.herdr.client import HerdrClient
+from herdr_master.herdr.socket import HerdrRPCError
 from herdr_master.herdr.snapshot import (
     AgentSnapshot,
     PaneSnapshot,
