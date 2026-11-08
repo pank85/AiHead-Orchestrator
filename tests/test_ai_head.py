@@ -16,6 +16,7 @@ from herdr_master.herdr.snapshot import (
     PaneSnapshot,
     SessionSnapshot,
     TabSnapshot,
+    WorkspaceSnapshot,
 )
 from herdr_master.pipeline.ai_head import (
     CORE_WORKFLOWS,
@@ -1314,3 +1315,36 @@ def test_resolve_decision_artifact_path(tmp_path: Path):
     )
     resolved = resolve_decision_artifact_path(req_orch)
     assert resolved == tmp_path / ".orchestration" / "run-1" / "aihead_decision_req-orch.json"
+
+
+@pytest.mark.asyncio
+async def test_ensure_herdr_ai_head_reconciles_unknown_workspace_id():
+    """Verify that if caller passes a non-existent workspace_id (e.g. ws-01),
+    ensure_herdr_ai_head reconciles to the active workspace instead of failing."""
+    client = MagicMock(spec=HerdrClient)
+    snap = SessionSnapshot(
+        protocol=22,
+        focused_workspace_id="ws-live-focused",
+        workspaces=[WorkspaceSnapshot(workspace_id="ws-live-focused", label="live-workspace")],
+        tabs=[],
+        panes=[],
+    )
+    client.get_snapshot = AsyncMock(return_value=snap)
+    client.create_tab = AsyncMock(return_value={"tab_id": "tab-ai", "pane_id": "pane-ai"})
+    client.start_agent = AsyncMock(return_value={"status": "started"})
+    client.prompt_agent = AsyncMock(return_value={"type": "agent_prompted"})
+
+    cfg = AiHeadConfig(enabled=True)
+    res = await ensure_herdr_ai_head(
+        client, workspace_id="ws-01", head_config=cfg, origin_cwd="/repo"
+    )
+
+    assert res["workspace_id"] == "ws-live-focused"
+    assert res["tab_id"] == "tab-ai"
+    client.create_tab.assert_called_once_with(
+        workspace_id="ws-live-focused",
+        label="ai-head",
+        cwd="/repo",
+        focus=False,
+    )
+

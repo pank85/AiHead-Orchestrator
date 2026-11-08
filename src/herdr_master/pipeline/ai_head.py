@@ -977,6 +977,25 @@ async def ensure_herdr_ai_head(
 
     snapshot = await client.get_snapshot()
 
+    # Reconcile target workspace if requested workspace_id does not exist in snapshot
+    known_ws = {w.workspace_id: w for w in snapshot.workspaces}
+    tab_ws_ids = {t.workspace_id for t in snapshot.tabs if t.workspace_id}
+    all_known_ws = set(known_ws.keys()) | tab_ws_ids
+
+    if not all_known_ws:
+        ws_res = await client.create_workspace(label="default")
+        workspace_id = ws_res.get("workspace_id") or "default"
+    elif workspace_id not in all_known_ws:
+        if snapshot.focused_workspace_id and snapshot.focused_workspace_id in known_ws:
+            workspace_id = snapshot.focused_workspace_id
+        elif snapshot.workspaces:
+            workspace_id = snapshot.workspaces[0].workspace_id
+        elif tab_ws_ids:
+            workspace_id = next(iter(tab_ws_ids))
+        else:
+            ws_res = await client.create_workspace(label="default")
+            workspace_id = ws_res.get("workspace_id") or "default"
+
     # Search for an existing 'ai-head' tab with an associated pane
     target_tab: Optional[TabSnapshot] = None
     target_pane: Optional[PaneSnapshot] = None
