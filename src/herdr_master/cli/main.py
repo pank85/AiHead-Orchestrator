@@ -28,7 +28,7 @@ from herdr_master.cli.catalog import catalog_app
 from herdr_master.cli.skills import install_skills as run_install_skills
 from herdr_master.cli.skills import skills_app
 from herdr_master.core.catalog import CatalogError, supported_harnesses
-from herdr_master.core.config import find_project_config_path, load_project_config
+from herdr_master.core.config import CouncilConfig, find_project_config_path, load_project_config
 from herdr_master.core.context import HerdrContext
 from herdr_master.core.slug import InvalidBindingSlugError
 from herdr_master.herdr.client import HerdrClient
@@ -438,7 +438,9 @@ def run_council(
             members = [s.strip() for s in roster.split(",") if s.strip()]
             if len(members) < 2:
                 _abort("Council requires at least 2 members.")
-            council_cfg = council_cfg.model_copy(update={"members": members})
+            council_cfg = CouncilConfig.model_validate(
+                {**council_cfg.model_dump(), "members": members}
+            )
     except _RESOLVE_ERRORS as err:
         _abort(str(err))
 

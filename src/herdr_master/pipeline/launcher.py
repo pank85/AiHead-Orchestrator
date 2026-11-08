@@ -482,6 +482,19 @@ async def _start_and_prompt(
             await watcher
         except asyncio.CancelledError:
             pass
+
+    # Ensure agent has booted and registered with Herdr before prompting
+    pane_target = allocated.pane_id or ""
+    for _ in range(30):
+        try:
+            res = await _safe_await(allocated.client.get_agent, pane_target)
+            agent_obj = res.get("agent") if isinstance(res, dict) else None
+            if agent_obj and agent_obj.get("agent_status") in ("idle", "working", "blocked"):
+                break
+        except Exception:
+            pass
+        await asyncio.sleep(0.5)
+
     await _safe_await(allocated.client.prompt_agent, allocated.pane_id or "", prompt)
     if not focus:
         return
