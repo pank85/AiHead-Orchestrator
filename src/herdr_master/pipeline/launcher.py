@@ -1085,6 +1085,7 @@ async def launch_ai_head(
     config_path: Optional[Path] = None,
     name: str = "ai-head",
     focus: bool = True,
+    dangerously_skip_permissions: Optional[bool] = None,
 ) -> Dict[str, Any]:
     """Launch an interactive AiHead terminal session.
 
@@ -1132,6 +1133,15 @@ async def launch_ai_head(
         if effort is not None
         else (head_config.binding.effort if head_config and head_config.binding else None)
     )
+    eff_skip = (
+        dangerously_skip_permissions
+        if dangerously_skip_permissions is not None
+        else (
+            head_config.dangerously_skip_permissions
+            if head_config is not None
+            else True
+        )
+    )
     effective_split = (
         split
         if split is not None
@@ -1139,7 +1149,13 @@ async def launch_ai_head(
     )
 
     kind, model_slug, effort_level = resolve_coordinator_binding(eff_harness, eff_model, eff_effort)
-    descriptor = _host_launch(kind.value, model_slug, effort_level, "master")
+    descriptor = _host_launch(
+        kind.value,
+        model_slug,
+        effort_level,
+        "master",
+        dangerously_skip_permissions=eff_skip,
+    )
 
     ctx = resolve_launch_context(session)
 

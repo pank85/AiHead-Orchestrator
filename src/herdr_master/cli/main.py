@@ -490,6 +490,11 @@ def run_aihead(
         "--effort",
         help="Reasoning effort override (low, medium, high, max).",
     ),
+    dangerously_skip_permissions: Optional[bool] = typer.Option(
+        None,
+        "--skip-permissions/--no-skip-permissions",
+        help="Override AiHead dangerously_skip_permissions. Omitted uses saved config, then True.",
+    ),
     split: Optional[bool] = typer.Option(
         None,
         "--split/--no-split",
@@ -568,6 +573,11 @@ def run_aihead(
     except _RESOLVE_ERRORS as err:
         _abort(str(err))
 
+    eff_skip = (
+        dangerously_skip_permissions
+        if dangerously_skip_permissions is not None
+        else head_cfg.dangerously_skip_permissions
+    )
     client = HerdrClient(session=ctx.session_name, socket_path=ctx.socket_path)
 
     async def _run():
@@ -576,6 +586,7 @@ def run_aihead(
             harness=kind,
             model=model_slug,
             effort=effort_level,
+            dangerously_skip_permissions=eff_skip,
             split=effective_split,
             workspace=workspace,
             initial_task=task,
@@ -1295,6 +1306,7 @@ async def _dispatch_standalone_aihead(
     kind: Any,
     model_slug: str,
     effort_level: Any,
+    dangerously_skip_permissions: bool,
     effective_split: bool,
     workspace: Optional[str],
     task: Optional[str],
@@ -1351,6 +1363,7 @@ async def _dispatch_standalone_aihead(
             harness=kind,
             model=model_slug,
             effort=effort_level,
+            dangerously_skip_permissions=dangerously_skip_permissions,
             split=effective_split,
             workspace=launch_workspace,
             initial_task=task,
@@ -1408,6 +1421,11 @@ def launch_standalone_aihead(
         None,
         "--effort",
         help="Reasoning effort override (low, medium, high, max).",
+    ),
+    dangerously_skip_permissions: Optional[bool] = typer.Option(
+        None,
+        "--skip-permissions/--no-skip-permissions",
+        help="Override AiHead dangerously_skip_permissions. Omitted uses saved config, then True.",
     ),
     split: Optional[bool] = typer.Option(
         None,
@@ -1502,6 +1520,11 @@ def launch_standalone_aihead(
             eff_model,
             eff_effort,
         )
+        eff_skip = (
+            dangerously_skip_permissions
+            if dangerously_skip_permissions is not None
+            else head_cfg.dangerously_skip_permissions
+        )
         effective_cwd = _effective_aihead_cwd(cwd, head_cfg.cwd if head_cfg else None)
     except _RESOLVE_ERRORS as err:
         _abort(str(err))
@@ -1514,6 +1537,7 @@ def launch_standalone_aihead(
                 kind=kind,
                 model_slug=model_slug,
                 effort_level=effort_level,
+                dangerously_skip_permissions=eff_skip,
                 effective_split=_effective_split(
                     secondary,
                     split,

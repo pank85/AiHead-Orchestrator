@@ -802,73 +802,58 @@ def build_headless_cli_argv(
     head_config: AiHeadConfig,
     prompt: Optional[str] = None,
 ) -> List[str]:
-    """Build direct CLI invocation argv without any Herdr dependency.
+    """Build a native headless CLI argv from the shared harness catalog.
 
-    Harnesses execute directly via native headless CLI runner:
-    - opencode: opencode run --format json [--model <model>] [<prompt>]
-    - agy: agy --output-format json --dangerously-skip-permissions
-           [--model <model>] [--effort <effort>] [--prompt <prompt>]
-    - claude: claude -p --dangerously-skip-permissions [--model <model>] [<prompt>]
-    - pi: pi -p --mode json [--model <model>] [--thinking <effort>] [-- <prompt>]
+    The catalog tail supplies model, effort, and permission flags. This
+    function adds only the native runner prefix and prompt separator, so
+    those flags are not duplicated. OpenCode drops only a leading ``mini``.
     """
     kind_str = (
         head_config.binding.kind.value
         if isinstance(head_config.binding.kind, HarnessKind)
         else str(head_config.binding.kind)
     )
+    if kind_str not in SUPPORTED_CLI_HARNESSES:
+        raise ValueError(
+            f"Harness '{kind_str}' does not support headless direct CLI execution. "
+            f"Supported CLI harnesses: {', '.join(sorted(SUPPORTED_CLI_HARNESSES))}."
+        )
     model_str = head_config.binding.model
     effort_str = (
         head_config.binding.effort.value
         if isinstance(head_config.binding.effort, EffortLevel)
         else (str(head_config.binding.effort) if head_config.binding.effort else None)
     )
+    tail = build_agent_args(
+        kind_str,
+        model_str,
+        effort_str,
+        skip_permissions=head_config.dangerously_skip_permissions,
+    )
+    if kind_str == "opencode" and tail[:1] == ["mini"]:
+        tail = tail[1:]
 
     if kind_str == "opencode":
-        argv = ["opencode", "run", "--format", "json"]
-        if model_str:
-            norm_model = (
-                "openai/" + model_str[len("openai-codex/") :]
-                if model_str.startswith("openai-codex/")
-                else model_str
-            )
-            argv.extend(["--model", norm_model])
-        if prompt is not None:
-            argv.append(prompt)
-        return argv
-
+        argv = ["opencode", "run", "--format", "json", *tail]
     elif kind_str == "agy":
-        argv = ["agy", "--output-format", "json", "--dangerously-skip-permissions"]
-        if model_str:
-            argv.extend(["--model", model_str])
-        if effort_str:
-            argv.extend(["--effort", effort_str])
-        if prompt is not None:
-            argv.extend(["--prompt", prompt])
-        return argv
-
+        argv = ["agy", "--output-format", "json", *tail]
     elif kind_str == "claude":
-        argv = ["claude", "-p", "--dangerously-skip-permissions"]
-        if model_str:
-            argv.extend(["--model", model_str])
-        if prompt is not None:
-            argv.append(prompt)
-        return argv
-
+        argv = ["claude", "-p", *tail]
     elif kind_str == "pi":
-        argv = ["pi", "-p", "--mode", "json"]
-        if model_str:
-            argv.extend(["--model", model_str])
-        if effort_str:
-            argv.extend(["--thinking", effort_str])
-        if prompt is not None:
-            argv.extend(["--", prompt])
-        return argv
-
+        argv = ["pi", "-p", "--mode", "json", *tail]
     else:
         raise ValueError(
             f"Harness '{kind_str}' does not support headless direct CLI execution. "
             f"Supported CLI harnesses: {', '.join(sorted(SUPPORTED_CLI_HARNESSES))}."
         )
+    if prompt is not None:
+        if kind_str == "agy":
+            argv.extend(["--prompt", prompt])
+        elif kind_str == "pi":
+            argv.extend(["--", prompt])
+        else:
+            argv.append(prompt)
+    return argv
 
 
 # ---------------------------------------------------------------------------
@@ -1223,7 +1208,12 @@ async def ensure_herdr_ai_head(
         if isinstance(head_config.binding.effort, EffortLevel)
         else (str(head_config.binding.effort) if head_config.binding.effort else None)
     )
-    agent_args = build_agent_args(kind_str, model_str, effort_str, skip_permissions=True)
+    agent_args = build_agent_args(
+        kind_str,
+        model_str,
+        effort_str,
+        skip_permissions=head_config.dangerously_skip_permissions,
+    )
     agent_name = "ai-head"
     state_payload = {
         "kind": kind_str,

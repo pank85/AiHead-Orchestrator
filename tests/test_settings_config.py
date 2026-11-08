@@ -1,9 +1,15 @@
 """Comprehensive test suite for HerdrMaster settings configuration and safe persistence."""
 
 import os
+import sys
 import tempfile
 from pathlib import Path
 from unittest.mock import patch
+
+if sys.version_info >= (3, 11):
+    import tomllib
+else:
+    import tomli as tomllib
 
 import pytest
 from pydantic import ValidationError
@@ -13,6 +19,7 @@ from herdr_master.core.config import (
     DEFAULT_AI_HEAD_SOUL,
     DEFAULT_ORCHESTRATION_MODELS,
     AiHeadConfig,
+    default_ai_head_binding,
     CouncilConfig,
     CouncilMember,
     FavoriteProject,
@@ -364,6 +371,7 @@ def test_ai_head_config_disabled_by_default_and_roundtrip(tmp_path):
     assert cfg.ai_head.soul == DEFAULT_AI_HEAD_SOUL
     assert cfg.ai_head.harness == HarnessKind.PI
     assert cfg.ai_head.model == "openai-codex/gpt-6.1-sol"
+    assert cfg.ai_head.dangerously_skip_permissions is True
 
     # Explicit customization
     cfg.ai_head.enabled = True
@@ -383,6 +391,7 @@ def test_ai_head_config_disabled_by_default_and_roundtrip(tmp_path):
     assert reloaded.ai_head.model == "gemini-3.8-flash-high"
     assert reloaded.ai_head.effort == EffortLevel.HIGH
     assert reloaded.ai_head.mode == "herdr"
+    assert reloaded.ai_head.dangerously_skip_permissions is True
 
 
 def test_ai_head_soul_workflow_knowledge_and_selection_rules():
@@ -756,3 +765,237 @@ def test_orchestration_profiles_and_per_harness_aliases():
     cfg2 = OrchestrationConfig.model_validate(data_profiles)
     assert "pi" in cfg2.harnesses
     assert cfg2.harnesses["pi"].scout_model == "anthropic/claude-3-5-sonnet"
+
+
+@pytest.mark.parametrize("dangerously_skip_permissions", [True, False])
+@pytest.mark.parametrize(
+    "effort",
+    [None, EffortLevel.LOW, EffortLevel.HIGH, EffortLevel.MAX],
+)
+def test_ai_head_permission_and_effort_parameterized_roundtrip(
+    tmp_path, dangerously_skip_permissions, effort
+):
+    """Parameterized round-trip coverage for permission True/False crossed with set/unset effort."""
+    cfg = HerdrMasterConfig()
+    cfg.ai_head.dangerously_skip_permissions = dangerously_skip_permissions
+    cfg.ai_head.effort = effort
+
+    # Verify effort property reflects binding
+    assert cfg.ai_head.effort == effort
+    assert cfg.ai_head.binding.effort == effort
+
+    save_path = tmp_path / f"config_{dangerously_skip_permissions}_{effort}.toml"
+    save_project_config(cfg, save_path)
+
+    # Inspect raw TOML representation
+    toml_text = save_path.read_text(encoding="utf-8")
+    if dangerously_skip_permissions:
+        assert "dangerously_skip_permissions = true" in toml_text
+    else:
+        assert "dangerously_skip_permissions = false" in toml_text
+
+    with open(save_path, "rb") as f:
+        saved_dict = tomllib.load(f)
+
+    ai_head_binding_dict = saved_dict.get("ai_head", {}).get("binding", {})
+    if effort is None:
+        # exclude_none=True removes the effort key entirely from the ai_head binding table
+        assert "effort" not in ai_head_binding_dict
+    else:
+        assert ai_head_binding_dict.get("effort") == effort.value
+
+    # Reload from TOML and verify canonical deserialization
+    reloaded = load_project_config(save_path)
+    assert reloaded.ai_head.dangerously_skip_permissions is dangerously_skip_permissions
+    assert reloaded.ai_head.effort == effort
+    assert reloaded.ai_head.binding.effort == effort
+    if effort is None:
+        assert reloaded.ai_head.binding.effort is None
+
+
+def test_ai_head_old_config_default_permission(tmp_path):
+    """Legacy configurations without dangerously_skip_permissions default to True."""
+    old_toml = tmp_path / ".herdr-master.toml"
+    old_toml.write_text(
+        """
+[general]
+default_session = "legacy"
+
+[ai_head]
+enabled = true
+[ai_head.binding]
+kind = "pi"
+model = "openai-codex/gpt-6.1-sol"
+effort = "max"
+""",
+        encoding="utf-8",
+    )
+
+    reloaded = load_project_config(old_toml)
+    assert reloaded.ai_head.dangerously_skip_permissions is True
+    assert reloaded.ai_head.effort == EffortLevel.MAX
+
+    # Also test legacy flat input without dangerously_skip_permissions
+    raw_dict = {
+        "harness": "pi",
+        "model": "openai-codex/gpt-6.1-sol",
+    }
+    cfg = AiHeadConfig.model_validate(raw_dict)
+    assert cfg.dangerously_skip_permissions is True
+
+
+def test_ai_head_legacy_flat_inputs_and_effort_consumption():
+    """Effort-only legacy input triggers binding construction and is consumed into binding."""
+    # 1. Effort alone
+    cfg1 = AiHeadConfig(effort="high")
+    assert cfg1.effort == EffortLevel.HIGH
+    assert cfg1.binding.effort == EffortLevel.HIGH
+    base = default_ai_head_binding()
+    assert cfg1.binding.kind == base.kind
+    assert cfg1.binding.model == base.model
+    # Consumed into binding, not an unused extra
+    assert not cfg1.__pydantic_extra__ or "effort" not in cfg1.__pydantic_extra__
+    assert "effort" not in cfg1.model_dump(exclude={"binding"})
+
+    # 2. Effort alone with EffortLevel enum
+    cfg2 = AiHeadConfig(effort=EffortLevel.LOW)
+    assert cfg2.effort == EffortLevel.LOW
+    assert cfg2.binding.effort == EffortLevel.LOW
+    assert not cfg2.__pydantic_extra__ or "effort" not in cfg2.__pydantic_extra__
+
+    # 3. Explicit None stays unset
+    cfg_none = AiHeadConfig(effort=None)
+    assert cfg_none.effort is None
+    assert cfg_none.binding.effort is None
+    assert not cfg_none.__pydantic_extra__ or "effort" not in cfg_none.__pydantic_extra__
+
+    # 4. Mixed legacy input with explicit None
+    cfg_mixed_none = AiHeadConfig(
+        harness="pi", model="openai-codex/gpt-6.1-sol", effort=None
+    )
+    assert cfg_mixed_none.effort is None
+    assert cfg_mixed_none.binding.effort is None
+
+    # 5. Missing flat effort key retains catalog-derived default
+    cfg_missing = AiHeadConfig(harness="pi", model="openai-codex/gpt-6.1-sol")
+    assert cfg_missing.effort == base.effort
+    assert cfg_missing.binding.effort == base.effort
+
+    # 6. Authoritative explicit binding preserved
+    explicit_b = HarnessBinding(
+        kind=HarnessKind.PI, model="openai-codex/gpt-6.1-sol", effort=None
+    )
+    cfg_explicit = AiHeadConfig(binding=explicit_b)
+    assert cfg_explicit.effort is None
+    assert cfg_explicit.binding.effort is None
+
+
+def test_ai_head_property_assignment():
+    """AiHeadConfig.effort and dangerously_skip_permissions property assignments work correctly."""
+    cfg = AiHeadConfig()
+
+    # Set effort via EffortLevel
+    cfg.effort = EffortLevel.LOW
+    assert cfg.effort == EffortLevel.LOW
+    assert cfg.binding.effort == EffortLevel.LOW
+
+    # Set effort via lowercase string
+    cfg.effort = "high"
+    assert cfg.effort == EffortLevel.HIGH
+    assert cfg.binding.effort == EffortLevel.HIGH
+
+    # Set effort via uppercase string
+    cfg.effort = "MAX"
+    assert cfg.effort == EffortLevel.MAX
+    assert cfg.binding.effort == EffortLevel.MAX
+
+    # Set effort to None (unset)
+    cfg.effort = None
+    assert cfg.effort is None
+    assert cfg.binding.effort is None
+
+    # Permission flag assignments
+    cfg.dangerously_skip_permissions = False
+    assert cfg.dangerously_skip_permissions is False
+    cfg.dangerously_skip_permissions = True
+    assert cfg.dangerously_skip_permissions is True
+
+
+def test_ai_head_invalid_effort_rejected():
+    """Invalid effort levels are rejected via validation and property assignment."""
+    with pytest.raises(ValidationError):
+        AiHeadConfig(effort="turbo")
+
+    with pytest.raises(ValidationError):
+        AiHeadConfig(harness="pi", model="openai-codex/gpt-6.1-sol", effort="invalid")
+
+    cfg = AiHeadConfig()
+    with pytest.raises(ValueError):
+        cfg.effort = "turbo"
+
+    with pytest.raises(ValueError):
+        cfg.effort = "invalid"
+
+
+def test_ai_head_settings_preserved_during_squad_update(tmp_path):
+    """AiHead dangerously_skip_permissions and effort (including None) survive squad update."""
+    # 1. Test with dangerously_skip_permissions=False and effort=None
+    cfg = HerdrMasterConfig()
+    cfg.ai_head.dangerously_skip_permissions = False
+    cfg.ai_head.effort = None
+
+    save_path = tmp_path / ".herdr-master.toml"
+    save_project_config(cfg, save_path)
+
+    loaded = load_project_config(save_path)
+    assert loaded.ai_head.dangerously_skip_permissions is False
+    assert loaded.ai_head.effort is None
+
+    new_squad = Squad(
+        scout=HarnessBinding.from_slug("agy:gemini-3.8-flash-high"),
+        architect=HarnessBinding.from_slug("pi:openai-codex/gpt-6.1-sol:high"),
+        reviewer=HarnessBinding.from_slug("pi:xai/grok-4.7:high"),
+        worker_pool=[
+            HarnessBinding.from_slug("agy:gemini-3.8-flash", label="w1"),
+        ],
+    )
+    updated_cfg = squad_to_project_config(new_squad, existing_config=loaded)
+    save_project_config(updated_cfg, save_path)
+
+    reloaded = load_project_config(save_path)
+    assert reloaded.ai_head.dangerously_skip_permissions is False
+    assert reloaded.ai_head.effort is None
+    assert reloaded.ai_head.binding.effort is None
+
+    # 2. Test with dangerously_skip_permissions=False and effort=EffortLevel.HIGH
+    reloaded.ai_head.effort = EffortLevel.HIGH
+    save_project_config(reloaded, save_path)
+
+    loaded2 = load_project_config(save_path)
+    assert loaded2.ai_head.dangerously_skip_permissions is False
+    assert loaded2.ai_head.effort == EffortLevel.HIGH
+
+    updated_cfg2 = squad_to_project_config(new_squad, existing_config=loaded2)
+    save_project_config(updated_cfg2, save_path)
+
+    reloaded2 = load_project_config(save_path)
+    assert reloaded2.ai_head.dangerously_skip_permissions is False
+    assert reloaded2.ai_head.effort == EffortLevel.HIGH
+    assert reloaded2.ai_head.binding.effort == EffortLevel.HIGH
+
+
+def test_ai_head_no_thinking_field_and_stored_effort_on_binding():
+    """Assert stored effort belongs to binding, and no thinking field is introduced."""
+    assert "thinking" not in AiHeadConfig.model_fields
+    assert "effort" not in AiHeadConfig.model_fields
+    assert "dangerously_skip_permissions" in AiHeadConfig.model_fields
+
+    cfg = AiHeadConfig(effort="high")
+    assert cfg.effort == EffortLevel.HIGH
+    assert cfg.binding.effort == EffortLevel.HIGH
+
+    dumped = cfg.model_dump()
+    assert "thinking" not in dumped
+    assert "effort" not in dumped
+    assert "effort" in dumped["binding"]
+    assert dumped["binding"]["effort"] == EffortLevel.HIGH
