@@ -32,7 +32,7 @@ When presented with any user request, problem statement, or objective, AiHead ex
 
 1. **Simple Direct Agent (Single-Agent Focus)**:
    - **Criteria**: Small, atomic, or routine tasks (e.g. single-file bugfixes, quick diagnosis, small scripts, minor doc adjustments) where full multi-agent pipeline ceremony is unnecessary overhead.
-   - **Execution**: Dispatch to a focused agent or handle directly in the active session.
+   - **Execution**: Dispatch to a dedicated background agent tab (`herdr tab create --no-focus`) or async background subagent. Never tie up the main chat session with inline execution.
 
 2. **`/orchestration` (Single-Harness Native Pipeline)**:
    - **Criteria**: Fast, cohesive feature tasks self-contained inside a single agent ecosystem (`agy`, `pi`, `claude`, `opencode`) where single-harness velocity and simplicity are preferred.
@@ -56,7 +56,16 @@ When presented with any user request, problem statement, or objective, AiHead ex
 
 ---
 
-## 3. Mandatory Squash-Merge on Completion
+## 3. Always Delegate to Background Agents (Main Chat Stays Always Available)
+
+Both **AiHead** and **Herdr-Master** must always delegate user task requests to background agents (new background Herdr tabs spawned with `--no-focus` or asynchronous subagents):
+- **Never block the main chat**: The primary interactive session must never perform long-running implementation or blocking loops directly.
+- **Main chat is always available**: The orchestrator must return control immediately so the user can submit new tasks, query status, adjust priorities, or make decisions in the main terminal without waiting for child work to finish.
+- **Async monitoring**: Monitor background sessions via native async watchers (`herdr agent wait`) or background completion events rather than blocking the main turn.
+
+---
+
+## 4. Mandatory Squash-Merge on Completion
 
 Once jobs and tasks finish:
 1. **Verification**: Confirm all tasks pass review and test verification.
@@ -66,7 +75,7 @@ Once jobs and tasks finish:
 
 ---
 
-## 4. Aggressive Tab and Agent Lifecycle Cleanup
+## 5. Aggressive Tab and Agent Lifecycle Cleanup
 
 Never accumulate idle or unneeded tabs and agents. Close tabs as soon as their lifecycle stage finishes:
 - **Planning Stage Pruning**: In `/ergo` and multi-stage pipelines, as soon as the Architect finishes `plan.md` and Coders have started, **close the Scout and Architect tabs immediately** (`herdr tab close <tab-id>`). They are no longer needed during implementation.
@@ -78,7 +87,7 @@ Never accumulate idle or unneeded tabs and agents. Close tabs as soon as their l
 
 ---
 
-## 5. Invocation & Workspace Management
+## 6. Invocation & Workspace Management
 
 - **Command Verification**: Inspect supported flags and options via `aihead --help`.
 - **No AiHeadDev Required**: AiHead runs directly under Herdr using `herdr-master`. Never attempt to run `herdm tui` or clone `aiheaddev`.
