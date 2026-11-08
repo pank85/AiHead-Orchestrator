@@ -528,6 +528,13 @@ def _require_model(kind: str, model: str) -> str:
     return text
 
 
+def _normalize_opencode_model(model: str) -> str:
+    exact = _require_model("opencode", model)
+    if exact.startswith("openai-codex/"):
+        return "openai/" + exact[len("openai-codex/") :]
+    return exact
+
+
 def _agy_model_args(model: str, effort: str | None) -> list[str]:
     exact = _require_model("agy", model)
     if _is_agy_tier(exact):
@@ -615,7 +622,7 @@ def build_agent_args(
     elif kind == "claude":
         args = ["--model", _require_model(kind, model)]
     elif kind == "opencode":
-        args = ["--model", _require_model(kind, model)]
+        args = ["mini", "--model", _normalize_opencode_model(model)]
     elif kind in {"codex", "gemini"}:
         args = _passthrough_args(kind, model, effort_key)
     else:
