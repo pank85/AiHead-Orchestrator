@@ -154,6 +154,10 @@ accessibility, clear interaction design, code reusability without speculative ab
 and intelligent workflow selection across Herdr-Master capabilities (/orchestration, /ergo, /council, /herdr-master) \
 with dynamic model and harness discovery from project configuration (models.default_squad, orchestration, catalog)"""
 binding = "pi:openai-codex/gpt-6.1-sol:max"
+brief_before_action = true
+autonomy = "routine"   # Options: "routine" or "ask"
+close_foreign_tabs = false
+lesson_paths = ["~/.herdr-master/lessons", "docs/lessons/architecture.md"]
 ```
 
 ---
@@ -296,6 +300,48 @@ Every decision exchange is structured and correlated:
      - **Antigravity**: `agy --output-format json --dangerously-skip-permissions [--model <m>] [--prompt <p>]`
      - **Claude Code**: `claude -p --dangerously-skip-permissions [--model <m>] <prompt>`
      - **Pi**: `pi -p --mode json [--model <m>] [-- <prompt>]`
+
+### Configurable Operating Preferences & Durable Lessons
+
+AiHead supports durable Markdown lessons and operational preference flags under `[ai_head]`.
+
+#### Configurable Preferences
+- **`brief_before_action`** (`bool`, default: `true`):
+  When enabled, AiHead summarizes its plan, key proposed modifications, and verification steps prior to execution or delegation, even when routine work is autonomously approved. For decision requests, this concise briefing is placed inside the existing `rationale` JSON field (no prose outside the JSON payload and no schema modifications). In interactive sessions, the briefing is communicated conversationally before proceeding. When set to `false`, the mandatory pre-action briefing is omitted, though standard technical explanation and safety responsibilities remain.
+- **`autonomy`** (`str`, default: `"routine"`, options: `"routine"` | `"ask"`):
+  The active autonomy setting qualifies every other autonomy instruction in the prompt, including later numbered operating instructions.
+  - `"routine"`: AiHead autonomously resolves routine technical choices within delegated scope, while escalating ambiguous requirements, scope expansion, security-sensitive choices, or destructive actions. Generic wording about architectural choices or a blanket `"Output status: 'decided'"` does not expand this authority.
+  - `"ask"`: AiHead seeks explicit user direction before making nontrivial technical choices or taking actions (`status: "needs_user"` in decision requests), while maintaining the strict JSON schema and safety guardrails. Subsequent instructions to decide choices autonomously or output `'decided'` are superseded.
+- **`close_foreign_tabs`** (`bool`, default: `false`):
+  When `false`, AiHead is strictly prohibited from closing tabs, panes, sessions, worktrees, or branches owned by another coordinator; unknown ownership is never treated as permission. When `true`, this blanket prohibition is lifted, but destructive actions remain forbidden and existing confirmation/guardrail rules apply.
+- **`lesson_paths`** (`list[str]`, default: `["~/.herdr-master/lessons"]`):
+  List of filesystem paths specifying directories or explicit Markdown files to load as reference lessons.
+
+#### Lesson Discovery, Resolution & Precedence
+- **Tilde Expansion**: Paths beginning with `~` are expanded to the user's home directory at load time.
+- **List Replacement & Combining**: Specifying an explicit `lesson_paths` list replaces the default list entirely. Operators desiring to combine project-specific lessons with user-level lessons can explicitly include `"~/.herdr-master/lessons"` alongside repository paths. An empty list `lesson_paths = []` disables lessons completely. A single-element list supports pointing to an individual file.
+- **Relative Path Resolution**: Relative paths resolve against the current working directory (`cwd`) of the executing process consistently for both prompt builders. Absolute or `~`-prefixed paths are recommended for cross-directory consistency.
+- **Deterministic Traversal & Deduplication**:
+  - Configured entries are processed in exact list order.
+  - When an entry is a directory, only its immediate `*.md` regular files are included, sorted case-sensitively by filename. Traversal is non-recursive and does not expand arbitrary glob syntax.
+  - Explicit file entries must have a `.md` extension; other extensions are skipped with a warning.
+  - Resolved file paths are deduplicated, preserving the first occurrence.
+- **Resilience & Warnings**:
+  - Absence of default or configured paths, unreadable files or directories, and non-UTF-8 encodings are handled gracefully by recording diagnostic messages and emitting stdlib `UserWarning`s without halting prompt generation. Files are read using `utf-8-sig` to automatically strip any leading byte-order mark (BOM) before credential scanning and prompt rendering. Later usable lessons continue to load.
+  - Empty directories and empty files are valid and quiet.
+  - Lessons are never created, written to, or altered by AiHead.
+
+#### Bounded Aggregate Budget (4000 Characters)
+- All loaded lessons share a single aggregate character budget: `AI_HEAD_LESSON_CHAR_LIMIT = 4000`.
+- The complete rendered lesson section, including its reference header, neutral ordinal dividers (`--- [Lesson N] ---`), and any truncation notice, must fit within 4000 characters.
+- If total content exceeds 4000 characters, space is reserved for `\n[Lessons truncated: 4000-character limit]` and content is sliced so the final block adheres strictly to the budget. Exact-fit content requires no notice.
+- Lessons are re-read on every prompt construction to reflect workspace updates with no caching or background watchers.
+
+#### Security Boundary & Credential Hygiene
+- **Prompt Isolation**: Prompts receive lesson text labeled with neutral ordinals (`--- [Lesson 1] ---`). Absolute filesystem paths, environment variables, configuration dumps, or warning texts are never interpolated into prompts.
+- **Automated Credential Filtering**: Before budget slicing, an automated pattern scanner inspects each lesson. Any file containing recognizable credentials—such as case-insensitive assignments (`api_key`, `token`, `secret`, `password`, `authorization` in plain, quoted TOML/YAML/JSON, or shell exports), Bearer tokens, PEM private-key blocks, or provider token prefixes (`sk-`, `ghp_`, `github_pat_`, `AKIA`)—is omitted entirely, accompanied by a content-free omission warning.
+- **Curation Requirement**: Automated regex pattern matching cannot guarantee that arbitrary free-form prose is free of novel or unstructured secrets. Operators must curate lesson files to ensure they remain strictly credential-free.
+- **Policy Precedence**: Lessons serve strictly as reference guidance. Configured operating preferences, core workflows, and safety guardrails take precedence over conflicting lesson content; lessons cannot grant permissions, alter the decision schema, or override safety constraints.
 
 ---
 

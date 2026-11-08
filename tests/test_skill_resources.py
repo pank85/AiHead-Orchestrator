@@ -18,19 +18,25 @@ def test_source_checkout_loads_canonical_bodies():
     council = get_skill_source("council")
     ergo = get_skill_source("ergo")
     master = get_skill_source("herdr-master")
+    aihead = get_skill_source("aihead")
     assert council == (REPO / "skills/council/SKILL.md").resolve()
     assert ergo == (REPO / "skills/ergo/SKILL.md").resolve()
     assert master == (REPO / "skills/herdr-master/SKILL.md").resolve()
+    assert aihead == (REPO / "skills/aihead/SKILL.md").resolve()
     council_body = load_skill_body("council")
     ergo_body = load_skill_body("ergo")
     master_body = load_skill_body("herdr-master")
+    aihead_body = load_skill_body("aihead")
     assert council_body.startswith("# /council")
     assert ergo_body.startswith("# /ergo")
     assert master_body.startswith("# `/herdr-master`")
+    assert aihead_body.startswith("# `/aihead`")
     assert "slash: false" not in council_body
     assert "slash: false" not in ergo_body
+    assert "slash: false" not in aihead_body
     assert not council_body.startswith("---")
     assert not ergo_body.startswith("---")
+    assert not aihead_body.startswith("---")
     source = (REPO / "src/herdr_master/core/skill_resources.py").read_text(encoding="utf-8")
     assert "/home/pank/projects/herdr-master" not in source
 
@@ -42,6 +48,7 @@ def test_installed_package_uses_bundle_not_checkout(tmp_path, monkeypatch):
         ("ergo", "# bundled ergo"),
         ("herdr-master", "# bundled master"),
         ("orchestration", "# bundled orchestration"),
+        ("aihead", "# bundled aihead"),
     ):
         skill_dir = bundle / name
         skill_dir.mkdir(parents=True)
@@ -55,8 +62,11 @@ def test_installed_package_uses_bundle_not_checkout(tmp_path, monkeypatch):
     assert load_skill_body("council") == "# bundled council\n"
     assert get_skill_source("ergo") == (bundle / "ergo" / "SKILL.md").resolve()
     assert load_skill_body("herdr-master") == "# bundled master\n"
+    assert get_skill_source("aihead") == (bundle / "aihead" / "SKILL.md").resolve()
+    assert load_skill_body("aihead") == "# bundled aihead\n"
     assert "/home/pank/projects/herdr-master" not in str(get_skill_source("council"))
     assert "/home/pank/projects/herdr-master" not in str(get_skill_source("ergo"))
+    assert "/home/pank/projects/herdr-master" not in str(get_skill_source("aihead"))
 
 
 def test_missing_bundle_does_not_fall_back(tmp_path, monkeypatch):

@@ -2,12 +2,19 @@
 
 import asyncio
 import os
+import shutil
 import signal
 import subprocess
 import sys
+from contextlib import contextmanager
 from datetime import datetime
 from pathlib import Path
-from typing import Optional
+from typing import Any, Optional
+
+try:
+    import tomllib
+except ModuleNotFoundError:  # pragma: no cover - Python 3.10
+    import tomli as tomllib
 
 try:
     signal.signal(signal.SIGHUP, signal.SIG_IGN)
@@ -21,13 +28,16 @@ from herdr_master.cli.catalog import catalog_app
 from herdr_master.cli.skills import install_skills as run_install_skills
 from herdr_master.cli.skills import skills_app
 from herdr_master.core.catalog import CatalogError, supported_harnesses
-from herdr_master.core.config import load_project_config
+from herdr_master.core.config import find_project_config_path, load_project_config
+from herdr_master.core.context import HerdrContext
 from herdr_master.core.slug import InvalidBindingSlugError
 from herdr_master.herdr.client import HerdrClient
+from herdr_master.herdr.socket import HerdrConnectionError
 from herdr_master.pipeline.council import CouncilError
 from herdr_master.pipeline.launcher import (
     COUNCIL_COORDINATOR_NAME,
     LaunchContextError,
+    ensure_herdr_server,
     launch_ai_head,
     launch_council,
     launch_ergo,
@@ -46,6 +56,20 @@ app = typer.Typer(
     name="herdm",
     help="👑 Universal multi-master, multi-worker cross-harness AI orchestrator built on Herdr.",
     add_completion=True,
+)
+# Console-script entry for `aihead`. One callback, no nested command, and never
+# the headless `herdm aihead-cli` decision path.
+aihead_app = typer.Typer(
+    name="aihead",
+    help=(
+        "Launch an interactive AiHead session in a Herdr workspace. "
+        "Adopts an existing workspace when one is already available; otherwise "
+        "starts Herdr and opens a new workspace."
+    ),
+    invoke_without_command=True,
+    no_args_is_help=False,
+    add_completion=True,
+    subcommand_metavar="",
 )
 master_app = typer.Typer(help="Manage and launch Herdr Master orchestrators (Multiple Jobs).")
 pipeline_app = typer.Typer(help="Manage and run cross-harness Ergo pipelines (Single Major Job).")
@@ -1001,7 +1025,8 @@ def tui(
 ):
     """Launch the interactive terminal management cockpit (AiHeadDev)."""
     import shutil
-    executable = shutil.which("aiheaddev") or shutil.which("aihead")
+    # `aihead` is the herdr-master console script. Do not treat it as AiHeadDev.
+    executable = shutil.which("aiheaddev")
     if executable:
         argv = [executable]
         if session:
@@ -1106,8 +1131,415 @@ def install_cmd(
         help="Overwrite or update existing symlinks",
     ),
 ) -> None:
-    """Install the /herdr-master, /ergo, /orchestration, and /council skills across all harnesses."""
+    """Install canonical skills across all supported harnesses.
+
+    The installed set comes from the canonical skill catalog. Council skills are
+    included when that catalog contains them; this command does not hard-code a
+    skill list.
+    """
     run_install_skills(force=force)
+
+
+_AIHEAD_WORKSPACE_LABEL = "ai-head"
+_PROBE_TIMEOUT_SECONDS = 1.0
+_INHERITED_HERDR_KEYS = (
+    "HERDR_ENV",
+    "HERDR_SOCKET_PATH",
+    "HERDR_SOCKET",
+    "HERDR_WORKSPACE_ID",
+    "HERDR_PANE_ID",
+    "HERDR_TAB_ID",
+)
+_PROBE_ABSENCE = (HerdrConnectionError, TimeoutError, ConnectionError, OSError)
+
+
+@contextmanager
+def _present_selected_session(ctx: HerdrContext, workspace_id: Optional[str]):
+    """Present the selected session as inherited for one launch_ai_head call.
+
+    Outside Herdr, launch_ai_head provisions an isolated session. Standalone
+    aihead must open AiHead in the already selected session, so that session is
+    visible as the inherited context only while the launcher runs.
+    """
+    if ctx.is_inside_herdr:
+        yield
+        return
+    saved = {key: os.environ.get(key) for key in _INHERITED_HERDR_KEYS}
+    os.environ["HERDR_ENV"] = "1"
+    os.environ["HERDR_SOCKET_PATH"] = str(ctx.socket_path)
+    os.environ.pop("HERDR_SOCKET", None)
+    if workspace_id:
+        os.environ["HERDR_WORKSPACE_ID"] = workspace_id
+    else:
+        os.environ.pop("HERDR_WORKSPACE_ID", None)
+    os.environ.pop("HERDR_PANE_ID", None)
+    os.environ.pop("HERDR_TAB_ID", None)
+    try:
+        yield
+    finally:
+        for key, value in saved.items():
+            if value is None:
+                os.environ.pop(key, None)
+            else:
+                os.environ[key] = value
+
+
+def _workspace_id_of(workspace: Any) -> Optional[str]:
+    workspace_id = getattr(workspace, "workspace_id", None)
+    if workspace_id is None and isinstance(workspace, dict):
+        workspace_id = workspace.get("workspace_id")
+    if workspace_id:
+        return str(workspace_id)
+    return None
+
+
+def _workspace_id_from_snapshot(ctx: HerdrContext, snapshot: Any) -> Optional[str]:
+    workspaces = getattr(snapshot, "workspaces", None)
+    if workspaces is None and isinstance(snapshot, dict):
+        workspaces = snapshot.get("workspaces")
+    ids = [wid for wid in (_workspace_id_of(item) for item in list(workspaces or [])) if wid]
+    if ctx.workspace_id and ctx.workspace_id in ids:
+        return str(ctx.workspace_id)
+    focused = getattr(snapshot, "focused_workspace_id", None)
+    if focused is None and isinstance(snapshot, dict):
+        focused = snapshot.get("focused_workspace_id")
+    if focused and str(focused) in ids:
+        return str(focused)
+    if ids:
+        return ids[0]
+    return None
+
+
+def _created_workspace_id(created: Any) -> Optional[str]:
+    if not isinstance(created, dict):
+        return None
+    nested = created.get("workspace")
+    if isinstance(nested, dict) and nested.get("workspace_id"):
+        return str(nested["workspace_id"])
+    if created.get("workspace_id"):
+        return str(created["workspace_id"])
+    return None
+
+
+async def _probe_selected_session(ctx: HerdrContext) -> tuple[bool, Optional[str]]:
+    """Return whether the selected daemon is live and which workspace to adopt.
+
+    Connection absence or timeout means the daemon is not usable. RPC and
+    programming errors propagate so they are not disguised as absence.
+    """
+    socket_path = Path(ctx.socket_path)
+    if not ctx.is_inside_herdr and not socket_path.exists():
+        return False, None
+    client = HerdrClient(
+        session=ctx.session_name,
+        socket_path=socket_path,
+        timeout=_PROBE_TIMEOUT_SECONDS,
+    )
+    try:
+        await client.ping()
+        snapshot = await client.get_snapshot()
+    except _PROBE_ABSENCE:
+        return False, None
+    return True, _workspace_id_from_snapshot(ctx, snapshot)
+
+
+def _require_herdr_executable(purpose: str) -> None:
+    if shutil.which("herdr") is None:
+        _abort(
+            "The herdr executable is not on PATH; cannot "
+            f"{purpose}. Install Herdr and retry. "
+            "Refusing to allocate panes or fall back to a headless turn."
+        )
+
+
+def _effective_aihead_cwd(cli_cwd: Optional[Path], configured_cwd: Optional[str]) -> Path:
+    if cli_cwd is not None:
+        candidate = cli_cwd
+    elif configured_cwd:
+        candidate = Path(configured_cwd)
+    else:
+        candidate = Path.cwd()
+    resolved = candidate.expanduser().resolve()
+    if not resolved.is_dir():
+        raise FileNotFoundError(
+            f"AiHead working directory does not exist or is not a directory: {resolved}"
+        )
+    return resolved
+
+
+def _effective_split(
+    secondary: bool,
+    split: Optional[bool],
+    configured_split: Optional[bool],
+) -> bool:
+    if secondary:
+        return True
+    if split is not None:
+        return split
+    if configured_split is not None:
+        return configured_split
+    return True
+
+
+def _config_path_for_launch(config: Optional[Path], cwd: Optional[Path]) -> Optional[Path]:
+    if config is not None:
+        return config
+    if cwd is not None:
+        return find_project_config_path(cwd)
+    return find_project_config_path()
+
+
+async def _dispatch_standalone_aihead(
+    *,
+    ctx: HerdrContext,
+    kind: Any,
+    model_slug: str,
+    effort_level: Any,
+    effective_split: bool,
+    workspace: Optional[str],
+    task: Optional[str],
+    session: Optional[str],
+    attach: bool,
+    effective_cwd: Path,
+    config_path: Optional[Path],
+) -> Any:
+    """Adopt or create one workspace, then launch interactive AiHead there.
+
+    This path never calls the headless decision executor and never starts
+    AiHeadDev.
+    """
+    daemon_live, existing_workspace = await _probe_selected_session(ctx)
+    must_start = not daemon_live
+    must_create = existing_workspace is None and workspace is None
+    if must_start or (not ctx.is_inside_herdr and attach):
+        purpose = "start the Herdr server" if must_start else "attach to the Herdr session"
+        _require_herdr_executable(purpose)
+    if must_start or must_create:
+        await ensure_herdr_server(Path(ctx.socket_path), session_name=ctx.session_name)
+
+    adopted_workspace = existing_workspace
+    if must_create:
+        client = HerdrClient(session=ctx.session_name, socket_path=ctx.socket_path)
+        created = await client.create_workspace(
+            label=_AIHEAD_WORKSPACE_LABEL,
+            focus=True,
+            cwd=str(effective_cwd),
+        )
+        adopted_workspace = _created_workspace_id(created)
+        if not adopted_workspace:
+            _abort(
+                "Herdr workspace create returned no workspace_id. Refusing to launch AiHead."
+            )
+
+    if workspace is not None:
+        launch_workspace: Optional[str] = workspace
+    elif ctx.is_inside_herdr and not must_create:
+        # Keep the current pane so the existing split layout still applies.
+        launch_workspace = None
+    else:
+        launch_workspace = adopted_workspace
+    launch_session = session if ctx.is_inside_herdr else ctx.session_name
+    present_id = None if ctx.is_inside_herdr else (adopted_workspace or launch_workspace)
+
+    shown = f"{kind.value} {model_slug}"
+    if effort_level is not None:
+        shown = f"{shown} effort {effort_level.value}"
+    console.print(f"[bold cyan]🤖 Launching AiHead[/bold cyan] ({shown})...")
+    with _present_selected_session(ctx, present_id):
+        return await launch_ai_head(
+            client=HerdrClient(session=ctx.session_name, socket_path=ctx.socket_path),
+            harness=kind,
+            model=model_slug,
+            effort=effort_level,
+            split=effective_split,
+            workspace=launch_workspace,
+            initial_task=task,
+            session=launch_session,
+            cwd=str(effective_cwd),
+            config_path=config_path,
+        )
+
+
+def _print_standalone_launch_result(res: Any, fallback_session: str) -> str:
+    if isinstance(res, dict):
+        ws_id = res.get("workspace_id")
+        pane_id = res.get("pane_id")
+        target_session = res.get("session", fallback_session)
+        is_split = res.get("split", False)
+        sec_pane = res.get("secondary_pane_id")
+    else:
+        ws_id = None
+        pane_id = None
+        target_session = fallback_session
+        is_split = False
+        sec_pane = None
+
+    if is_split and sec_pane:
+        console.print(
+            f"[green]✓ AiHead launched in split layout![/green]\n"
+            f"  Session: {target_session}\n"
+            f"  Workspace: {ws_id}\n"
+            f"  Primary Pane (AiHead): {pane_id}\n"
+            f"  Secondary Pane (active): {sec_pane}"
+        )
+    else:
+        console.print(
+            f"[green]✓ AiHead launched successfully![/green]\n"
+            f"  Session: {target_session}\n"
+            f"  Workspace: {ws_id}\n"
+            f"  Pane: {pane_id}"
+        )
+    return str(target_session)
+
+
+@aihead_app.callback(invoke_without_command=True)
+def launch_standalone_aihead(
+    harness: Optional[str] = typer.Option(
+        None,
+        "--harness",
+        help="Harness override (agy, pi, claude, opencode).",
+    ),
+    model: Optional[str] = typer.Option(
+        None,
+        "--model",
+        help="Model slug override.",
+    ),
+    effort: Optional[str] = typer.Option(
+        None,
+        "--effort",
+        help="Reasoning effort override (low, medium, high, max).",
+    ),
+    split: Optional[bool] = typer.Option(
+        None,
+        "--split/--no-split",
+        help=(
+            "Split the active Herdr screen so AiHead is primary "
+            "and the active pane is secondary."
+        ),
+    ),
+    secondary: bool = typer.Option(
+        False,
+        "--secondary",
+        help="Enforce screen split with active pane becoming secondary.",
+    ),
+    workspace: Optional[str] = typer.Option(
+        None,
+        "--workspace",
+        "-w",
+        help="Target workspace label or ID (creates standalone tab/workspace).",
+    ),
+    task: Optional[str] = typer.Option(
+        None,
+        "--task",
+        "-t",
+        help="Initial instruction or objective for AiHead.",
+    ),
+    session: Optional[str] = typer.Option(
+        None,
+        "--session",
+        help=_SESSION_HELP,
+    ),
+    attach: bool = typer.Option(
+        True,
+        "--attach/--no-attach",
+        help="Attach to Herdr if outside Herdr",
+    ),
+    cwd: Optional[Path] = typer.Option(
+        None,
+        "--cwd",
+        "--folder",
+        "-C",
+        help="Initial folder/directory for AiHead to work in.",
+    ),
+    config: Optional[Path] = typer.Option(
+        None,
+        "--config",
+        help="Optional path to .herdr-master.toml configuration file.",
+    ),
+) -> None:
+    """Launch an interactive AiHead session in a Herdr workspace."""
+    try:
+        ctx = resolve_launch_context(session)
+    except _RESOLVE_ERRORS as err:
+        _abort(str(err))
+
+    if config is not None and not Path(config).expanduser().exists():
+        _abort(f"Configuration file not found: {config}")
+    try:
+        project_cfg = load_project_config(config if config is not None else cwd)
+    except tomllib.TOMLDecodeError as err:
+        _abort(f"Invalid AiHead configuration: {err}")
+    except _RESOLVE_ERRORS as err:
+        _abort(str(err))
+    except Exception as err:
+        _abort(f"Invalid AiHead configuration: {err}")
+
+    head_cfg = project_cfg.ai_head
+    try:
+        eff_harness = (
+            harness
+            if harness is not None
+            else (
+                head_cfg.binding.kind.value
+                if head_cfg.binding and head_cfg.binding.kind
+                else None
+            )
+        )
+        eff_model = (
+            model if model is not None else (head_cfg.binding.model if head_cfg.binding else None)
+        )
+        eff_effort = (
+            effort
+            if effort is not None
+            else (
+                head_cfg.binding.effort.value
+                if head_cfg.binding and head_cfg.binding.effort
+                else None
+            )
+        )
+        kind, model_slug, effort_level = resolve_coordinator_binding(
+            eff_harness,
+            eff_model,
+            eff_effort,
+        )
+        effective_cwd = _effective_aihead_cwd(cwd, head_cfg.cwd if head_cfg else None)
+    except _RESOLVE_ERRORS as err:
+        _abort(str(err))
+
+    config_path = _config_path_for_launch(config, cwd)
+    try:
+        res = asyncio.run(
+            _dispatch_standalone_aihead(
+                ctx=ctx,
+                kind=kind,
+                model_slug=model_slug,
+                effort_level=effort_level,
+                effective_split=_effective_split(
+                    secondary,
+                    split,
+                    head_cfg.split if head_cfg else None,
+                ),
+                workspace=workspace,
+                task=task,
+                session=session,
+                attach=attach,
+                effective_cwd=effective_cwd,
+                config_path=config_path,
+            )
+        )
+    except typer.Exit:
+        raise
+    except _RESOLVE_ERRORS as err:
+        _abort(str(err))
+    except Exception as err:
+        _abort(f"AiHead launch failed: {err}")
+
+    target_session = _print_standalone_launch_result(res, ctx.session_name)
+    if not ctx.is_inside_herdr and attach:
+        console.print(
+            f"[yellow]Attaching to isolated Herdr session '{target_session}'...[/yellow]"
+        )
+        os.execvp("herdr", ["herdr", "--session", target_session])
 
 
 if __name__ == "__main__":
