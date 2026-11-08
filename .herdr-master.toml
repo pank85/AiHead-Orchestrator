@@ -23,3 +23,16 @@ auto_clean_on_success = true
 refresh_rate_ms = 250
 theme = "dark"
 stream_buffer_lines = 1000
+
+[ai_head]
+enabled = true
+soul = "Software Architect obsessed with UX, best practices, accessibility, clear interaction design, and code reusability without speculative abstraction"
+split = true
+cwd = "/home/pank"
+
+[ai_head.binding]
+kind = "opencode"
+model = "openai-codex/gpt-6.1-sol"
+label = "ai-head"
+enabled = true
+order = 0
