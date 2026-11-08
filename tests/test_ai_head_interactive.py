@@ -301,6 +301,45 @@ def test_ai_head_config_split_default():
     assert cfg.split is True
 
 
+def test_ai_head_config_cwd_and_folder_parsing(tmp_path: Path):
+    """AiHeadConfig should parse cwd, folder, and directory aliases and expand user."""
+    # Test default
+    cfg = AiHeadConfig()
+    assert cfg.cwd is None
+    assert cfg.folder is None
+
+    # Test folder alias in toml
+    toml_folder = tmp_path / ".herdr-master-folder.toml"
+    test_dir = str(tmp_path / "workdir")
+    toml_folder.write_text(
+        f"""
+[ai_head]
+enabled = true
+folder = "{test_dir}"
+"""
+    )
+    project_folder = load_project_config(toml_folder)
+    assert project_folder.ai_head.cwd == test_dir
+    assert project_folder.ai_head.folder == test_dir
+
+    # Test cwd in toml
+    toml_cwd = tmp_path / ".herdr-master-cwd.toml"
+    toml_cwd.write_text(
+        f"""
+[ai_head]
+enabled = true
+cwd = "{test_dir}"
+"""
+    )
+    project_cwd = load_project_config(toml_cwd)
+    assert project_cwd.ai_head.cwd == test_dir
+    assert project_cwd.ai_head.folder == test_dir
+
+    # Test setter
+    project_cwd.ai_head.folder = "/another/path"
+    assert project_cwd.ai_head.cwd == "/another/path"
+
+
 def test_ai_head_config_split_toml_parsing(tmp_path: Path):
     """AiHeadConfig split property should parse cleanly from TOML file."""
     # Test split = false
@@ -975,6 +1014,43 @@ def test_cli_aihead_binding_and_workspace_overrides():
     assert kwargs["model"] == "openai-codex/gpt-6.1-sol"
     assert kwargs["effort"] == EffortLevel.HIGH
     assert kwargs["workspace"] == "ws-target"
+
+
+def test_cli_aihead_cwd_options(tmp_path: Path):
+    """CLI options --cwd, --folder, and -C should forward the resolved directory."""
+    launch_mock = AsyncMock(
+        return_value={
+            "session": "alpha",
+            "workspace_id": "ws-1",
+            "pane_id": "pane-1",
+            "split": False,
+        }
+    )
+    ctx = HerdrContext(
+        session_name="alpha",
+        socket_path=Path("/tmp/herdr.sock"),
+        is_inside_herdr=True,
+    )
+    target_folder = str(tmp_path.resolve())
+
+    with (
+        patch("herdr_master.cli.main.resolve_launch_context", return_value=ctx),
+        patch("herdr_master.cli.main.launch_ai_head", launch_mock),
+    ):
+        # 1. Test --cwd
+        res1 = runner.invoke(app, ["aihead", "--cwd", target_folder])
+        assert res1.exit_code == 0
+        assert launch_mock.await_args.kwargs["cwd"] == target_folder
+
+        # 2. Test --folder
+        res2 = runner.invoke(app, ["head", "--folder", target_folder])
+        assert res2.exit_code == 0
+        assert launch_mock.await_args.kwargs["cwd"] == target_folder
+
+        # 3. Test -C
+        res3 = runner.invoke(app, ["aihead", "-C", target_folder])
+        assert res3.exit_code == 0
+        assert launch_mock.await_args.kwargs["cwd"] == target_folder
 
 
 def test_cli_aihead_outside_herdr_attach_invokes_execvp():

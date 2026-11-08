@@ -853,6 +853,15 @@ class AiHeadConfig(BaseModel):
     binding: HarnessBinding = Field(default_factory=default_ai_head_binding)
     mode: Optional[str] = None
     split: bool = True
+    cwd: Optional[str] = None
+
+    @property
+    def folder(self) -> Optional[str]:
+        return self.cwd
+
+    @folder.setter
+    def folder(self, value: Optional[str]) -> None:
+        self.cwd = value
 
     @property
     def harness(self) -> HarnessKind:
@@ -920,7 +929,27 @@ class AiHeadConfig(BaseModel):
                     d["split"] = False
             elif isinstance(val, (int, float)):
                 d["split"] = bool(val)
+        for key in ("folder", "working_directory", "directory", "path"):
+            if key in d and "cwd" not in d:
+                d["cwd"] = d.pop(key)
+        if "cwd" in d:
+            val = d["cwd"]
+            if isinstance(val, (str, Path)):
+                s = str(val).strip()
+                d["cwd"] = str(Path(os.path.expanduser(s))) if s else None
+            elif val is None:
+                d["cwd"] = None
         return d
+
+    @field_validator("cwd", mode="before")
+    @classmethod
+    def _validate_cwd(cls, v: Any) -> Optional[str]:
+        if v is None:
+            return None
+        if isinstance(v, (str, Path)):
+            s = str(v).strip()
+            return str(Path(os.path.expanduser(s))) if s else None
+        return str(v)
 
     @field_validator("split", mode="before")
     @classmethod

@@ -954,6 +954,12 @@ async def ensure_herdr_ai_head(
     if not workspace_id:
         raise ValueError("workspace_id must be provided to ensure_herdr_ai_head.")
 
+    effective_cwd = (
+        str(Path(os.path.expanduser(head_config.cwd)).resolve())
+        if head_config and head_config.cwd
+        else (str(Path(origin_cwd).resolve()) if origin_cwd else str(Path.cwd().resolve()))
+    )
+
     kind_str = (
         head_config.binding.kind.value
         if isinstance(head_config.binding.kind, HarnessKind)
@@ -973,6 +979,7 @@ async def ensure_herdr_ai_head(
         "effort": effort_str,
         "args": list(agent_args),
         "soul": head_config.soul,
+        "cwd": effective_cwd,
     }
 
     snapshot = await client.get_snapshot()
@@ -1022,7 +1029,7 @@ async def ensure_herdr_ai_head(
                 "busy",
             )
 
-            running_state = _load_running_head_state(origin_cwd, workspace_id, target_pane.pane_id)
+            running_state = _load_running_head_state(effective_cwd, workspace_id, target_pane.pane_id)
 
             if is_busy:
                 # Safe lifecycle policy: do not kill/replace a busy working session!
@@ -1066,8 +1073,8 @@ async def ensure_herdr_ai_head(
                     needs_reconcile = True
 
             if needs_reconcile:
-                if kind_str == "agy" and origin_cwd:
-                    _ensure_agy_trusted(origin_cwd)
+                if kind_str == "agy" and effective_cwd:
+                    _ensure_agy_trusted(effective_cwd)
                 await client.start_agent(
                     name=agent_name,
                     kind=kind_str,
@@ -1078,7 +1085,7 @@ async def ensure_herdr_ai_head(
                 persona_prompt = build_ai_head_system_prompt(head_config)
                 await client.prompt_agent(target_pane.pane_id, persona_prompt)
                 _save_running_head_state(
-                    origin_cwd, workspace_id, target_pane.pane_id, state_payload
+                    effective_cwd, workspace_id, target_pane.pane_id, state_payload
                 )
 
             return {
@@ -1098,8 +1105,8 @@ async def ensure_herdr_ai_head(
         else:
             # Pane exists but agent is dead / stopped / not running:
             # Start configured agent on this pane so user gets a functioning agent!
-            if kind_str == "agy" and origin_cwd:
-                _ensure_agy_trusted(origin_cwd)
+            if kind_str == "agy" and effective_cwd:
+                _ensure_agy_trusted(effective_cwd)
             await client.start_agent(
                 name=agent_name,
                 kind=kind_str,
@@ -1109,7 +1116,7 @@ async def ensure_herdr_ai_head(
             )
             persona_prompt = build_ai_head_system_prompt(head_config)
             await client.prompt_agent(target_pane.pane_id, persona_prompt)
-            _save_running_head_state(origin_cwd, workspace_id, target_pane.pane_id, state_payload)
+            _save_running_head_state(effective_cwd, workspace_id, target_pane.pane_id, state_payload)
             return {
                 "workspace_id": workspace_id,
                 "tab_id": target_tab.tab_id,
@@ -1126,13 +1133,13 @@ async def ensure_herdr_ai_head(
             }
 
     # Tab not found or existing tab had no pane; create new tab
-    if kind_str == "agy" and origin_cwd:
-        _ensure_agy_trusted(origin_cwd)
+    if kind_str == "agy" and effective_cwd:
+        _ensure_agy_trusted(effective_cwd)
 
     tab_res = await client.create_tab(
         workspace_id=workspace_id,
         label="ai-head",
-        cwd=origin_cwd,
+        cwd=effective_cwd,
         focus=False,
     )
     tab_id = tab_res.get("tab_id")

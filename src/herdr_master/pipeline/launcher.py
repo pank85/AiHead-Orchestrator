@@ -1105,14 +1105,17 @@ async def launch_ai_head(
     Spawns interactive agent and delivers interactive bootstrap prompt.
     Returns dict with keys: session, socket, workspace_id, pane_id, tab_id, agent_name, split, secondary_pane_id (if split).
     """
-    target_cwd = str(Path(cwd or os.getcwd()).resolve())
+    initial_cwd = str(Path(cwd or os.getcwd()).resolve())
 
     head_config = None
     try:
-        project_cfg = load_project_config(config_path or target_cwd)
+        project_cfg = load_project_config(config_path or initial_cwd)
         head_config = project_cfg.ai_head
     except Exception:
         head_config = None
+
+    effective_cwd = cwd or (head_config.cwd if head_config and head_config.cwd else None)
+    target_cwd = str(Path(effective_cwd or initial_cwd).resolve())
 
     eff_harness = (
         harness
