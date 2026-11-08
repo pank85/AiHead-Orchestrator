@@ -494,7 +494,13 @@ def build_interactive_ai_head_prompt(
         "3. Safety Guardrails:\n"
         "   - NEVER perform or authorize destructive operations (e.g., git reset --hard,\n"
         "     unreviewed lands, deleting branches/worktrees, data loss, security bypasses).\n"
-        "   - Always confirm before landing or making irreversible modifications."
+        "   - Always confirm before landing or making irreversible modifications.\n\n"
+        "4. Interactive Conversational Output Format (NO RAW JSON):\n"
+        "   - You are in an interactive conversational terminal session with a human developer.\n"
+        "   - Respond naturally, helpfully, and conversationally in clean plain text or Markdown.\n"
+        "   - Do NOT format responses as raw JSON schemas, JSON dictionaries, or API payloads.\n"
+        "   - Engage in direct back-and-forth dialogue: ask clarifying questions, propose solutions,\n"
+        "     explain architectural trade-offs, and execute workflow commands directly."
     )
 
     if initial_task and initial_task.strip():
@@ -1089,7 +1095,9 @@ async def ensure_herdr_ai_head(
                         args=agent_args,
                         timeout_ms=30000,
                     )
-                    persona_prompt = build_ai_head_system_prompt(head_config)
+                    persona_prompt = build_interactive_ai_head_prompt(
+                        head_config=head_config, origin_cwd=effective_cwd
+                    )
                     await client.prompt_agent(target_pane.pane_id, persona_prompt)
                     _save_running_head_state(
                         effective_cwd, workspace_id, target_pane.pane_id, state_payload
@@ -1130,7 +1138,9 @@ async def ensure_herdr_ai_head(
                     args=agent_args,
                     timeout_ms=30000,
                 )
-                persona_prompt = build_ai_head_system_prompt(head_config)
+                persona_prompt = build_interactive_ai_head_prompt(
+                    head_config=head_config, origin_cwd=effective_cwd
+                )
                 await client.prompt_agent(target_pane.pane_id, persona_prompt)
                 _save_running_head_state(effective_cwd, workspace_id, target_pane.pane_id, state_payload)
                 return {
@@ -1195,7 +1205,9 @@ async def ensure_herdr_ai_head(
         timeout_ms=30000,
     )
 
-    persona_prompt = build_ai_head_system_prompt(head_config)
+    persona_prompt = build_interactive_ai_head_prompt(
+        head_config=head_config, origin_cwd=effective_cwd
+    )
     await client.prompt_agent(pane_id, persona_prompt)
     _save_running_head_state(origin_cwd, workspace_id, pane_id, state_payload)
 
