@@ -432,8 +432,43 @@ def test_orchestration_skill_ai_head_section():
         assert forbidden not in body, f"/orchestration must not reference {forbidden}"
 
 
+def test_aihead_skill_contract():
+    """Assert /aihead operational contract, front matter, workspace adoption, and safety flags."""
+    assert "aihead" in CANONICAL_SKILLS
+    assert CANONICAL_SKILLS.index("aihead") == 4
+
+    source_path = get_skill_source("aihead")
+    assert source_path.exists()
+    assert source_path.name == "SKILL.md"
+
+    raw_text = source_path.read_text(encoding="utf-8")
+    assert raw_text.startswith("---\nname: aihead\n")
+    assert "argument-hint:" in raw_text
+    assert "slash: false" in raw_text
+    assert "opencode/autoinvoke: false" in raw_text
+    assert "${@:-$ARGUMENTS}" in raw_text
+
+    body = load_skill_body("aihead")
+    assert len(body) > 100
+    assert not body.startswith("---")
+
+    # Command verification
+    assert "aihead --help" in body
+
+    # Agent programmatic invocation uses --no-attach
+    assert "--no-attach" in body
+
+    # Interactive workspace adoption and automatic server startup
+    assert "workspace" in body.lower()
+    assert "adopt" in body.lower()
+
+    # Self-contained: No AiHeadDev requirement
+    assert "aiheaddev" in body.lower()
+
+
 def test_no_obsolete_dotfiles_or_hardcoded_paths():
     """Ensure no obsolete dotfiles or hardcoded user paths remain in owned files."""
+    aihead_raw = (REPO_ROOT / "skills" / "aihead" / "SKILL.md").read_text(encoding="utf-8")
     council_raw = (REPO_ROOT / "skills" / "council" / "SKILL.md").read_text(encoding="utf-8")
     ergo_raw = (REPO_ROOT / "skills" / "ergo" / "SKILL.md").read_text(encoding="utf-8")
     hm_raw = (REPO_ROOT / "skills" / "herdr-master" / "SKILL.md").read_text(encoding="utf-8")
@@ -444,6 +479,7 @@ def test_no_obsolete_dotfiles_or_hardcoded_paths():
     sh_installer_raw = (REPO_ROOT / "scripts" / "install-skills.sh").read_text(encoding="utf-8")
 
     for path_str, content in [
+        ("skills/aihead/SKILL.md", aihead_raw),
         ("skills/council/SKILL.md", council_raw),
         ("skills/ergo/SKILL.md", ergo_raw),
         ("skills/herdr-master/SKILL.md", hm_raw),

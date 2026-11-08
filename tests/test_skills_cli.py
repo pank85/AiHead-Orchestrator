@@ -28,6 +28,7 @@ def test_find_repo_root():
     assert (root / "skills" / "herdr-master" / "SKILL.md").exists()
     assert (root / "skills" / "ergo" / "SKILL.md").exists()
     assert (root / "skills" / "council" / "SKILL.md").exists()
+    assert (root / "skills" / "aihead" / "SKILL.md").exists()
 
 
 def test_find_repo_root_raises_without_hardcoded_fallback(tmp_path: Path):
@@ -40,8 +41,18 @@ def test_find_repo_root_raises_without_hardcoded_fallback(tmp_path: Path):
 
 
 def test_get_skill_targets_matches_catalog_registry():
+    assert "aihead" in CANONICAL_SKILLS
     targets = get_skill_targets()
     assert set(targets.keys()) == set(CANONICAL_SKILLS)
+    assert "aihead" in targets
+
+    aihead_locs = targets["aihead"]
+    assert len(aihead_locs) == 5
+    aihead_harnesses = {loc.harness for loc in aihead_locs}
+    assert "Antigravity (agy)" in aihead_harnesses
+    assert "Pi (pi)" in aihead_harnesses
+    assert "Claude Code (claude)" in aihead_harnesses
+    assert "OpenCode (opencode)" in aihead_harnesses
 
     for skill_name in CANONICAL_SKILLS:
         locs = targets[skill_name]
@@ -111,6 +122,7 @@ def test_cli_skills_list():
     assert "/ergo" in result.output
     assert "/orchestration" in result.output
     assert "/council" in result.output
+    assert "/aihead" in result.output
 
 
 def test_cli_skills_install_and_remove_in_temp_home(tmp_path: Path):
@@ -119,6 +131,7 @@ def test_cli_skills_install_and_remove_in_temp_home(tmp_path: Path):
 
     targets_map = get_skill_targets(home=fake_home)
     expected_links = sum(len(locs) for locs in targets_map.values())
+    assert expected_links == 25  # 5 canonical skills * 5 destinations
 
     with patch("herdr_master.cli.skills.get_skill_targets", return_value=targets_map):
         # Initial install
@@ -151,6 +164,52 @@ def test_cli_skills_install_and_remove_in_temp_home(tmp_path: Path):
             for loc in locs:
                 assert not loc.path.exists()
                 assert not loc.path.is_symlink()
+
+
+def test_toplevel_herdm_install_in_temp_home(tmp_path: Path):
+    fake_home = tmp_path / "fake_home"
+    fake_home.mkdir()
+
+    targets_map = get_skill_targets(home=fake_home)
+    expected_links = sum(len(locs) for locs in targets_map.values())
+    assert expected_links == 25  # 5 canonical skills * 5 destinations
+
+    with patch("herdr_master.cli.skills.get_skill_targets", return_value=targets_map):
+        # Top-level install command
+        result = runner.invoke(app, ["install"])
+        assert result.exit_code == 0
+        assert f"{expected_links} skill/command links configured" in result.output
+
+        # Verify all symlinks exist, point to canonical files, and content matches
+        for skill_name, locs in targets_map.items():
+            canonical = get_skill_source(skill_name)
+            canonical_content = canonical.read_text(encoding="utf-8")
+            for loc in locs:
+                assert loc.path.is_symlink()
+                assert loc.path.resolve() == canonical.resolve()
+                assert loc.path.read_text(encoding="utf-8") == canonical_content
+
+        # Explicitly check aihead destinations
+        aihead_locs = targets_map["aihead"]
+        assert len(aihead_locs) == 5
+        for loc in aihead_locs:
+            assert loc.path.is_symlink()
+            assert loc.path.resolve() == get_skill_source("aihead").resolve()
+
+        # Explicitly verify unchanged old skills
+        for old_skill in ("council", "ergo", "herdr-master", "orchestration"):
+            for loc in targets_map[old_skill]:
+                assert loc.path.is_symlink()
+                assert loc.path.resolve() == get_skill_source(old_skill).resolve()
+
+        # Idempotency: re-install with force
+        reinstall_result = runner.invoke(app, ["install", "--force"])
+        assert reinstall_result.exit_code == 0
+
+        # Install with --no-force skips existing
+        noforce_result = runner.invoke(app, ["install", "--no-force"])
+        assert noforce_result.exit_code == 0
+        assert "Skipping existing symlink" in noforce_result.output
 
 
 def test_install_handles_existing_regular_file(tmp_path: Path):

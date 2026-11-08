@@ -24,7 +24,7 @@ Whether coordinating multiple background jobs simultaneously or driving a struct
 
 Herdr-Master ships with **first-class, standalone agent skills and slash commands** that can be installed directly into all four supported agent harnesses (**Antigravity**, **Pi**, **Claude Code**, and **OpenCode**).
 
-### 🎯 The Four Standalone Capabilities
+### 🎯 The Five Standalone Capabilities
 
 #### 1. `/herdr-master [task]` — Persistent Root Orchestrator (Multiple Jobs)
 
@@ -108,9 +108,25 @@ Herdr-Master ships with **first-class, standalone agent skills and slash command
 
 ---
 
+#### 5. `/aihead [initial task]` — Interactive Technical Director & Advisor
+
+> **Requires:** `aihead` CLI command (shipped with Herdr-Master) and a configured, authenticated agent harness (`agy`, `pi`, `claude`, or `opencode`). Starts an interactive AiHead that directs work from a Herdr workspace. AiHeadDev is NOT required or used.
+
+* **Works with OR without an initial task**:
+  * Invoking `/aihead` **blank without a prompt** starts AiHead in an interactive ready state within a Herdr workspace, awaiting your commands and delegation.
+  * Supplying an initial task (`/aihead "Review database migration schema"`) starts AiHead with the task immediately assigned.
+* **Automatic Workspace Adoption & Server Startup**:
+  * If a usable Herdr session and workspace already exist (such as inside Herdr or an active daemon with open workspaces), `aihead` adopts that workspace and opens an `ai-head` tab there.
+  * If Herdr is not currently running or has no workspace, `aihead` starts the Herdr daemon, creates a new workspace, and launches the interactive AiHead session inside it.
+* **Agent vs. User Attach Handling**:
+  * When invoked by an agent programmatically, use `--no-attach` to launch in the background without hijacking the calling agent's terminal.
+  * Interactive CLI user launches attach by default.
+
+---
+
 ### 📦 Installation Across All Harnesses
 
-Install all four canonical skills & slash commands (`/herdr-master`, `/ergo`, `/orchestration`, `/council`)
+Install all five canonical skills & slash commands (`/herdr-master`, `/ergo`, `/orchestration`, `/council`, `/aihead`)
 across every supported harness:
 
 ```bash
@@ -129,10 +145,10 @@ The installer detects and symlinks canonical skill definitions into the native d
 
 | Harness | Skill Type | Destination Path | Available Command |
 | :--- | :--- | :--- | :--- |
-| **Antigravity (`agy`)** | Native Skill | `~/.gemini/antigravity-cli/skills/<skill>/SKILL.md` | `/herdr-master`<br/>`/ergo`<br/>`/orchestration`<br/>`/council` |
-| **Pi (`pi`)** | Prompt / Skill | `~/.pi/agent/skills/<skill>/SKILL.md` | `/herdr-master`<br/>`/ergo`<br/>`/orchestration`<br/>`/council` |
-| **Claude Code (`claude`)** | Custom Slash Command | `~/.claude/commands/<skill>.md` | `/herdr-master`<br/>`/ergo`<br/>`/orchestration`<br/>`/council` |
-| **OpenCode (`opencode`)** | Skill & Command | `~/.config/opencode/skills/<skill>/SKILL.md`<br/>`~/.config/opencode/commands/<skill>.md` | `/herdr-master`<br/>`/ergo`<br/>`/orchestration`<br/>`/council` |
+| **Antigravity (`agy`)** | Native Skill | `~/.gemini/antigravity-cli/skills/<skill>/SKILL.md` | `/herdr-master`<br/>`/ergo`<br/>`/orchestration`<br/>`/council`<br/>`/aihead` |
+| **Pi (`pi`)** | Prompt / Skill | `~/.pi/agent/skills/<skill>/SKILL.md` | `/herdr-master`<br/>`/ergo`<br/>`/orchestration`<br/>`/council`<br/>`/aihead` |
+| **Claude Code (`claude`)** | Custom Slash Command | `~/.claude/commands/<skill>.md` | `/herdr-master`<br/>`/ergo`<br/>`/orchestration`<br/>`/council`<br/>`/aihead` |
+| **OpenCode (`opencode`)** | Skill & Command | `~/.config/opencode/skills/<skill>/SKILL.md`<br/>`~/.config/opencode/commands/<skill>.md` | `/herdr-master`<br/>`/ergo`<br/>`/orchestration`<br/>`/council`<br/>`/aihead` |
 
 ### 🔍 Inspect Installation Status
 
@@ -390,6 +406,21 @@ cd /path/to/my-project
 herdm init --target-branch develop
 ```
 
+### 6. Interactive AiHead Command
+```bash
+# Launch interactive AiHead (adopts existing workspace or starts Herdr & new workspace)
+aihead
+
+# Launch with an initial objective assigned
+aihead --task "Review database migration schema"
+
+# Agent programmatic launch (runs in background without hijacking caller terminal)
+aihead --task "Investigate flaky integration test" --no-attach
+
+# Inspect all available options
+aihead --help
+```
+
 ---
 
 ## 🧪 Testing & Verification
@@ -413,6 +444,7 @@ Complete usage instructions for each command:
 * [**`/herdr-master`**](docs/skills/herdr-master.md) — multiple jobs, one tab and worktree each, final review gate before landing.
 * [**`/ergo`**](docs/skills/ergo.md) — one major job, phased pipeline, cross-harness model per role.
 * [**`/orchestration`**](docs/skills/orchestration.md) — the same pipeline on the host's own subagents, no Herdr required.
+* [**`/aihead`**](skills/aihead/SKILL.md) — interactive technical director & advisor; adopts workspace or starts Herdr automatically.
 
 ---
 
