@@ -65,7 +65,17 @@ Both **AiHead** and **Herdr-Master** must always delegate user task requests to 
 
 ---
 
-## 4. Mandatory Squash-Merge on Completion
+## 4. Plan Approval & Architectural Alignment Gate
+
+Whenever AiHead approves a plan (from an Architect in `/ergo`, `/orchestration`, or a proposal in `/council` or `/herdr-master`):
+- **Plain-Language Plan Presentation**: AiHead must present the plan to the user in simple, plain, and accessible terms—explaining what is being built, how it solves the problem, and key deliverables without unnecessary technical jargon.
+- **Mandatory Architectural Alignment**: Always verify that the proposed plan fits seamlessly with the existing codebase architecture, design patterns, data contracts, and repository conventions. Never introduce disjoint architectures or speculative abstractions.
+- **Resolving Architectural Mismatches**: If a plan does not fit the existing architecture, actively seek and request an architectural solution (e.g. demand plan revisions, design clean adapters, or choose an alternative pattern that preserves architectural coherence).
+- **User Escalation When No Solution Exists**: If no viable architectural solution exists to bridge the mismatch, immediately inform and escalate to the user with a concise explanation of the architectural conflict and trade-offs, allowing the user to make the authoritative decision.
+
+---
+
+## 5. Mandatory Squash-Merge on Completion
 
 Once jobs and tasks finish:
 1. **Verification**: Confirm all tasks pass review and test verification.
@@ -75,7 +85,7 @@ Once jobs and tasks finish:
 
 ---
 
-## 5. Aggressive Tab and Agent Lifecycle Cleanup
+## 6. Aggressive Tab and Agent Lifecycle Cleanup
 
 Never accumulate idle or unneeded tabs and agents. Close tabs as soon as their lifecycle stage finishes:
 - **Planning Stage Pruning**: In `/ergo` and multi-stage pipelines, as soon as the Architect finishes `plan.md` and Coders have started, **close the Scout and Architect tabs immediately** (`herdr tab close <tab-id>`). They are no longer needed during implementation.
@@ -87,7 +97,7 @@ Never accumulate idle or unneeded tabs and agents. Close tabs as soon as their l
 
 ---
 
-## 6. Invocation & Workspace Management
+## 7. Invocation & Workspace Management
 
 - **Command Verification**: Inspect supported flags and options via `aihead --help`.
 - **No AiHeadDev Required**: AiHead runs directly under Herdr using `herdr-master`. Never attempt to run `herdm tui` or clone `aiheaddev`.

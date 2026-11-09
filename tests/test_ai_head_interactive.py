@@ -445,6 +445,12 @@ def test_build_interactive_ai_head_prompt_defaults():
     assert "Full-Stack Feature Rigor" in prompt
     assert "Fast / Cohesive Single-Ecosystem Task" in prompt
 
+    # Plan Approval & Architectural Alignment Gate
+    assert "Plan Approval & Architectural Alignment Gate:" in prompt
+    assert "Plain-Language Plan Presentation:" in prompt
+    assert "Mandatory Architectural Alignment:" in prompt
+    assert "User Escalation When No Solution Exists:" in prompt
+
     # Safety Guardrails
     assert "Safety Guardrails:" in prompt
     assert "git reset --hard" in prompt

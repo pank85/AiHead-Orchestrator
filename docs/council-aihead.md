@@ -287,6 +287,7 @@ Every decision exchange is structured and correlated:
 ### Escalation Invariant
 - **Technical & Architectural Scope**: Routine choices within project scope are resolved autonomously (`status: "decided"`).
 - **Ambiguity & Destruction Guard**: Destructive actions (e.g. data loss, unreviewed branch landings, security bypasses) or genuine requirement ambiguities are never faked—they immediately escalate to the operator (`status: "needs_user"`).
+- **Plan Approval & Architectural Alignment Gate**: Whenever AiHead approves a plan, it presents it to the user in simple, plain language. It must always verify that the plan aligns seamlessly with the existing codebase architecture; if it does not fit, AiHead seeks an architectural solution, and if no solution exists, it escalates to the user to make the decision.
 
 ### Operating Modes
 1. **TUI Mode (`mode = "herdr"`)**:

@@ -203,9 +203,10 @@ Track one checklist item per step and complete in order:
 
 ### Step 4: User Approval Gate (NEVER skip)
 - If `~/.claude/lib/render-md.js` exists, render `RUN_DIR/plan.md` to HTML and share the path alongside the summary.
-- Present the plan to the user, clearly listing each task's scope, disjoint files, assigned **Expert Persona**, and assigned **Coder Model / Effort**.
+- Present the plan to the user in simple, plain language, clearly listing each task's scope, disjoint files, assigned **Expert Persona**, and assigned **Coder Model / Effort**.
+- **Architectural Alignment Verification**: Always verify that the plan fits seamlessly with the existing codebase architecture and conventions. If it does not fit, send the Architect back to find an architectural solution; if no solution exists, notify the user immediately for an authoritative decision.
 - **STOP and wait for explicit user approval.** Ask if any task's persona or coder model should be adjusted. No Coder may start before explicit user approval.
-  *(When `--ai-head` is enabled: An authorized AiHead decision within delegated scope may satisfy plan approval, provided its structured decision and rationale are recorded in `RUN_DIR/aihead_decision.json`. Genuinely ambiguous requirements, destructive actions, or scope expansions must still STOP and wait for explicit user approval).*
+  *(When `--ai-head` is enabled: An authorized AiHead decision within delegated scope may satisfy plan approval, provided it presents the plan in simple terms, verifies architectural alignment with the existing codebase, resolves any mismatch or escalates to the user if no solution exists, and records its structured decision and rationale in `RUN_DIR/aihead_decision.json`. Genuinely ambiguous requirements, destructive actions, or scope expansions must still STOP and wait for explicit user approval).*
 
 ### Step 5: Parallel Specialist Coders & Planning Stage Tab Pruning (NEVER code in the orchestrator)
 - **Lifecycle Tab Pruning (Scout & Architect)**: As soon as the plan is approved and Coders are started, **close the Scout and Architect tabs/agents immediately** (`herdr tab close <scout-tab-id>`, `herdr tab close <architect-tab-id>`). Their planning phase is complete and they are no longer needed. Never leave idle planning tabs open during implementation.

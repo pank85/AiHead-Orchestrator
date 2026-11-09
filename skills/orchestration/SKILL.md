@@ -111,9 +111,9 @@ If any task omits the persona, overlaps another task's files, or names a model t
 
 ## 5. User Approval Gate (never skip)
 
-Present the plan: per task, its scope, owned files, dependency, Expert Persona, and model. **STOP and wait for explicit approval.** If the user already supplied a plan file and said "go", echo that plan back in one paragraph plus the task table and ask for a single confirmation — do not treat silence as approval. No Coder starts before approval.
+Present the plan in simple, plain language: per task, its scope, owned files, dependency, Expert Persona, and model. Verify architectural alignment with the existing codebase; if it does not fit, request an architectural solution or notify the user for a decision. **STOP and wait for explicit approval.** If the user already supplied a plan file and said "go", echo that plan back in one paragraph plus the task table and ask for a single confirmation — do not treat silence as approval. No Coder starts before approval.
 
-When `--ai-head` is enabled, an authorized AiHead decision within delegated scope recorded via `aihead-cli` may satisfy routine plan approval with logged rationale; genuinely ambiguous requirements, destructive actions, or scope expansions must still STOP and wait for explicit user approval.
+When `--ai-head` is enabled, an authorized AiHead decision within delegated scope recorded via `aihead-cli` may satisfy routine plan approval with logged rationale; AiHead must present the plan in simple terms, verify architectural alignment with the existing codebase, seek solutions for any mismatch, or escalate to the user if no clean solution exists. Genuinely ambiguous requirements, destructive actions, or scope expansions must still STOP and wait for explicit user approval.
 
 ## 6. Parallel Specialist Coders (never code in the orchestrator)
 

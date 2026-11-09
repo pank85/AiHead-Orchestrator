@@ -124,6 +124,10 @@ def test_persona_prompt_uses_soul_and_guardrails():
     prompt_default = build_ai_head_system_prompt()
     assert DEFAULT_AI_HEAD_SOUL in prompt_default
     assert "Autonomous Decisions (status: 'decided')" in prompt_default
+    assert "Plan Approval & Architectural Alignment Gate:" in prompt_default
+    assert "Plain-Language Plan Presentation:" in prompt_default
+    assert "Mandatory Architectural Alignment:" in prompt_default
+    assert "User Escalation When No Solution Exists:" in prompt_default
     assert "Escalation & Guardrails (status: 'needs_user')" in prompt_default
     assert "NEVER authorize destructive operations" in prompt_default
     assert "git reset --hard" in prompt_default
