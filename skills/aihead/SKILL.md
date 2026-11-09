@@ -75,7 +75,32 @@ Whenever AiHead approves a plan (from an Architect in `/ergo`, `/orchestration`,
 
 ---
 
-## 5. Mandatory Squash-Merge on Completion
+## 5. Hierarchical Parent-Child Notification Protocol (One Level Up)
+
+To eliminate orphaned finished jobs and guarantee zero latency in parent awareness, every delegated agent must strictly notify its direct parent upon task completion or when blocked:
+
+1. **Passing Parent Identity**:
+   - Whenever AiHead or an orchestrator creates a child session in Herdr, it passes its own pane ID (`$HERDR_PANE_ID`):
+     - Pass via environment: `herdr tab create ... --env HERDR_PARENT_PANE_ID="$HERDR_PANE_ID"`
+     - Pass in the prompt instructions:
+       ```
+       Parent Notification Requirement:
+       Upon task completion (or if blocked), you MUST notify your direct parent agent by executing:
+       herdr agent prompt <PARENT_PANE_ID> "<Role/Job> completed: <summary, artifacts, verification>"
+       ```
+
+2. **Strict Multi-Tier Hierarchy (One Level Up)**:
+   - **Level 3 (Workers/Coders) -> Level 2 (Pipeline Orchestrator)**:
+     - Coders, Reviewer, and Council Members notify the Ergo Orchestrator or Council Coordinator (`herdr agent prompt <orchestrator-pane-id> "Coder <N> finished: ..."`).
+   - **Level 2 (Pipeline Orchestrator / Job Worker) -> Level 1 (AiHead / Master Coordinator)**:
+     - When the Ergo Orchestrator completes landing and cleanup, or when Council deliberation finishes, the orchestrator notifies AiHead (`herdr agent prompt <aihead-pane-id> "Ergo run finished: commit <SHA>, tests passed, cleanup complete."`).
+   - **Level 1 (AiHead)**:
+     - The incoming prompt wakes AiHead immediately.
+     - AiHead reviews the completion report, presents a plain-language summary to the user, and keeps the main chat immediately available for new instructions.
+
+---
+
+## 6. Mandatory Squash-Merge on Completion
 
 Once jobs and tasks finish:
 1. **Verification**: Confirm all tasks pass review and test verification.
@@ -85,7 +110,7 @@ Once jobs and tasks finish:
 
 ---
 
-## 6. Aggressive Tab and Agent Lifecycle Cleanup
+## 7. Aggressive Tab and Agent Lifecycle Cleanup
 
 Never accumulate idle or unneeded tabs and agents. Close tabs as soon as their lifecycle stage finishes:
 - **Planning Stage Pruning**: In `/ergo` and multi-stage pipelines, as soon as the Architect finishes `plan.md` and Coders have started, **close the Scout and Architect tabs immediately** (`herdr tab close <tab-id>`). They are no longer needed during implementation.
@@ -97,7 +122,7 @@ Never accumulate idle or unneeded tabs and agents. Close tabs as soon as their l
 
 ---
 
-## 7. Invocation & Workspace Management
+## 8. Invocation & Workspace Management
 
 - **Command Verification**: Inspect supported flags and options via `aihead --help`.
 - **No AiHeadDev Required**: AiHead runs directly under Herdr using `herdr-master`. Never attempt to run `herdm tui` or clone `aiheaddev`.

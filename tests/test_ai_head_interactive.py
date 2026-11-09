@@ -451,6 +451,13 @@ def test_build_interactive_ai_head_prompt_defaults():
     assert "Mandatory Architectural Alignment:" in prompt
     assert "User Escalation When No Solution Exists:" in prompt
 
+    # Hierarchical Parent Notification Protocol
+    assert "Hierarchical Parent-Child Notification Protocol (One Level Up):" in prompt
+    assert "HERDR_PARENT_PANE_ID" in prompt
+    assert "herdr agent prompt <PARENT_PANE_ID>" in prompt
+    assert "Level 3 (Coders / Reviewer / Council Members) notify Level 2 (Ergo Orchestrator / Council Coordinator)" in prompt
+    assert "Level 2 (Ergo Orchestrator / Council Coordinator / Job Worker) notifies Level 1 (AiHead / Master Coordinator)" in prompt
+
     # Safety Guardrails
     assert "Safety Guardrails:" in prompt
     assert "git reset --hard" in prompt

@@ -473,6 +473,14 @@ flowchart LR
      - In **Herdr Mode**, checks socket reachability, adopts the active workspace, and locates or launches the dedicated `ai-head` tab.
      - In **CLI Mode**, resolves the headless runner command arguments (e.g. `agy --output-format json`, `claude -p`, `pi -p --mode json`, `opencode run --format json`).
    - Can be verified at any time with `herdm aihead-cli --discover`.
+5. **Hierarchical Parent-Child Notification Protocol (One Level Up)**:
+   - When parent sessions delegate work to child agents, they pass their own pane ID (`$HERDR_PANE_ID`) via `--env HERDR_PARENT_PANE_ID=$HERDR_PANE_ID` and include explicit notification instructions in the prompt.
+   - Child agents notify their direct parent upon completing their task or when blocked:
+     `herdr agent prompt <PARENT_PANE_ID> "<Role/Job> completed: <summary, artifacts, verification>"`
+   - Multi-tier escalation ensures zero latency in parent awareness:
+     - Level 3 (Coders / Reviewer / Council Members) notify Level 2 (Ergo Orchestrator / Council Coordinator).
+     - Level 2 (Ergo Orchestrator / Council Coordinator / Job Worker) notifies Level 1 (AiHead / Master Coordinator).
+   - Wakes AiHead immediately upon pipeline completion to present a concise plain-language summary to the user while keeping the main chat available.
 
 ---
 

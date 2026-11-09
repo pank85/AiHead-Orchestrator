@@ -153,6 +153,10 @@ If 5 full feedback cycles conclude without unanimous agreement (and all Round 5 
    - Outcome type: `UNANIMOUS_CONSENSUS` or `MAJORITY_VOTE` (with vote tally and tie-break details if applicable).
    - Cycles utilized (1 to 5).
    - Provenance of ideas synthesized across all member drafts.
+3. **Hierarchical Parent Notification (One Level Up)**:
+   If this Council run was launched by or has a parent orchestrator / AiHead (e.g. `PARENT_PANE_ID` / `HERDR_PARENT_PANE_ID` is set or an `ai-head` pane exists in the workspace):
+   The Coordinator **MUST** immediately notify the parent session upon finalization:
+   `herdr agent prompt <PARENT_PANE_ID> "Council deliberation finished: <outcome> in <N> cycles, final plan at <RUN_DIR>/final_plan.md"`
 
 ---
 
