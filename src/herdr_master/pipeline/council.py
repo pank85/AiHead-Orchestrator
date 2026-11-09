@@ -156,11 +156,11 @@ def _check_not_finalized(state: dict[str, Any], action: str) -> None:
 
 
 def _member_ids(state: dict[str, Any]) -> list[str]:
-    return [m["id"] for m in state["roster"]["members"]]
+    return [m["id"] for m in state["roster"]["members"] if m.get("enabled", True)]
 
 
 def _member_labels_lower(state: dict[str, Any]) -> dict[str, str]:
-    return {m["id"].lower(): m["id"] for m in state["roster"]["members"]}
+    return {m["id"].lower(): m["id"] for m in state["roster"]["members"] if m.get("enabled", True)}
 
 
 def _get_candidate_plans(state: dict[str, Any], round_number: int) -> list[str]:

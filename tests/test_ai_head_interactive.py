@@ -28,6 +28,7 @@ Covers:
 """
 
 import asyncio
+import inspect
 import json
 import os
 import tempfile
@@ -444,6 +445,19 @@ def test_build_interactive_ai_head_prompt_defaults():
     assert "Full-Stack Feature Rigor" in prompt
     assert "Fast / Cohesive Single-Ecosystem Task" in prompt
 
+    # Plan Approval & Architectural Alignment Gate
+    assert "Plan Approval & Architectural Alignment Gate:" in prompt
+    assert "Plain-Language Plan Presentation:" in prompt
+    assert "Mandatory Architectural Alignment:" in prompt
+    assert "User Escalation When No Solution Exists:" in prompt
+
+    # Hierarchical Parent Notification Protocol
+    assert "Hierarchical Parent-Child Notification Protocol (One Level Up):" in prompt
+    assert "HERDR_PARENT_PANE_ID" in prompt
+    assert "herdr agent prompt <PARENT_PANE_ID>" in prompt
+    assert "Level 3 (Coders / Reviewer / Council Members) notify Level 2 (Ergo Orchestrator / Council Coordinator)" in prompt
+    assert "Level 2 (Ergo Orchestrator / Council Coordinator / Job Worker) notifies Level 1 (AiHead / Master Coordinator)" in prompt
+
     # Safety Guardrails
     assert "Safety Guardrails:" in prompt
     assert "git reset --hard" in prompt
@@ -822,17 +836,21 @@ async def test_launch_ai_head_binding_overrides():
 
 def test_cli_aihead_and_head_help():
     """Both 'aihead' and 'head' commands should produce valid help output."""
-    res_aihead = runner.invoke(app, ["aihead", "--help"])
+    res_aihead = runner.invoke(app, ["aihead", "--help"], env={"COLUMNS": "200"})
     assert res_aihead.exit_code == 0
     assert "Launch an interactive AiHead terminal session" in res_aihead.output
     assert "--split" in res_aihead.output
     assert "--no-split" in res_aihead.output
+    assert "--skip-permissions" in res_aihead.output
+    assert "--no-skip-permissions" in res_aihead.output
     assert "--secondary" in res_aihead.output
     assert "--task" in res_aihead.output
 
-    res_head = runner.invoke(app, ["head", "--help"])
+    res_head = runner.invoke(app, ["head", "--help"], env={"COLUMNS": "200"})
     assert res_head.exit_code == 0
     assert "Launch an interactive AiHead terminal session" in res_head.output
+    assert "--skip-permissions" in res_head.output
+    assert "--no-skip-permissions" in res_head.output
 
 
 def test_cli_aihead_default_invokes_split():
@@ -1108,3 +1126,407 @@ def test_cli_aihead_outside_herdr_no_attach_skips_execvp():
 
     assert result.exit_code == 0, result.output
     mock_exec.assert_not_called()
+
+
+def _ai_head_toml(
+    *,
+    kind: str,
+    model: str,
+    effort: Optional[str],
+    skip: Optional[bool],
+) -> str:
+    lines = ["[ai_head]", "enabled = true"]
+    if skip is not None:
+        lines.append(f"dangerously_skip_permissions = {'true' if skip else 'false'}")
+    lines.extend(["", "[ai_head.binding]", f'kind = "{kind}"', f'model = "{model}"'])
+    if effort is not None:
+        lines.append(f'effort = "{effort}"')
+    return "\n".join(lines) + "\n"
+
+
+def _inside_launch_client() -> AsyncMock:
+    client = AsyncMock(spec=HerdrClient)
+    client.current_pane = AsyncMock(return_value={"pane_id": "orig-pane-1"})
+    client.split_pane = AsyncMock(return_value={"pane_id": "new-pane-2"})
+    client.swap_panes = AsyncMock(return_value={"status": "ok"})
+    client.focus_pane = AsyncMock(return_value={"status": "ok"})
+    client.start_agent = AsyncMock(return_value={"status": "ok"})
+    client.prompt_agent = AsyncMock(return_value={"status": "ok"})
+    return client
+
+
+async def _launch_args(
+    tmp_path: Path,
+    config_text: str,
+    **kwargs: Any,
+) -> List[str]:
+    config_path = tmp_path / "ai-head.toml"
+    config_path.write_text(config_text, encoding="utf-8")
+    client = _inside_launch_client()
+    ctx = HerdrContext(
+        session_name="work-session",
+        socket_path=Path("/tmp/herdr.sock"),
+        is_inside_herdr=True,
+        workspace_id="ws-10",
+        tab_id="tab-20",
+        pane_id="orig-pane-1",
+    )
+    with (
+        patch("herdr_master.pipeline.launcher.resolve_launch_context", return_value=ctx),
+        patch("herdr_master.pipeline.launcher.ensure_agy_trusted"),
+    ):
+        await launch_ai_head(
+            client=client,
+            cwd=str(tmp_path),
+            config_path=config_path,
+            split=True,
+            **kwargs,
+        )
+    args = client.start_agent.await_args.kwargs["args"]
+    assert "--kind" not in args
+    return args
+
+
+@pytest.mark.asyncio
+async def test_launch_ai_head_permission_and_effort_precedence(tmp_path: Path):
+    """Explicit false is an override. Missing config falls back to True."""
+    saved_false = await _launch_args(
+        tmp_path,
+        _ai_head_toml(
+            kind="agy", model="gemini-2.5-pro", effort="high", skip=False
+        ),
+    )
+    assert saved_false == ["--model", "gemini-2.5-pro", "--effort", "high"]
+
+    override_true = await _launch_args(
+        tmp_path,
+        _ai_head_toml(
+            kind="agy", model="gemini-2.5-pro", effort="high", skip=False
+        ),
+        dangerously_skip_permissions=True,
+    )
+    assert override_true == [
+        "--model",
+        "gemini-2.5-pro",
+        "--effort",
+        "high",
+        "--dangerously-skip-permissions",
+    ]
+    assert override_true.count("--dangerously-skip-permissions") == 1
+    assert override_true.count("--effort") == 1
+
+    override_false = await _launch_args(
+        tmp_path,
+        _ai_head_toml(
+            kind="claude", model="claude-opus-4-6", effort="max", skip=True
+        ),
+        dangerously_skip_permissions=False,
+        effort=EffortLevel.LOW,
+    )
+    assert override_false == ["--model", "claude-opus-4-6"]
+    assert "--dangerously-skip-permissions" not in override_false
+
+    missing_key = await _launch_args(
+        tmp_path,
+        _ai_head_toml(kind="agy", model="gemini-2.5-pro", effort=None, skip=None),
+    )
+    assert missing_key == [
+        "--model",
+        "gemini-2.5-pro",
+        "--dangerously-skip-permissions",
+    ]
+
+    broken = tmp_path / "broken.toml"
+    broken.write_text("ai_head = [[[", encoding="utf-8")
+    client = _inside_launch_client()
+    ctx = HerdrContext(
+        session_name="work-session",
+        socket_path=Path("/tmp/herdr.sock"),
+        is_inside_herdr=True,
+        workspace_id="ws-10",
+        tab_id="tab-20",
+        pane_id="orig-pane-1",
+    )
+    with (
+        patch("herdr_master.pipeline.launcher.resolve_launch_context", return_value=ctx),
+        patch("herdr_master.pipeline.launcher.ensure_agy_trusted"),
+    ):
+        await launch_ai_head(
+            client=client,
+            harness=HarnessKind.AGY,
+            model="gemini-2.5-pro",
+            cwd=str(tmp_path),
+            config_path=broken,
+            split=True,
+        )
+        await launch_ai_head(
+            client=client,
+            harness=HarnessKind.AGY,
+            model="gemini-2.5-pro",
+            dangerously_skip_permissions=False,
+            cwd=str(tmp_path),
+            config_path=broken,
+            split=True,
+        )
+    fallback_true, explicit_false = (
+        call.kwargs["args"] for call in client.start_agent.await_args_list[-2:]
+    )
+    assert "--dangerously-skip-permissions" in fallback_true
+    assert "--dangerously-skip-permissions" not in explicit_false
+
+    pi_args = await _launch_args(
+        tmp_path,
+        _ai_head_toml(
+            kind="pi",
+            model="openai-codex/gpt-6.1-sol",
+            effort="max",
+            skip=True,
+        ),
+    )
+    assert pi_args == [
+        "--provider",
+        "openai-codex",
+        "--model",
+        "gpt-6.1-sol",
+        "--thinking",
+        "max",
+    ]
+    assert "--dangerously-skip-permissions" not in pi_args
+    assert pi_args.count("--thinking") == 1
+
+    opencode_args = await _launch_args(
+        tmp_path,
+        _ai_head_toml(
+            kind="opencode",
+            model="openai-codex/gpt-6.1-sol",
+            effort="max",
+            skip=True,
+        ),
+    )
+    assert opencode_args == ["mini", "--model", "openai/gpt-6.1-sol"]
+    assert "--dangerously-skip-permissions" not in opencode_args
+
+
+@pytest.mark.asyncio
+async def test_launch_ai_head_legacy_positional_order_and_permission_keyword(tmp_path: Path):
+    """Appending permission preserves every pre-existing positional binding."""
+    config_path = tmp_path / "ai-head.toml"
+    config_path.write_text(
+        _ai_head_toml(
+            kind="agy", model="gemini-2.5-pro", effort=None, skip=False
+        ),
+        encoding="utf-8",
+    )
+    legacy_values = (
+        MagicMock(spec=HerdrClient),
+        HarnessKind.AGY,
+        "gemini-2.5-pro",
+        None,
+        False,
+        "legacy-workspace",
+        "legacy task",
+        "legacy-session",
+        str(tmp_path),
+        config_path,
+        "legacy-head",
+        False,
+    )
+    bound = inspect.signature(launch_ai_head).bind(*legacy_values)
+    bound.apply_defaults()
+    assert bound.arguments == {
+        "client": legacy_values[0],
+        "harness": HarnessKind.AGY,
+        "model": "gemini-2.5-pro",
+        "effort": None,
+        "split": False,
+        "workspace": "legacy-workspace",
+        "initial_task": "legacy task",
+        "session": "legacy-session",
+        "cwd": str(tmp_path),
+        "config_path": config_path,
+        "name": "legacy-head",
+        "focus": False,
+        "dangerously_skip_permissions": None,
+    }
+
+    ctx = HerdrContext(
+        session_name="work-session",
+        socket_path=Path("/tmp/herdr.sock"),
+        is_inside_herdr=True,
+        workspace_id="ws-10",
+        tab_id="tab-20",
+        pane_id="orig-pane-1",
+    )
+    allocated = _Allocated(
+        client=legacy_values[0],
+        session_name="work-session",
+        socket_path=Path("/tmp/herdr.sock"),
+        workspace_id="ws-nosplit",
+        pane_id="pane-nosplit",
+        tab_id="tab-nosplit",
+        owns_workspace=False,
+    )
+    with (
+        patch("herdr_master.pipeline.launcher.resolve_launch_context", return_value=ctx),
+        patch(
+            "herdr_master.pipeline.launcher._allocate_launch_target",
+            new_callable=AsyncMock,
+            return_value=allocated,
+        ) as allocate,
+        patch("herdr_master.pipeline.launcher._start_and_prompt", new_callable=AsyncMock),
+    ):
+        result = await launch_ai_head(
+            legacy_values[0],
+            HarnessKind.AGY,
+            "gemini-2.5-pro",
+            None,
+            False,
+            None,
+            None,
+            None,
+            str(tmp_path),
+            config_path,
+            "legacy-head",
+            False,
+        )
+    assert result["split"] is False
+    legacy_values[0].split_pane.assert_not_called()
+    allocate.assert_awaited_once_with(
+        legacy_values[0],
+        ctx,
+        session=None,
+        isolated_name="aihead-legacy-head",
+        tab_label="legacy-head",
+        workspace_label="legacy-head",
+        cwd=str(tmp_path),
+        fresh_workspace=False,
+        focus=False,
+    )
+
+    old_split_client = _inside_launch_client()
+    explicit_override_client = _inside_launch_client()
+    with (
+        patch("herdr_master.pipeline.launcher.resolve_launch_context", return_value=ctx),
+        patch("herdr_master.pipeline.launcher.ensure_agy_trusted"),
+    ):
+        await launch_ai_head(
+            old_split_client,
+            HarnessKind.AGY,
+            "gemini-2.5-pro",
+            None,
+            True,
+            cwd=str(tmp_path),
+            config_path=config_path,
+        )
+        await launch_ai_head(
+            explicit_override_client,
+            HarnessKind.AGY,
+            "gemini-2.5-pro",
+            None,
+            True,
+            cwd=str(tmp_path),
+            config_path=config_path,
+            dangerously_skip_permissions=True,
+        )
+    old_split_client.split_pane.assert_awaited_once()
+    old_args = old_split_client.start_agent.await_args.kwargs["args"]
+    assert "--dangerously-skip-permissions" not in old_args
+    explicit_args = explicit_override_client.start_agent.await_args.kwargs["args"]
+    assert "--dangerously-skip-permissions" in explicit_args
+
+
+@pytest.mark.parametrize(
+    ("command", "flags", "skip", "expected"),
+    [
+        ("aihead", [], False, False),
+        ("aihead", [], None, True),
+        ("aihead", ["--skip-permissions"], False, True),
+        ("aihead", ["--no-skip-permissions"], True, False),
+        ("head", ["--no-skip-permissions"], True, False),
+        ("head", [], False, False),
+    ],
+)
+def test_cli_aihead_and_head_forward_permission_precedence(
+    tmp_path: Path,
+    command: str,
+    flags: List[str],
+    skip: Optional[bool],
+    expected: bool,
+):
+    config_path = tmp_path / "ai-head.toml"
+    config_path.write_text(
+        _ai_head_toml(
+            kind="agy", model="gemini-2.5-pro", effort="high", skip=skip
+        ),
+        encoding="utf-8",
+    )
+    launch_mock = AsyncMock(
+        return_value={
+            "session": "alpha",
+            "workspace_id": "ws-1",
+            "pane_id": "pane-1",
+            "split": False,
+        }
+    )
+    ctx = HerdrContext(
+        session_name="alpha",
+        socket_path=tmp_path / "herdr.sock",
+        is_inside_herdr=True,
+    )
+    with (
+        patch("herdr_master.cli.main.resolve_launch_context", return_value=ctx),
+        patch("herdr_master.cli.main.launch_ai_head", launch_mock),
+        patch("herdr_master.cli.main.os.execvp") as execvp,
+    ):
+        result = runner.invoke(
+            app,
+            [command, "--config", str(config_path), "--no-attach", *flags],
+        )
+
+    assert result.exit_code == 0, result.output
+    kwargs = launch_mock.await_args.kwargs
+    assert kwargs["dangerously_skip_permissions"] is expected
+    assert kwargs["effort"] is EffortLevel.HIGH
+    execvp.assert_not_called()
+
+
+def test_cli_effort_override_does_not_discard_permission_override(tmp_path: Path):
+    config_path = tmp_path / "ai-head.toml"
+    config_path.write_text(
+        _ai_head_toml(kind="agy", model="gemini-2.5-pro", effort="high", skip=True),
+        encoding="utf-8",
+    )
+    launch_mock = AsyncMock(
+        return_value={
+            "session": "alpha",
+            "workspace_id": "ws-1",
+            "pane_id": "pane-1",
+            "split": False,
+        }
+    )
+    ctx = HerdrContext(
+        session_name="alpha",
+        socket_path=tmp_path / "herdr.sock",
+        is_inside_herdr=True,
+    )
+    with (
+        patch("herdr_master.cli.main.resolve_launch_context", return_value=ctx),
+        patch("herdr_master.cli.main.launch_ai_head", launch_mock),
+    ):
+        result = runner.invoke(
+            app,
+            [
+                "head",
+                "--config",
+                str(config_path),
+                "--effort",
+                "low",
+                "--no-skip-permissions",
+                "--no-attach",
+            ],
+        )
+
+    assert result.exit_code == 0, result.output
+    kwargs = launch_mock.await_args.kwargs
+    assert kwargs["effort"] is EffortLevel.LOW
+    assert kwargs["dangerously_skip_permissions"] is False

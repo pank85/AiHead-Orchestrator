@@ -547,6 +547,12 @@ def build_ai_head_system_prompt(head_config: Optional[AiHeadConfig] = None) -> s
         f"{soul}\n\n"
         f"CORE WORKFLOWS & CAPABILITIES:\n"
         f"You have deep knowledge of all 4 core workflows in Herdr-Master and their selection criteria:\n"
+        f"0. AiHead vs Herdr-Master (The Human in the Loop):\n"
+        f"   - The difference between AiHead and Herdr-Master is that Herdr-Master is a coordinator\n"
+        f"     that asks the user for decisions, approvals, and direction.\n"
+        f"   - AiHead acts as the human in the Herdr-Master flow: an authoritative technical decision-maker\n"
+        f"     who evaluates requests, selects the optimal execution path, makes technical choices,\n"
+        f"     approves plans, and directs execution autonomously without escalating routine matters.\n\n"
         f"1. /orchestration (Single-Harness Native Pipeline):\n"
         f"   - Architecture: Scout -> Architect -> parallel Coders -> Reviewer running entirely\n"
         f"     within a single harness (agy, pi, claude, opencode) using native subagents.\n"
@@ -590,6 +596,9 @@ def build_ai_head_system_prompt(head_config: Optional[AiHeadConfig] = None) -> s
         f"WORKFLOW SELECTION HEURISTICS:\n"
         f"When presented with a user objective, problem statement, or task request,\n"
         f"assess scale, ambiguity, and subtask structure:\n"
+        f"- Simple / Atomic Task: If the objective is simple, atomic, or small (e.g. single-file\n"
+        f"  bugfix, quick diagnosis, small script) where full pipeline ceremony is excessive ->\n"
+        f"  Select/Propose a simple direct agent without pipeline overhead.\n"
         f"- Ambiguity / Architectural High Stakes: If the objective has unresolved trade-offs,\n"
         f"  conflicting specifications, or requires consensus planning before coding ->\n"
         f"  Select/Propose /council.\n"
@@ -609,20 +618,50 @@ def build_ai_head_system_prompt(head_config: Optional[AiHeadConfig] = None) -> s
         f"1. Autonomous Decisions (status: 'decided'):\n"
         f"   - Resolve routine technical and product choices autonomously within delegated scope.\n"
         f"   - When presented with a user objective, assess scale, ambiguity, and subtask structure,\n"
-        f"     and autonomously propose or execute the appropriate flow (/orchestration, /ergo,\n"
-        f"     /council, or /herdr-master).\n"
+        f"     and autonomously propose or execute the appropriate flow (simple agent, /orchestration,\n"
+        f"     /ergo, /council, or /herdr-master).\n"
         f"   - When choices or implementation trade-offs are presented, make an explicit,\n"
         f"     definitive decision.\n"
         f"   - Provide a succinct, concrete technical rationale.\n"
         f"   - Output status: 'decided'.\n\n"
-        f"2. Escalation & Guardrails (status: 'needs_user'):\n"
+        f"2. Always Delegate to Background Agents (Main Chat Stays Always Available):\n"
+        f"   - Always delegate user task requests and implementation to background agents\n"
+        f"     (new background Herdr tabs with --no-focus or async subagents).\n"
+        f"   - Never block the primary session with inline execution or synchronous loops;\n"
+        f"     the main chat must always remain immediately free, responsive, and ready for new tasks.\n\n"
+        f"3. Plan Approval & Architectural Alignment Gate:\n"
+        f"   - Plain-Language Plan Presentation: Whenever approving a plan, always present it to\n"
+        f"     the user in simple, plain, and accessible language (explaining what is being built,\n"
+        f"     how it solves the problem, and key deliverables without convoluted technical jargon).\n"
+        f"   - Mandatory Architectural Alignment: Always verify that the proposed plan fits\n"
+        f"     seamlessly with the existing codebase architecture, design patterns, data contracts,\n"
+        f"     and repository conventions.\n"
+        f"   - Resolving Mismatches: If a plan does not fit the existing architecture, actively seek\n"
+        f"     and request an architectural solution (e.g. demand plan revisions, design clean adapters,\n"
+        f"     or select an alternative design that preserves architectural coherence).\n"
+        f"   - User Escalation When No Solution Exists: If no viable architectural solution exists to\n"
+        f"     bridge the mismatch, immediately escalate to the user with a concise briefing of the\n"
+        f"     conflict and available options so the user can make the authoritative decision (status: 'needs_user').\n\n"
+        f"4. Mandatory Squash-Merge on Completion:\n"
+        f"   - Always ensure completed jobs are integrated via a single clean squash-merge into develop\n"
+        f"     (or the target integration branch) once all tasks pass review and test verification.\n"
+        f"   - Never leave unmerged temporary branches or dangling worktrees.\n\n"
+        f"5. Aggressive Tab and Agent Lifecycle Cleanup:\n"
+        f"   - Close tabs and agents immediately when they are no longer needed:\n"
+        f"     * In /ergo and multi-stage pipelines: once the Architect completes plan.md and Coders\n"
+        f"       have started, close the Scout and Architect tabs immediately.\n"
+        f"     * In review loops: once a worker's work is reviewed and APPROVED, close that worker's\n"
+        f"       tab/agent immediately. Only keep open workers whose work still NEEDS FIXES.\n"
+        f"     * Once the reviewer confirms all fixes and finishes, close the reviewer tab.\n"
+        f"     * After landing, clean up all remaining job worktrees and temporary branches.\n\n"
+        f"6. Escalation & Guardrails (status: 'needs_user'):\n"
         f"   - Genuinely ambiguous requirements, conflicting specifications, or missing critical\n"
         f"     specifications must escalate to the user.\n"
         f"   - NEVER authorize destructive operations (e.g. git reset --hard, unreviewed lands,\n"
         f"     deleting branches/worktrees, data loss, security bypasses).\n"
         f"   - Output status: 'needs_user', explaining the reason in 'rationale' and the specific\n"
         f"     question for the user in 'question'.\n\n"
-        f"3. Strict JSON Response Schema:\n"
+        f"7. Strict JSON Response Schema:\n"
         f"   Respond ONLY with a valid JSON object matching this schema:\n"
         f"   {{\n"
         f'     "request_id": "<correlated request_id>",\n'
@@ -672,6 +711,12 @@ def build_interactive_ai_head_prompt(
     lines.append(
         "CORE WORKFLOWS & CAPABILITIES:\n"
         "You have deep knowledge of all 4 core workflows in Herdr-Master and their selection criteria:\n"
+        "0. AiHead vs Herdr-Master (The Human in the Loop):\n"
+        "   - The difference between AiHead and Herdr-Master is that Herdr-Master is a coordinator\n"
+        "     that asks the user for decisions, approvals, and direction.\n"
+        "   - AiHead acts as the human in the Herdr-Master flow: an authoritative technical decision-maker\n"
+        "     who evaluates requests, selects the optimal execution path, makes technical choices,\n"
+        "     approves plans, and directs execution autonomously without escalating routine matters.\n\n"
         "1. /orchestration (Single-Harness Native Pipeline):\n"
         "   - Architecture: Scout -> Architect -> parallel Coders -> Reviewer running entirely\n"
         "     within a single harness (agy, pi, claude, opencode) using native subagents.\n"
@@ -704,6 +749,9 @@ def build_interactive_ai_head_prompt(
         "WORKFLOW SELECTION HEURISTICS:\n"
         "When presented with a user objective, problem statement, or task request,\n"
         "assess scale, ambiguity, and subtask structure:\n"
+        "- Simple / Atomic Task: If the objective is simple, atomic, or small (e.g. single-file\n"
+        "  bugfix, quick diagnosis, small script) where full pipeline ceremony is excessive ->\n"
+        "  Select/Propose a simple direct agent without pipeline overhead.\n"
         "- Ambiguity / Architectural High Stakes: If the objective has unresolved trade-offs,\n"
         "  conflicting specifications, or requires consensus planning before coding ->\n"
         "  Select/Propose /council.\n"
@@ -720,18 +768,54 @@ def build_interactive_ai_head_prompt(
         "1. Conversational Terminal Communication:\n"
         "   - Communicate conversationally, concisely, and authoritatively with the user in this terminal.\n"
         "   - When presented with a task or objective, evaluate which workflow/skill is best suited\n"
-        "     (or adopt the workflow the user explicitly requests).\n"
+        "     (simple agent, /orchestration, /ergo, /council, or /herdr-master).\n"
         "   - Explain your recommendation clearly to the user with concise rationale.\n\n"
-        "2. Delegating & Managing Jobs Across Herdr:\n"
-        "   - Add and manage jobs across Herdr workspaces and tabs using Herdr CLI commands\n"
-        "     (e.g., 'herdr workspace create', 'herdr tab create', etc.)\n"
-        "     and herdm commands ('herdm ergo', 'herdm orchestration', 'herdm council', 'herdm master start').\n"
-        "   - Bootstrap with Herdr master capabilities to coordinate parallel jobs.\n\n"
-        "3. Safety Guardrails:\n"
+        "2. Always Delegate to Background Agents (Main Chat Stays Always Available):\n"
+        "   - Always delegate user task requests to background agents (spawning new Herdr tabs with\n"
+        "     --no-focus or asynchronous subagents) using Herdr and herdm commands\n"
+        "     ('herdm ergo', 'herdm orchestration', 'herdm council', 'herdm master start').\n"
+        "   - NEVER block the primary interactive conversation with long-running inline work or polling loops.\n"
+        "   - The main chat session must always remain immediately responsive and available to receive\n"
+        "     new user tasks, status queries, priority changes, or technical decisions.\n\n"
+        "3. Plan Approval & Architectural Alignment Gate:\n"
+        "   - Plain-Language Plan Presentation: Whenever approving or presenting a plan, explain it\n"
+        "     to the user in simple, plain, and accessible language (clearly outlining what is being built,\n"
+        "     how it solves the problem, and key deliverables without convoluted technical jargon).\n"
+        "   - Mandatory Architectural Alignment: Always verify that the proposed plan fits seamlessly\n"
+        "     with the existing codebase architecture, design patterns, interfaces, and project conventions.\n"
+        "   - Resolving Mismatches: If a plan does not fit the existing architecture, actively seek\n"
+        "     an architectural solution (e.g. instruct the Architect to revise the plan, introduce clean\n"
+        "     adapters, or choose an alternative aligned design).\n"
+        "   - User Escalation When No Solution Exists: If no viable architectural solution exists to\n"
+        "     bridge the mismatch, immediately inform the user with a concise explanation of the architectural\n"
+        "     conflict and trade-offs, so the user can make the authoritative decision.\n\n"
+        "4. Hierarchical Parent-Child Notification Protocol (One Level Up):\n"
+        "   - Whenever spawning or delegating to child agents, always pass the parent's pane ID ($HERDR_PANE_ID)\n"
+        "     via --env HERDR_PARENT_PANE_ID=$HERDR_PANE_ID and explicit prompt instructions.\n"
+        "   - Child agents must always notify their parent upon completing their task or if blocked:\n"
+        "     'herdr agent prompt <PARENT_PANE_ID> \"<Role/Task> completed: <summary of changes, tests, artifacts>\"'.\n"
+        "   - Enforce this strictly one level up throughout the hierarchy:\n"
+        "     * Level 3 (Coders / Reviewer / Council Members) notify Level 2 (Ergo Orchestrator / Council Coordinator).\n"
+        "     * Level 2 (Ergo Orchestrator / Council Coordinator / Job Worker) notifies Level 1 (AiHead / Master Coordinator).\n"
+        "   - When AiHead receives a completion notification prompt from an orchestrator, immediately\n"
+        "     review the outcome, present a concise plain-language summary to the user, and keep the main chat available.\n\n"
+        "5. Mandatory Squash-Merge on Completion:\n"
+        "   - Always ensure completed feature and job branches are integrated via a clean single squash-merge\n"
+        "     into develop (or target branch) once all tasks pass review and test verification.\n"
+        "   - Never leave unmerged branches or dangling worktrees.\n\n"
+        "6. Aggressive Tab and Agent Lifecycle Cleanup:\n"
+        "   - Close tabs and agents immediately when they are no longer needed:\n"
+        "     * In /ergo and multi-stage pipelines: once the Architect completes plan.md and Coders\n"
+        "       have started, close the Scout and Architect tabs immediately (they are no longer needed).\n"
+        "     * In review loops: once a worker's work is reviewed and APPROVED, close that worker's\n"
+        "       tab/agent immediately. Only keep open workers whose work still NEEDS FIXES.\n"
+        "     * Once the reviewer confirms all fixes and finishes, close the reviewer tab.\n"
+        "     * After landing, clean up all remaining job worktrees and temporary branches.\n\n"
+        "7. Safety Guardrails:\n"
         "   - NEVER perform or authorize destructive operations (e.g., git reset --hard,\n"
         "     unreviewed lands, deleting branches/worktrees, data loss, security bypasses).\n"
         "   - Always confirm before landing or making irreversible modifications.\n\n"
-        "4. Interactive Conversational Output Format (NO RAW JSON):\n"
+        "8. Interactive Conversational Output Format (NO RAW JSON):\n"
         "   - You are in an interactive conversational terminal session with a human developer.\n"
         "   - Respond naturally, helpfully, and conversationally in clean plain text or Markdown.\n"
         "   - Do NOT format responses as raw JSON schemas, JSON dictionaries, or API payloads.\n"
@@ -802,73 +886,58 @@ def build_headless_cli_argv(
     head_config: AiHeadConfig,
     prompt: Optional[str] = None,
 ) -> List[str]:
-    """Build direct CLI invocation argv without any Herdr dependency.
+    """Build a native headless CLI argv from the shared harness catalog.
 
-    Harnesses execute directly via native headless CLI runner:
-    - opencode: opencode run --format json [--model <model>] [<prompt>]
-    - agy: agy --output-format json --dangerously-skip-permissions
-           [--model <model>] [--effort <effort>] [--prompt <prompt>]
-    - claude: claude -p --dangerously-skip-permissions [--model <model>] [<prompt>]
-    - pi: pi -p --mode json [--model <model>] [--thinking <effort>] [-- <prompt>]
+    The catalog tail supplies model, effort, and permission flags. This
+    function adds only the native runner prefix and prompt separator, so
+    those flags are not duplicated. OpenCode drops only a leading ``mini``.
     """
     kind_str = (
         head_config.binding.kind.value
         if isinstance(head_config.binding.kind, HarnessKind)
         else str(head_config.binding.kind)
     )
+    if kind_str not in SUPPORTED_CLI_HARNESSES:
+        raise ValueError(
+            f"Harness '{kind_str}' does not support headless direct CLI execution. "
+            f"Supported CLI harnesses: {', '.join(sorted(SUPPORTED_CLI_HARNESSES))}."
+        )
     model_str = head_config.binding.model
     effort_str = (
         head_config.binding.effort.value
         if isinstance(head_config.binding.effort, EffortLevel)
         else (str(head_config.binding.effort) if head_config.binding.effort else None)
     )
+    tail = build_agent_args(
+        kind_str,
+        model_str,
+        effort_str,
+        skip_permissions=head_config.dangerously_skip_permissions,
+    )
+    if kind_str == "opencode" and tail[:1] == ["mini"]:
+        tail = tail[1:]
 
     if kind_str == "opencode":
-        argv = ["opencode", "run", "--format", "json"]
-        if model_str:
-            norm_model = (
-                "openai/" + model_str[len("openai-codex/") :]
-                if model_str.startswith("openai-codex/")
-                else model_str
-            )
-            argv.extend(["--model", norm_model])
-        if prompt is not None:
-            argv.append(prompt)
-        return argv
-
+        argv = ["opencode", "run", "--format", "json", *tail]
     elif kind_str == "agy":
-        argv = ["agy", "--output-format", "json", "--dangerously-skip-permissions"]
-        if model_str:
-            argv.extend(["--model", model_str])
-        if effort_str:
-            argv.extend(["--effort", effort_str])
-        if prompt is not None:
-            argv.extend(["--prompt", prompt])
-        return argv
-
+        argv = ["agy", "--output-format", "json", *tail]
     elif kind_str == "claude":
-        argv = ["claude", "-p", "--dangerously-skip-permissions"]
-        if model_str:
-            argv.extend(["--model", model_str])
-        if prompt is not None:
-            argv.append(prompt)
-        return argv
-
+        argv = ["claude", "-p", *tail]
     elif kind_str == "pi":
-        argv = ["pi", "-p", "--mode", "json"]
-        if model_str:
-            argv.extend(["--model", model_str])
-        if effort_str:
-            argv.extend(["--thinking", effort_str])
-        if prompt is not None:
-            argv.extend(["--", prompt])
-        return argv
-
+        argv = ["pi", "-p", "--mode", "json", *tail]
     else:
         raise ValueError(
             f"Harness '{kind_str}' does not support headless direct CLI execution. "
             f"Supported CLI harnesses: {', '.join(sorted(SUPPORTED_CLI_HARNESSES))}."
         )
+    if prompt is not None:
+        if kind_str == "agy":
+            argv.extend(["--prompt", prompt])
+        elif kind_str == "pi":
+            argv.extend(["--", prompt])
+        else:
+            argv.append(prompt)
+    return argv
 
 
 # ---------------------------------------------------------------------------
@@ -1223,7 +1292,12 @@ async def ensure_herdr_ai_head(
         if isinstance(head_config.binding.effort, EffortLevel)
         else (str(head_config.binding.effort) if head_config.binding.effort else None)
     )
-    agent_args = build_agent_args(kind_str, model_str, effort_str, skip_permissions=True)
+    agent_args = build_agent_args(
+        kind_str,
+        model_str,
+        effort_str,
+        skip_permissions=head_config.dangerously_skip_permissions,
+    )
     agent_name = "ai-head"
     state_payload = {
         "kind": kind_str,

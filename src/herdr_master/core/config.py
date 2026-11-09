@@ -828,7 +828,9 @@ class CouncilConfig(BaseModel):
 
 DEFAULT_AI_HEAD_SOUL: str = (
     "Software Architect and Workflow Orchestrator obsessed with UX best practices, "
-    "accessibility, clear interaction design, code reusability without speculative abstraction, "
+    "accessibility, clear interaction design, architectural alignment with the existing codebase, "
+    "code reusability without speculative abstraction, plain-language plan communication, "
+    "hierarchical parent notification protocol (child agents notify parent via herdr agent prompt upon completion), "
     "and intelligent workflow selection across Herdr-Master capabilities "
     "(/orchestration, /ergo, /council, /herdr-master) with dynamic model and harness "
     "discovery from project configuration (models.default_squad, orchestration, catalog)"
@@ -858,6 +860,7 @@ class AiHeadConfig(BaseModel):
     brief_before_action: bool = True
     autonomy: str = "routine"
     close_foreign_tabs: bool = False
+    dangerously_skip_permissions: bool = True
 
     @property
     def folder(self) -> Optional[str]:
@@ -893,7 +896,11 @@ class AiHeadConfig(BaseModel):
         if value is None:
             self.binding.effort = None
         elif isinstance(value, str):
-            self.binding.effort = EffortLevel(value)
+            s = value.strip().lower()
+            try:
+                self.binding.effort = EffortLevel(s)
+            except ValueError:
+                self.binding.effort = EffortLevel(value)
         else:
             self.binding.effort = value
 
@@ -907,17 +914,24 @@ class AiHeadConfig(BaseModel):
             d["binding"] = HarnessBinding.from_slug(
                 d["binding"], label="ai-head"
             ).model_dump()
-        elif "binding" not in d and ("harness" in d or "model" in d or "kind" in d):
+        elif "binding" not in d and (
+            "harness" in d or "model" in d or "kind" in d or "effort" in d
+        ):
             base = default_ai_head_binding()
             kind_val = d.pop("harness", d.pop("kind", None))
             model_val = d.pop("model", None)
+            has_effort = "effort" in d
             effort_val = d.pop("effort", None)
+            if has_effort and isinstance(effort_val, str):
+                s = effort_val.strip().lower()
+                if s in [e.value for e in EffortLevel]:
+                    effort_val = EffortLevel(s)
             d["binding"] = {
                 "kind": kind_val or base.kind.value,
                 "model": model_val or base.model,
                 "effort": (
                     effort_val
-                    if effort_val is not None
+                    if has_effort
                     else (base.effort.value if base.effort else None)
                 ),
                 "label": "ai-head",

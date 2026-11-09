@@ -100,8 +100,8 @@ Plain `/ergo` and master-forwarded Ergo jobs execute in Herdr mode.
 
 ### Spawning Role Tabs
 1. Ensure the Herdr server is accessible (`herdr status server`).
-2. Create one tab per role in the workspace:
-   `herdr tab create --workspace <WS_ID> --cwd "$WORKTREE" --label <role> --no-focus` → record `<PANE_ID>`.
+2. Create one tab per role in the workspace, forwarding the orchestrator's pane ID via `--env`:
+   `herdr tab create --workspace <WS_ID> --cwd "$WORKTREE" --label <role> --env "HERDR_PARENT_PANE_ID=$HERDR_PANE_ID" --no-focus` → record `<PANE_ID>`.
 3. Start the agent using the exact argv resolved from `herdm catalog agent`:
    `herdr agent start <name> --kind <kind> --pane <PANE_ID> -- <resolved_argv...>`
 4. Send the prompt with `herdr agent prompt <PANE_ID> "<prompt>"`.
@@ -144,6 +144,7 @@ Every agent prompt must be assembled in this order:
 4. **Role Brief** (`Scout Brief`, `Architect Brief`, `Coder Brief`, or `Reviewer Brief` from **Agent Briefs** below).
 5. **Verbatim `ALLOWED CODER MODELS` block** (when spawning the Architect).
 6. **Run paths & inputs**: absolute `WORKTREE`, absolute `RUN_DIR`, `unitTestsMode` (`none` | `new` | `update-only`), and task-specific inputs.
+7. **Parent Notification Requirement**: Provide `<ORCHESTRATOR_PANE_ID>` and explicit instruction to notify the orchestrator upon task completion or block.
 
 ### Shared Boilerplate
 > **Worktree / Checkout:** This run lives in `WORKTREE`. Every path you read or write is under `WORKTREE` — never the canonical project root (when a worktree is in use) and never another worktree. Do not commit, push, merge, or create branches; the orchestrator lands the work.
@@ -157,6 +158,11 @@ Every agent prompt must be assembled in this order:
 > **Project instructions & agents:** Read `AGENTS.md` / `CLAUDE.md` and `.ai/*.md` first for orientation, then verify in source code (code is the truth).
 >
 > **Unit tests — `unitTestsMode`:** Obey `unitTestsMode` (`none` / `new` / `update-only`): `none` = no test work at all; `update-only` = modify affected existing tests only, never add new ones; `new` = add/update tests as planned.
+>
+> **Parent Notification Protocol:** When you finish your assigned task and have written your designated summary or artifact, you MUST notify your direct parent orchestrator by executing:
+> `herdr agent prompt <ORCHESTRATOR_PANE_ID> "<Role> finished: <brief outcome/artifact path/verdict>"`.
+> If you encounter an unresolvable blocker or fatal error, notify your orchestrator immediately:
+> `herdr agent prompt <ORCHESTRATOR_PANE_ID> "<Role> blocked: <reason>"`.
 
 ---
 
@@ -203,11 +209,13 @@ Track one checklist item per step and complete in order:
 
 ### Step 4: User Approval Gate (NEVER skip)
 - If `~/.claude/lib/render-md.js` exists, render `RUN_DIR/plan.md` to HTML and share the path alongside the summary.
-- Present the plan to the user, clearly listing each task's scope, disjoint files, assigned **Expert Persona**, and assigned **Coder Model / Effort**.
+- Present the plan to the user in simple, plain language, clearly listing each task's scope, disjoint files, assigned **Expert Persona**, and assigned **Coder Model / Effort**.
+- **Architectural Alignment Verification**: Always verify that the plan fits seamlessly with the existing codebase architecture and conventions. If it does not fit, send the Architect back to find an architectural solution; if no solution exists, notify the user immediately for an authoritative decision.
 - **STOP and wait for explicit user approval.** Ask if any task's persona or coder model should be adjusted. No Coder may start before explicit user approval.
-  *(When `--ai-head` is enabled: An authorized AiHead decision within delegated scope may satisfy plan approval, provided its structured decision and rationale are recorded in `RUN_DIR/aihead_decision.json`. Genuinely ambiguous requirements, destructive actions, or scope expansions must still STOP and wait for explicit user approval).*
+  *(When `--ai-head` is enabled: An authorized AiHead decision within delegated scope may satisfy plan approval, provided it presents the plan in simple terms, verifies architectural alignment with the existing codebase, resolves any mismatch or escalates to the user if no solution exists, and records its structured decision and rationale in `RUN_DIR/aihead_decision.json`. Genuinely ambiguous requirements, destructive actions, or scope expansions must still STOP and wait for explicit user approval).*
 
-### Step 5: Parallel Specialist Coders (NEVER code in the orchestrator)
+### Step 5: Parallel Specialist Coders & Planning Stage Tab Pruning (NEVER code in the orchestrator)
+- **Lifecycle Tab Pruning (Scout & Architect)**: As soon as the plan is approved and Coders are started, **close the Scout and Architect tabs/agents immediately** (`herdr tab close <scout-tab-id>`, `herdr tab close <architect-tab-id>`). Their planning phase is complete and they are no longer needed. Never leave idle planning tabs open during implementation.
 - For each approved task in `plan.md`, make the Coder a task-specific specialist by injecting `Adopt this expert persona: <Expert Persona from plan>.` at the top of its prompt.
 - Use the exact model approved for that task in `plan.md`.
 - Launch all `INDEPENDENT` tasks **in parallel in a single turn**. Tasks marked `DEPENDS ON` wait until their upstream dependencies finish and read `RUN_DIR/coder_<upstream>_summary.md`.
@@ -216,15 +224,20 @@ Track one checklist item per step and complete in order:
 ### Step 6: Full Reviewer & Scoped Fix Loop (NEVER skip)
 - Spawn one fresh **Reviewer** on the combined diff against the base commit, `RUN_DIR/plan.md`, all `coder_<N>_summary.md` files, and `unitTestsMode`.
 - Output: `RUN_DIR/review.md` (`APPROVED` or `NEEDS FIXES`) and, per coder needing fixes, `RUN_DIR/fixes_<N>.md`.
+- **Worker Lifecycle Pruning**:
+  - **A worker whose work is approved is no longer needed**: If a Coder's tasks have no findings or pass review, **close that worker's tab/agent immediately**.
+  - **Workers still in review or needing fixes remain active**: Keep open only the specific Coder tabs that require fixes (`NEEDS FIXES`).
 - **Read-Only Persistence**: If the reviewer runs natively with read-only tools and returns its report via output rather than writing files directly, the orchestrator writes the returned report text into `RUN_DIR/review.md` (and `RUN_DIR/fixes_<N>.md`). Never grant write permissions to a read-only role.
 - **Scoped Fix Loop (up to 3–5 cycles)**:
-  - If `NEEDS FIXES`, re-run only the affected Coders (preserving each task's same Expert Persona and Coder Model; in Herdr mode, reuse existing tabs) with `RUN_DIR/fixes_<N>.md`.
+  - If `NEEDS FIXES`, re-run only the affected active Coders (preserving each task's same Expert Persona and Coder Model; in Herdr mode, reuse existing tabs) with `RUN_DIR/fixes_<N>.md`.
   - Relaunch the Reviewer in `MODE: fix-verification`. It checks only whether each finding is resolved and nothing new broke.
+  - As each coder's fixes are approved, close that coder's tab immediately.
+  - Once the Reviewer verdict is `APPROVED`, **close the Reviewer tab/agent immediately**.
   - If critical/major issues remain after the cycle cap, STOP, keep `WORKTREE` and `ergo/<run-id>` intact, and report to the user.
 
-### Step 7: Land — Sync `<TARGET_BRANCH>` & Single Squash Commit (NEVER run `git reset --hard`)
+### Step 7: Land — Sync `<TARGET_BRANCH>` & Single Squash Commit (MANDATORY squash-merge; NEVER run `git reset --hard`)
 Only after the Reviewer verdict is **APPROVED**:
-*(Note: If running as a delegated child session under `/herdr-master` with explicit worktree/branch constraints, commit once on the assigned worktree branch and stop as instructed by `/herdr-master`; master alone integrates into `develop`).* Otherwise:
+*(Note: If running as a delegated child session under `/herdr-master` with explicit worktree/branch constraints, commit once on the assigned worktree branch and stop as instructed by `/herdr-master`; master alone integrates into `develop`).* Otherwise, the orchestrator MUST squash-merge the completed work:
 1. Delete `RUN_DIR` (after copying `.orchestration/carryover.md` to canonical checkout if present), then in `WORKTREE` on `ergo/<run-id>`:
    `git add -A` and create **exactly one** `git commit -m "<one-line summary>"` (body: plan task list).
 2. **Resolve `TARGET_BRANCH`** in the canonical checkout: `develop` > `main` > `master`.
@@ -243,6 +256,12 @@ Only after the Reviewer verdict is **APPROVED**:
 ### Step 8: Done & Carryover
 - Update `<canonical_root>/.orchestration/carryover.md` with intent, branches, squash commit SHA, and constraints.
 - Report what was built, `TARGET_BRANCH`, squash commit SHA, and confirm cleanup.
+- **Hierarchical Parent Notification (One Level Up)**:
+  If this Ergo run was launched by or has a parent orchestrator / AiHead (e.g. `PARENT_PANE_ID` / `HERDR_PARENT_PANE_ID` is set or an `ai-head` pane exists in the workspace):
+  The Ergo Orchestrator **MUST** immediately notify the parent session upon completion:
+  `herdr agent prompt <PARENT_PANE_ID> "Ergo run <run-id> finished: squash commit <SHA> on <TARGET_BRANCH>, review APPROVED, tests passed, worktree cleaned up."`
+  If blocked at any gate or unresolvable error:
+  `herdr agent prompt <PARENT_PANE_ID> "Ergo run <run-id> blocked: <reason>"`
 
 ---
 
@@ -317,12 +336,14 @@ You are a specialist Coder implementing **ONE** approved task from `plan.md`.
 4. Run build/compile/targeted test checks where supported. Fix anything your changes broke. Honor `unitTestsMode`.
 5. Do **not** run `git commit`, `git push`, `git merge`, `git reset --hard`, or switch branches, and do **not** spawn subagents.
 6. Write `RUN_DIR/coder_<N>_summary.md`: files changed (with brief per-file notes), decisions or deviations from the plan (flag prominently), verification run, and anything the Reviewer should scrutinize.
+7. **Notify Parent Orchestrator**: Immediately upon saving `coder_<N>_summary.md`, notify your direct parent orchestrator:
+   `herdr agent prompt <ORCHESTRATOR_PANE_ID> "Coder <N> finished: <brief outcome>, summary at RUN_DIR/coder_<N>_summary.md, verification passed"`
 
 ### Reviewer Brief
 **READ-ONLY: never edit source code.** You are the final quality gate, independent of the Architect and Coders. You write **only** `RUN_DIR/review.md` and (when fixes are needed) `RUN_DIR/fixes_<N>.md`.
 
 - **When `MODE: fix-verification` is stated in your prompt (fix cycles & conflict-resolution checks only)**:
-  Read only the `fixes_*.md` briefs, the coders' updated summaries, and the explicit files listed in your prompt. Judge ONLY whether each finding/conflict is cleanly resolved and nothing new broke in those files. Mark each finding `RESOLVED` or `NOT RESOLVED` with reason. Rewrite `RUN_DIR/review.md` with verdict (`APPROVED` / `NEEDS FIXES`) and refresh `RUN_DIR/fixes_<N>.md` only for unresolved findings.
+  Read only the `fixes_*.md` briefs, the coders' updated summaries, and the explicit files listed in your prompt. Judge ONLY whether each finding/conflict is cleanly resolved and nothing new broke in those files. Mark each finding `RESOLVED` or `NOT RESOLVED` with reason. Rewrite `RUN_DIR/review.md` with verdict (`APPROVED` / `NEEDS FIXES`) and refresh `RUN_DIR/fixes_<N>.md` only for unresolved findings. Notify parent orchestrator: `herdr agent prompt <ORCHESTRATOR_PANE_ID> "Reviewer fix-verification finished: verdict <APPROVED|NEEDS FIXES>"`.
 
 - **Full First-Pass Review**:
   1. Read `RUN_DIR/plan.md` and every `RUN_DIR/coder_<N>_summary.md`. Inspect the actual `git diff` and changed files.
@@ -330,3 +351,5 @@ You are a specialist Coder implementing **ONE** approved task from `plan.md`.
   3. **Independent Diff-First Correctness Pass**: Go line-by-line over the diff hunting for: logic and off-by-one errors; null/empty/boundary inputs; missing `await`, sync-over-async, disposal/lifetime bugs; swallowed exceptions; money/decimal rounding errors; SQL/EF correctness (N+1, missing index, batch limits, transaction/concurrency bugs); security (OWASP, trust-boundary validation, hardcoded secrets); and reinvented utilities. Do not flag missing tests when `unitTestsMode = none`.
   4. Write `RUN_DIR/review.md` with verdict (**`APPROVED`** or **`NEEDS FIXES`**) and findings (severity + `file:line`).
   5. For each coder needing fixes, write `RUN_DIR/fixes_<N>.md` with concrete, actionable instructions (file, problem, expected fix). Approve when no critical/major issues remain (list minor nitpicks as optional notes).
+  6. **Notify Parent Orchestrator**: Immediately upon saving `RUN_DIR/review.md`, notify your direct parent orchestrator:
+     `herdr agent prompt <ORCHESTRATOR_PANE_ID> "Reviewer finished: verdict <APPROVED|NEEDS FIXES> at RUN_DIR/review.md"`

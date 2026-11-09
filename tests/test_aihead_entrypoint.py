@@ -87,7 +87,7 @@ def _which(name: str) -> str | None:
 
 
 def test_aihead_app_help_is_a_direct_launch_command():
-    result = runner.invoke(aihead_app, ["--help"])
+    result = runner.invoke(aihead_app, ["--help"], env={"COLUMNS": "200"})
     text = _output(result)
     assert result.exit_code == 0, text
     assert "Usage: aihead [OPTIONS]" in text
@@ -99,6 +99,8 @@ def test_aihead_app_help_is_a_direct_launch_command():
         "--harness",
         "--model",
         "--effort",
+        "--skip-permissions",
+        "--no-skip-permissions",
         "--split",
         "--no-split",
         "--secondary",
@@ -216,6 +218,7 @@ def test_forwards_task_binding_aliases_and_paths(tmp_path: Path):
     assert kwargs["harness"] is HarnessKind.PI
     assert kwargs["model"] == "xai/grok-4.7"
     assert kwargs["effort"] is EffortLevel.MAX
+    assert kwargs["dangerously_skip_permissions"] is True
     assert kwargs["initial_task"] == "ship the feature"
     assert kwargs["split"] is True
     assert kwargs["workspace"] == "desk"
@@ -658,3 +661,69 @@ def test_install_help_refers_to_canonical_skills_generically():
     assert result.exit_code == 0, text
     assert "canonical skills" in text.lower()
     assert "/herdr-master, /ergo, /orchestration, and /council" not in text
+
+
+def _permission_config(tmp_path: Path, *,
+    skip: bool | None,
+    effort: str | None = "high",
+) -> Path:
+    lines = ["[ai_head]", "enabled = true"]
+    if skip is not None:
+        lines.append(
+            "dangerously_skip_permissions = " + ("true" if skip else "false")
+        )
+    lines.extend(
+        [
+            "",
+            "[ai_head.binding]",
+            'kind = "agy"',
+            'model = "gemini-2.5-pro"',
+        ]
+    )
+    if effort is not None:
+        lines.append(f'effort = "{effort}"')
+    path = tmp_path / "ai-head.toml"
+    path.write_text("\n".join(lines) + "\n", encoding="utf-8")
+    return path
+
+
+def test_standalone_forwards_permission_precedence_with_effort(tmp_path: Path):
+    ctx = _ctx(
+        inside=True,
+        session="alpha",
+        socket=tmp_path / "sock",
+        workspace_id="ws-1",
+        pane_id="pane-1",
+    )
+    cases = [
+        ([], False, False, EffortLevel.HIGH),
+        ([], None, True, EffortLevel.HIGH),
+        (["--skip-permissions"], False, True, EffortLevel.HIGH),
+        (["--no-skip-permissions", "--effort", "low"], True, False, EffortLevel.LOW),
+    ]
+    for flags, saved_skip, expected_skip, expected_effort in cases:
+        launch = AsyncMock(return_value=_launch_result("alpha", "ws-1"))
+        with (
+            patch("herdr_master.cli.main.resolve_launch_context", return_value=ctx),
+            patch("herdr_master.cli.main.HerdrClient", return_value=_live_client("ws-1")),
+            patch("herdr_master.cli.main.launch_ai_head", launch),
+            patch("herdr_master.cli.main.ensure_herdr_server", new_callable=AsyncMock),
+            patch("herdr_master.pipeline.ai_head.execute_cli_decision_sync") as headless,
+            patch("os.execvp") as execvp,
+        ):
+            result = runner.invoke(
+                aihead_app,
+                [
+                    "--config",
+                    str(_permission_config(tmp_path, skip=saved_skip)),
+                    "--no-attach",
+                    *flags,
+                ],
+            )
+        text = _output(result)
+        assert result.exit_code == 0, text
+        kwargs = launch.await_args.kwargs
+        assert kwargs["dangerously_skip_permissions"] is expected_skip
+        assert kwargs["effort"] is expected_effort
+        headless.assert_not_called()
+        execvp.assert_not_called()

@@ -253,7 +253,7 @@ class HerdrClient:
         wait: Optional[Any] = None,
         timeout_ms: Optional[int] = None,
         *,
-        max_attempts: int = 20,
+        max_attempts: int = 60,
     ) -> Dict[str, Any]:
         """Send bracketed prompt text to an agent."""
         if max_attempts < 1:

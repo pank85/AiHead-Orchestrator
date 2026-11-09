@@ -111,9 +111,9 @@ If any task omits the persona, overlaps another task's files, or names a model t
 
 ## 5. User Approval Gate (never skip)
 
-Present the plan: per task, its scope, owned files, dependency, Expert Persona, and model. **STOP and wait for explicit approval.** If the user already supplied a plan file and said "go", echo that plan back in one paragraph plus the task table and ask for a single confirmation — do not treat silence as approval. No Coder starts before approval.
+Present the plan in simple, plain language: per task, its scope, owned files, dependency, Expert Persona, and model. Verify architectural alignment with the existing codebase; if it does not fit, request an architectural solution or notify the user for a decision. **STOP and wait for explicit approval.** If the user already supplied a plan file and said "go", echo that plan back in one paragraph plus the task table and ask for a single confirmation — do not treat silence as approval. No Coder starts before approval.
 
-When `--ai-head` is enabled, an authorized AiHead decision within delegated scope recorded via `aihead-cli` may satisfy routine plan approval with logged rationale; genuinely ambiguous requirements, destructive actions, or scope expansions must still STOP and wait for explicit user approval.
+When `--ai-head` is enabled, an authorized AiHead decision within delegated scope recorded via `aihead-cli` may satisfy routine plan approval with logged rationale; AiHead must present the plan in simple terms, verify architectural alignment with the existing codebase, seek solutions for any mismatch, or escalate to the user if no clean solution exists. Genuinely ambiguous requirements, destructive actions, or scope expansions must still STOP and wait for explicit user approval.
 
 ## 6. Parallel Specialist Coders (never code in the orchestrator)
 
@@ -142,9 +142,15 @@ Only after `APPROVED`. **If this run was delegated by a master orchestrator, do 
 5. Clean up: `git worktree remove "$WORKTREE"` (never `--force`) and `git branch -D orchestration/<run-id>` only after confirming the squash landed.
 6. Never push and never open a PR unless explicitly asked.
 
-## 9. Report
+## 9. Report & Hierarchical Parent Notification
 
 State what was built, `TARGET_BRANCH`, the squash commit SHA, the verification commands and their real results, what the Reviewer flagged and how it was resolved, and any remaining risk. Do not call it done on subagent self-reports alone — check the diff and the tests.
+
+If this run was launched by or has a parent orchestrator / AiHead (e.g. `PARENT_PANE_ID` / `HERDR_PARENT_PANE_ID` is set or an `ai-head` pane exists in the workspace):
+The orchestrator **MUST** immediately notify the parent session upon completion:
+`herdr agent prompt <PARENT_PANE_ID> "Orchestration run <run-id> finished: commit <SHA> on <TARGET_BRANCH>, review APPROVED, verification passed."`
+If blocked at any gate or unresolvable error:
+`herdr agent prompt <PARENT_PANE_ID> "Orchestration run <run-id> blocked: <reason>"`
 
 ---
 

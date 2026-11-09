@@ -7,7 +7,9 @@ from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
 from pydantic import ValidationError
+from typer.testing import CliRunner
 
+from herdr_master.cli.main import app
 from herdr_master.core.config import DEFAULT_AI_HEAD_SOUL, AiHeadConfig
 from herdr_master.core.models import EffortLevel, HarnessBinding, HarnessKind
 from herdr_master.herdr.client import HerdrClient
@@ -122,6 +124,10 @@ def test_persona_prompt_uses_soul_and_guardrails():
     prompt_default = build_ai_head_system_prompt()
     assert DEFAULT_AI_HEAD_SOUL in prompt_default
     assert "Autonomous Decisions (status: 'decided')" in prompt_default
+    assert "Plan Approval & Architectural Alignment Gate:" in prompt_default
+    assert "Plain-Language Plan Presentation:" in prompt_default
+    assert "Mandatory Architectural Alignment:" in prompt_default
+    assert "User Escalation When No Solution Exists:" in prompt_default
     assert "Escalation & Guardrails (status: 'needs_user')" in prompt_default
     assert "NEVER authorize destructive operations" in prompt_default
     assert "git reset --hard" in prompt_default
@@ -335,14 +341,16 @@ def test_build_headless_cli_argv_all_supported_harnesses():
         "agy",
         "--output-format",
         "json",
-        "--dangerously-skip-permissions",
         "--model",
         "gemini-3.8-flash-high",
         "--effort",
         "high",
+        "--dangerously-skip-permissions",
         "--prompt",
         "Prompt text",
     ]
+    assert argv_agy.count("--effort") == 1
+    assert argv_agy.count("--dangerously-skip-permissions") == 1
 
     # 3. claude
     cfg_claude = AiHeadConfig(
@@ -356,11 +364,12 @@ def test_build_headless_cli_argv_all_supported_harnesses():
     assert argv_claude == [
         "claude",
         "-p",
-        "--dangerously-skip-permissions",
         "--model",
         "claude-opus-4-6",
+        "--dangerously-skip-permissions",
         "Prompt text",
     ]
+    assert argv_claude.count("--dangerously-skip-permissions") == 1
 
     # 4. pi
     cfg_pi = AiHeadConfig(
@@ -377,13 +386,17 @@ def test_build_headless_cli_argv_all_supported_harnesses():
         "-p",
         "--mode",
         "json",
+        "--provider",
+        "openai-codex",
         "--model",
-        "openai-codex/gpt-6.1-sol",
+        "gpt-6.1-sol",
         "--thinking",
         "max",
         "--",
         "Prompt text",
     ]
+    assert argv_pi.count("--thinking") == 1
+    assert "--dangerously-skip-permissions" not in argv_pi
 
 
 def test_build_headless_cli_argv_unsupported_harness():
@@ -1396,4 +1409,212 @@ async def test_ensure_herdr_ai_head_falls_back_to_new_tab_on_stale_pane_failure(
     client.close_tab.assert_called_once_with("tab-stale")
     client.create_tab.assert_called_once()
     assert client.start_agent.call_count == 2
+
+
+def test_headless_catalog_tail_keeps_prompt_separators_and_does_not_duplicate_flags():
+    """Catalog owns model, effort, and permission flags. Prefixes stay native."""
+    opencode = AiHeadConfig(
+        dangerously_skip_permissions=True,
+        binding=HarnessBinding(
+            kind=HarnessKind.OPENCODE,
+            model="openai-codex/gpt-6.1-sol",
+            effort=EffortLevel.MAX,
+            label="ai-head",
+        ),
+    )
+    opencode_argv = build_headless_cli_argv(opencode, prompt="go")
+    assert opencode_argv == [
+        "opencode",
+        "run",
+        "--format",
+        "json",
+        "--model",
+        "openai/gpt-6.1-sol",
+        "go",
+    ]
+    assert "mini" not in opencode_argv
+    assert "--dangerously-skip-permissions" not in opencode_argv
+    assert opencode_argv.count("--model") == 1
+
+    agy = AiHeadConfig(
+        dangerously_skip_permissions=False,
+        binding=HarnessBinding(
+            kind=HarnessKind.AGY,
+            model="gemini-3.8-flash-high",
+            effort=None,
+            label="ai-head",
+        ),
+    )
+    agy_argv = build_headless_cli_argv(agy, prompt="go")
+    assert agy_argv == [
+        "agy",
+        "--output-format",
+        "json",
+        "--model",
+        "gemini-3.8-flash-high",
+        "--effort",
+        "high",
+        "--prompt",
+        "go",
+    ]
+    assert agy_argv.count("--effort") == 1
+    assert "--dangerously-skip-permissions" not in agy_argv
+
+    claude = AiHeadConfig(
+        dangerously_skip_permissions=False,
+        binding=HarnessBinding(
+            kind=HarnessKind.CLAUDE,
+            model="claude-opus-4-6",
+            effort=EffortLevel.HIGH,
+            label="ai-head",
+        ),
+    )
+    claude_argv = build_headless_cli_argv(claude, prompt="go")
+    assert claude_argv == ["claude", "-p", "--model", "claude-opus-4-6", "go"]
+    assert "--effort" not in claude_argv
+    assert "--dangerously-skip-permissions" not in claude_argv
+
+    pi = AiHeadConfig(
+        dangerously_skip_permissions=True,
+        binding=HarnessBinding(
+            kind=HarnessKind.PI,
+            model="m",
+            label="ai-head",
+        ),
+    )
+    pi_argv = build_headless_cli_argv(pi, prompt="go")
+    assert pi_argv == ["pi", "-p", "--mode", "json", "--model", "m", "--", "go"]
+    assert "--dangerously-skip-permissions" not in pi_argv
+
+
+def test_headless_opencode_strips_only_a_leading_mini_marker():
+    cfg = AiHeadConfig(
+        binding=HarnessBinding(kind=HarnessKind.OPENCODE, model="general", label="ai-head")
+    )
+    with patch(
+        "herdr_master.pipeline.ai_head.build_agent_args",
+        return_value=["--model", "general", "mini"],
+    ):
+        argv = build_headless_cli_argv(cfg, prompt="go")
+    assert argv == [
+        "opencode",
+        "run",
+        "--format",
+        "json",
+        "--model",
+        "general",
+        "mini",
+        "go",
+    ]
+
+
+def test_aihead_cli_discover_honors_saved_settings_without_launching(tmp_path: Path):
+    """aihead-cli stays config-driven and must not contact Herdr or a harness."""
+    cfg_path = tmp_path / "ai-head.toml"
+    cfg_path.write_text(
+        """
+[ai_head]
+enabled = true
+dangerously_skip_permissions = false
+
+[ai_head.binding]
+kind = "agy"
+model = "gemini-3.8-flash-high"
+""",
+        encoding="utf-8",
+    )
+    runner = CliRunner()
+    with (
+        patch("herdr_master.cli.main.HerdrClient") as client,
+        patch("herdr_master.cli.main.ensure_herdr_server") as server,
+        patch("asyncio.create_subprocess_exec") as subprocess_exec,
+        patch("os.execvp") as execvp,
+    ):
+        result = runner.invoke(
+            app,
+            ["aihead-cli", "--discover", "--config", str(cfg_path)],
+        )
+
+    assert result.exit_code == 0, result.output
+    client.assert_not_called()
+    server.assert_not_called()
+    subprocess_exec.assert_not_called()
+    execvp.assert_not_called()
+    discovery = json.loads(result.output)
+    assert discovery["argv"] == [
+        "agy",
+        "--output-format",
+        "json",
+        "--model",
+        "gemini-3.8-flash-high",
+        "--effort",
+        "high",
+    ]
+    assert discovery["argv"].count("--effort") == 1
+    assert "--dangerously-skip-permissions" not in discovery["argv"]
+    assert "--skip-permissions" not in result.output
+
+
+@pytest.mark.asyncio
+async def test_ensure_restarts_when_saved_permission_changes_agent_args(tmp_path: Path):
+    """Permission changes the stored catalog args, so the existing restart policy applies."""
+    _clear_running_head_states()
+    origin = str(tmp_path)
+    cfg = AiHeadConfig(
+        enabled=True,
+        dangerously_skip_permissions=False,
+        binding=HarnessBinding(
+            kind=HarnessKind.AGY,
+            model="gemini-2.5-pro",
+            effort=EffortLevel.HIGH,
+            label="ai-head",
+        ),
+    )
+    _save_running_head_state(
+        origin,
+        "ws-1",
+        "pane-ai-head",
+        {
+            "kind": "agy",
+            "model": "gemini-2.5-pro",
+            "effort": "high",
+            "args": build_agent_args(
+                "agy", "gemini-2.5-pro", "high", skip_permissions=True
+            ),
+            "soul": cfg.soul,
+            "cwd": origin,
+        },
+    )
+    client = MagicMock(spec=HerdrClient)
+    client.get_snapshot = AsyncMock(
+        return_value=SessionSnapshot(
+            protocol=22,
+            workspaces=[],
+            tabs=[TabSnapshot(tab_id="tab-ai-head", workspace_id="ws-1", label="ai-head")],
+            panes=[PaneSnapshot(pane_id="pane-ai-head", workspace_id="ws-1", tab_id="tab-ai-head")],
+            agents=[
+                AgentSnapshot(
+                    pane_id="pane-ai-head",
+                    agent="agy",
+                    name="ai-head",
+                    agent_status="idle",
+                )
+            ],
+        )
+    )
+    client.start_agent = AsyncMock(return_value={"status": "started"})
+    client.prompt_agent = AsyncMock(return_value={"type": "agent_prompted"})
+    client.create_tab = AsyncMock()
+
+    with patch("herdr_master.pipeline.ai_head._ensure_agy_trusted"):
+        result = await ensure_herdr_ai_head(
+            client, workspace_id="ws-1", head_config=cfg, origin_cwd=origin
+        )
+
+    assert result["reconciled"] is True
+    assert result["reused"] is True
+    started = client.start_agent.await_args.kwargs["args"]
+    assert started == ["--model", "gemini-2.5-pro", "--effort", "high"]
+    assert "--dangerously-skip-permissions" not in started
+    assert started.count("--effort") == 1
 

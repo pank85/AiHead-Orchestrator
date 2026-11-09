@@ -28,7 +28,7 @@ from herdr_master.cli.catalog import catalog_app
 from herdr_master.cli.skills import install_skills as run_install_skills
 from herdr_master.cli.skills import skills_app
 from herdr_master.core.catalog import CatalogError, supported_harnesses
-from herdr_master.core.config import find_project_config_path, load_project_config
+from herdr_master.core.config import CouncilConfig, find_project_config_path, load_project_config
 from herdr_master.core.context import HerdrContext
 from herdr_master.core.slug import InvalidBindingSlugError
 from herdr_master.herdr.client import HerdrClient
@@ -438,7 +438,9 @@ def run_council(
             members = [s.strip() for s in roster.split(",") if s.strip()]
             if len(members) < 2:
                 _abort("Council requires at least 2 members.")
-            council_cfg = council_cfg.model_copy(update={"members": members})
+            council_cfg = CouncilConfig.model_validate(
+                {**council_cfg.model_dump(), "members": members}
+            )
     except _RESOLVE_ERRORS as err:
         _abort(str(err))
 
@@ -489,6 +491,11 @@ def run_aihead(
         None,
         "--effort",
         help="Reasoning effort override (low, medium, high, max).",
+    ),
+    dangerously_skip_permissions: Optional[bool] = typer.Option(
+        None,
+        "--skip-permissions/--no-skip-permissions",
+        help="Override AiHead dangerously_skip_permissions. Omitted uses saved config, then True.",
     ),
     split: Optional[bool] = typer.Option(
         None,
@@ -568,6 +575,11 @@ def run_aihead(
     except _RESOLVE_ERRORS as err:
         _abort(str(err))
 
+    eff_skip = (
+        dangerously_skip_permissions
+        if dangerously_skip_permissions is not None
+        else head_cfg.dangerously_skip_permissions
+    )
     client = HerdrClient(session=ctx.session_name, socket_path=ctx.socket_path)
 
     async def _run():
@@ -576,6 +588,7 @@ def run_aihead(
             harness=kind,
             model=model_slug,
             effort=effort_level,
+            dangerously_skip_permissions=eff_skip,
             split=effective_split,
             workspace=workspace,
             initial_task=task,
@@ -1295,6 +1308,7 @@ async def _dispatch_standalone_aihead(
     kind: Any,
     model_slug: str,
     effort_level: Any,
+    dangerously_skip_permissions: bool,
     effective_split: bool,
     workspace: Optional[str],
     task: Optional[str],
@@ -1351,6 +1365,7 @@ async def _dispatch_standalone_aihead(
             harness=kind,
             model=model_slug,
             effort=effort_level,
+            dangerously_skip_permissions=dangerously_skip_permissions,
             split=effective_split,
             workspace=launch_workspace,
             initial_task=task,
@@ -1408,6 +1423,11 @@ def launch_standalone_aihead(
         None,
         "--effort",
         help="Reasoning effort override (low, medium, high, max).",
+    ),
+    dangerously_skip_permissions: Optional[bool] = typer.Option(
+        None,
+        "--skip-permissions/--no-skip-permissions",
+        help="Override AiHead dangerously_skip_permissions. Omitted uses saved config, then True.",
     ),
     split: Optional[bool] = typer.Option(
         None,
@@ -1502,6 +1522,11 @@ def launch_standalone_aihead(
             eff_model,
             eff_effort,
         )
+        eff_skip = (
+            dangerously_skip_permissions
+            if dangerously_skip_permissions is not None
+            else head_cfg.dangerously_skip_permissions
+        )
         effective_cwd = _effective_aihead_cwd(cwd, head_cfg.cwd if head_cfg else None)
     except _RESOLVE_ERRORS as err:
         _abort(str(err))
@@ -1514,6 +1539,7 @@ def launch_standalone_aihead(
                 kind=kind,
                 model_slug=model_slug,
                 effort_level=effort_level,
+                dangerously_skip_permissions=eff_skip,
                 effective_split=_effective_split(
                     secondary,
                     split,
