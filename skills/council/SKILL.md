@@ -173,12 +173,17 @@ If 5 full feedback cycles conclude without unanimous agreement (and all Round 5 
    ```bash
    herdr-master council-state finalize --run-dir "$RUN_DIR"
    ```
-2. The Coordinator presents `RUN_DIR/final_plan.md` to the user, highlighting:
+2. **Pane/Agent Lifecycle Ownership**: Only the direct parent closes a pane/agent — the Coordinator closes its own Scout and Council Member tabs, and no pane closes itself and no agent closes its own tab. AiHead (or the delegating parent) closes the Coordinator pane once the Council reports completion, and AiHead (or the level above) owns final integration of the selected plan; the Council lands no code.
+3. **Never leave completed work unmerged**: Finalize the plan and hand `RUN_DIR/final_plan.md` to the direct parent for integration **before** cleanup. If the run is genuinely blocked (missing requirements, failed consensus gates, missing authorization), preserve the work — the run directory and plan artifacts stay intact — report the blocker to the direct parent, and never discard it.
+4. **Children registry (`RUN_DIR/children.tsv`)**: Create it when spawning the first child. One tab-separated line per child: `pane_id`, `role`, `tab_id`, `branch`, `worktree`, `run_dir`, `status`, `last_heartbeat`. Only the parent writes it: add on spawn, remove only after that child is closed and integrated; stale entries are the parent's responsibility.
+5. **Background monitor**: One separate background monitor pane, registered in the same file like any child. About every 10 minutes it checks each entry with `herdr agent get` and `herdr agent read`: the child exists, is progressing, and has not stalled after finishing without reporting. It reports anomalies and stale entries to its direct parent. The monitor is read-only — it never closes panes, merges, pushes, or edits child work.
+6. **No parent polling**: Parents still never block or poll; the background monitor is the polling mechanism.
+7. The Coordinator presents `RUN_DIR/final_plan.md` to the user, highlighting:
    - Selected plan overview, architecture, and task breakdown.
    - Outcome type: `UNANIMOUS_CONSENSUS` or `MAJORITY_VOTE` (with vote tally and tie-break details if applicable).
    - Cycles utilized (1 to 5).
    - Provenance of ideas synthesized across all member drafts.
-3. **Hierarchical Parent Notification (One Level Up — Level 2 -> Level 1)**:
+8. **Hierarchical Parent Notification (One Level Up — Level 2 -> Level 1)**:
    If this Council run was launched by or has a direct parent orchestrator / AiHead (e.g. `HERDR_PARENT_PANE_ID` / bootstrap `parent_pane_id` / `PARENT_PANE_ID` is set):
    - For **completed** deliberation, the Coordinator **MUST** immediately notify its direct parent session upon finalization:
      `herdr agent prompt "$HERDR_PARENT_PANE_ID" "Council deliberation finished: <outcome> in <N> cycles, final plan at <RUN_DIR>/final_plan.md"`

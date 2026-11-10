@@ -247,6 +247,10 @@ Track one checklist item per step and complete in order:
 
 ### Step 5: Parallel Specialist Coders & Planning Stage Tab Pruning (NEVER code in the orchestrator)
 - **Lifecycle Tab Pruning (Scout & Architect)**: As soon as the plan is approved and Coders are started, **close the Scout and Architect tabs/agents immediately** (`herdr tab close <scout-tab-id>`, `herdr tab close <architect-tab-id>`). Their planning phase is complete and they are no longer needed. Never leave idle planning tabs open during implementation.
+- **Only the direct parent closes a pane/agent**: The Ergo orchestrator closes its own worker panes (Scout, Architect, Coders, Reviewer), and only after it has retained their work. No pane closes itself and no agent closes its own tab — AiHead (or the delegating parent) closes the Ergo pane once Ergo reports completion, and AiHead (or the level above) owns final integration.
+- **Children registry (`RUN_DIR/children.tsv`)**: Create it when spawning the first child. One tab-separated line per child: `pane_id`, `role`, `tab_id`, `branch`, `worktree`, `run_dir`, `status`, `last_heartbeat`. Only the parent writes it: add on spawn, remove only after that child is closed and integrated; stale entries are the parent's responsibility.
+- **Background monitor**: One separate background monitor pane, registered in the same file like any child. About every 10 minutes it checks each entry with `herdr agent get` and `herdr agent read`: the child exists, is progressing, and has not stalled after finishing without reporting. It reports anomalies and stale entries to its direct parent. The monitor is read-only — it never closes panes, merges, pushes, or edits child work.
+- **No parent polling**: Parents still never block or poll; the background monitor is the polling mechanism.
 - **Git Lock Collision Avoidance (`index.lock`)**: Two parallel agents executing git commands in the same checkout collide on `.git/index.lock` even with disjoint files. Coders modify only files assigned to their task; worker prompts strictly forbid all git operations (`git add`, `git commit`, `git checkout`, `git reset`). Only the orchestrator lands and commits.
 - For each approved task in `plan.md`, make the Coder a task-specific specialist by injecting `Adopt this expert persona: <Expert Persona from plan>.` at the top of its prompt.
 - Use the exact model approved for that task in `plan.md`.
@@ -309,6 +313,7 @@ Only after the Reviewer verdict is **APPROVED**; for a delegated run preserve th
 - **NEVER run `git reset --hard`** — sync `<TARGET_BRANCH>` inside `ergo/<run-id>` first and resolve conflicts via Coder + Reviewer; if unresolvable, STOP and preserve state.
 - **Adopted workspaces are NEVER closed.** Close only when bootstrap `owns_workspace` is true, and only that workspace ID.
 - **Single squash commit on `<TARGET_BRANCH>` only after `APPROVED` and only for a genuinely standalone run**; delegated runs never integrate or clean up. Never push, never open a PR unless asked.
+- **Never leave completed work unmerged**: Review and integrate approved work **before** cleanup. For a delegated run, the reviewed commit on the assigned branch is the handoff; if integration is genuinely blocked (failing gates, conflicts, missing authorization), preserve the work — the branch, worktree, and commit stay intact — report the blocker to the direct parent, and never discard it.
 
 ---
 
