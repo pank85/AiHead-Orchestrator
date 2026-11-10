@@ -24,6 +24,7 @@ except Exception:
 import typer
 from rich.console import Console
 
+from herdr_master.cli.aihead_setup import run_aihead_setup
 from herdr_master.cli.catalog import catalog_app
 from herdr_master.cli.skills import install_skills as run_install_skills
 from herdr_master.cli.skills import skills_app
@@ -56,6 +57,8 @@ app = typer.Typer(
     name="herdm",
     help="👑 Universal multi-master, multi-worker cross-harness AI orchestrator built on Herdr.",
     add_completion=True,
+    invoke_without_command=True,
+    no_args_is_help=False,
 )
 # Console-script entry for `aihead`. One callback, no nested command, and never
 # the headless `herdm aihead-cli` decision path.
@@ -111,6 +114,63 @@ _RESOLVE_ERRORS = (
 def _abort(message: str) -> None:
     typer.echo(str(message), err=True)
     raise typer.Exit(1)
+
+
+@app.callback()
+def root(
+    ctx: typer.Context,
+    aihead: bool = typer.Option(
+        False,
+        "--aihead",
+        help="Launch an interactive AiHead session (same as `herdm aihead`).",
+    ),
+    aihead_setup: bool = typer.Option(
+        False,
+        "--aihead-setup",
+        help="Configure per-role AiHead models (same as `herdm aihead-setup`).",
+    ),
+    task: Optional[str] = typer.Option(
+        None, "--task", "-t", help="Initial instruction for `--aihead`."
+    ),
+    harness: Optional[str] = typer.Option(
+        None, "--harness", help="Harness override for `--aihead`."
+    ),
+    model: Optional[str] = typer.Option(None, "--model", help="Model override for `--aihead`."),
+    effort: Optional[str] = typer.Option(
+        None, "--effort", help="Reasoning effort override for `--aihead`."
+    ),
+    cwd: Optional[Path] = typer.Option(
+        None, "--cwd", "--folder", "-C", help="Initial folder for `--aihead`."
+    ),
+    attach: bool = typer.Option(
+        True, "--attach/--no-attach", help="Attach to Herdr if outside Herdr."
+    ),
+    config: Optional[Path] = typer.Option(
+        None, "--config", help="Optional path to .herdr-master.toml."
+    ),
+    defaults: bool = typer.Option(
+        False, "--defaults", help="Apply `--aihead-setup` defaults without prompting."
+    ),
+    yes: bool = typer.Option(False, "--yes", "-y", help="Skip the `--aihead-setup` confirmation."),
+) -> None:
+    """Root launcher flags. Subcommands keep their existing behaviour."""
+    if aihead_setup:
+        run_aihead_setup(defaults=defaults, yes=yes, config=config)
+        raise typer.Exit(0)
+    if aihead:
+        run_aihead(
+            harness=harness,
+            model=model,
+            effort=effort,
+            task=task,
+            cwd=cwd,
+            attach=attach,
+            config=config,
+        )
+        raise typer.Exit(0)
+    if ctx.invoked_subcommand is None:
+        typer.echo(ctx.get_help())
+        raise typer.Exit(0)
 
 
 @app.command()
@@ -633,6 +693,20 @@ def run_aihead(
             f"[yellow]Attaching to isolated Herdr session '{target_session}'...[/yellow]"
         )
         os.execvp("herdr", ["herdr", "--session", target_session])
+
+
+@app.command("aihead-setup")
+def aihead_setup_cmd(
+    defaults: bool = typer.Option(
+        False, "--defaults", help="Apply defaults without prompting."
+    ),
+    yes: bool = typer.Option(False, "--yes", "-y", help="Skip the confirmation prompt."),
+    config: Optional[Path] = typer.Option(
+        None, "--config", help="Target .herdr-master.toml (defaults to the project file)."
+    ),
+) -> None:
+    """Configure per-role AiHead harnesses, models, and efforts."""
+    run_aihead_setup(defaults=defaults, yes=yes, config=config)
 
 
 @app.command("aihead-cli")

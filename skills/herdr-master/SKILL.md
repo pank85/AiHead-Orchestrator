@@ -52,6 +52,27 @@ Identify which harness you are running in (`agy`, `pi`, `claude`, `opencode`, or
 
 ---
 
+## Pane launch verification (mandatory)
+
+Never assume a spawned pane started. After `herdr tab create` + `herdr agent start` + `herdr agent prompt`, verify with evidence before reporting success:
+
+- `herdr agent get <PANE>` → `agent_status` must be `working` (not `idle`, not `unknown`).
+- `herdr agent read <PANE>` → no startup/permission/credit error, and the expected model visible in the TUI footer.
+- `agent_not_found` or a vanished pane means the launch FAILED; never report it as started.
+
+opencode v2.2.6 TUI has no `--model` flag. `herdr agent start ... -- --model provider/model` times out ("timed out waiting for agent startup") and the pane dies. Launch plain, then set the model inside the TUI:
+
+- `herdr agent prompt <PANE> "/models"`
+- `herdr agent send-keys <PANE> <chars...>` to filter by a substring of the exact display name (search is literal: "flash-free" finds nothing, "v4.1 flash free" works)
+- `enter`, then `enter` again on the `Default` variant
+- re-read the pane and confirm the model in the footer.
+
+Check the default model is not rate-limited before spawning. A global default (e.g. Grok 4.7 out of credits) kills the child on first prompt. Prefer the parent session's own working model for child panes.
+
+Report proof of start, not intent: model slug, `agent_status`, and context usage from `herdr agent read`.
+
+---
+
 ## 2. Scope and Setup
 
 - First verify `HERDR_ENV=1` and that `HERDR_WORKSPACE_ID`, `HERDR_PANE_ID`, and the current working directory are available in the environment. If not, explain that this command must run in a Herdr pane and stop; never control an unrelated focused workspace or create a server.

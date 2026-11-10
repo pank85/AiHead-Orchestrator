@@ -43,6 +43,12 @@ The Council operates with a strictly partitioned roster:
 
 ---
 
+## Pane launch verification (mandatory)
+
+A spawn succeeded only when `herdr agent get <pane>` reports `agent_status: working` and `herdr agent read <pane>` shows the expected model with no startup, permission, or credit error. `agent_not_found` (or a vanished pane) means the launch FAILED. Never report a started job without that evidence; report the model slug, `agent_status`, and context usage.
+
+---
+
 ## 2. State-Gate Coordination Commands (`council-state`)
 
 All protocol transitions are validated, run-scoped, and enforced atomically by the `herdr-master council-state` CLI. The Coordinator **MUST** execute and receive a successful transition before dispatching each round or action, and **MUST stop immediately on gate refusal**.

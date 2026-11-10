@@ -104,6 +104,12 @@ When running delegated under a parent orchestrator:
 
 ---
 
+## Pane launch verification (mandatory)
+
+A spawn succeeded only when `herdr agent get <pane>` reports `agent_status: working` and `herdr agent read <pane>` shows the expected model with no startup, permission, or credit error. `agent_not_found` (or a vanished pane) means the launch FAILED. Never report a started job without that evidence; report the model slug, `agent_status`, and context usage.
+
+---
+
 ## 2. Scout — discovery (never skip)
 
 Spawn one read-only Scout. Give it the confirmed intent, 3–5 specific questions worth answering, absolute `WORKTREE`, absolute `RUN_DIR`, and `unitTestsMode`.

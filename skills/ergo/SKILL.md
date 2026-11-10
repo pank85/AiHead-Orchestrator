@@ -171,6 +171,12 @@ Every agent prompt must be assembled in this order:
 
 ---
 
+## Pane launch verification (mandatory)
+
+A spawn succeeded only when `herdr agent get <pane>` reports `agent_status: working` and `herdr agent read <pane>` shows the expected model with no startup, permission, or credit error. `agent_not_found` (or a vanished pane) means the launch FAILED. Never report a started job without that evidence; report the model slug, `agent_status`, and context usage.
+
+---
+
 ## 5. Pipeline Sequence
 
 **Shared-session parent routing:** The dispatching parent's own pane ID is the child's direct parent, never its grandparent. The parent passes it as `HERDR_PARENT_PANE_ID` and records the child pane, workspace, worktree, branch and run directory. This is a practical shared-session trust model: same-session agents can impersonate one another or send prompts; there is no authenticated sender or security isolation claim, and this prose is not runtime enforcement.

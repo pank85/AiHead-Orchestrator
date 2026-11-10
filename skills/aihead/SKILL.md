@@ -36,6 +36,21 @@ Do not add `--resume` or `--continue` to imply this user session is the launched
 Hermes has no catalog native-subagent adapter or direct headless AiHead runner;
 use Herdr background tabs for delegation, not an invented native tool contract.
 
+### Root launcher flags and role defaults
+
+`herdm --aihead` is equivalent to `herdm aihead`: it adopts an existing Herdr workspace or starts Herdr and opens an interactive AiHead pane. Root flags forward to the same launcher: `--task`, `--harness`, `--model`, `--effort`, `-C/--cwd`, `--no-attach`.
+
+`herdm --aihead-setup` (alias `herdm aihead-setup`) configures per-role models and persists them to `.herdr-master.toml`. Defaults:
+
+| Role | Harness | Model | Effort |
+| --- | --- | --- | --- |
+| Scout | `opencode` | `opencode/beam-free` | `medium` |
+| Coders | `opencode` | `opencode/deepseek-v4.1-flash-free` | none (the Architect chooses per task) |
+| Architect | `opencode` | `openai/gpt-6.1-sol` | `high` |
+| Reviewer | `opencode` | `openai/gpt-6.1-sol` | `medium` |
+
+Non-interactive: `herdm --aihead-setup --defaults --yes --config PATH`. Invalid slugs or efforts exit non-zero without touching the file.
+
 ## Persona & Soul
 Software Architect obsessed with UX, best practices, accessibility, clear interaction design, and code reusability without speculative abstraction.
 
@@ -101,6 +116,27 @@ Both **AiHead** and **Herdr-Master** must always delegate user task requests to 
      - For plan-only Council, upon finalization report the outcome and RUN_DIR/final_plan.md; do not wait for or make an implementation commit.
      - If either workflow is blocked, report the blocker immediately.
   ```
+
+---
+
+## Pane launch verification (mandatory)
+
+Never assume a spawned pane started. After `herdr tab create` + `herdr agent start` + `herdr agent prompt`, verify with evidence before reporting success:
+
+- `herdr agent get <PANE>` → `agent_status` must be `working` (not `idle`, not `unknown`).
+- `herdr agent read <PANE>` → no startup/permission/credit error, and the expected model visible in the TUI footer.
+- `agent_not_found` or a vanished pane means the launch FAILED; never report it as started.
+
+opencode v2.2.6 TUI has no `--model` flag. `herdr agent start ... -- --model provider/model` times out ("timed out waiting for agent startup") and the pane dies. Launch plain, then set the model inside the TUI:
+
+- `herdr agent prompt <PANE> "/models"`
+- `herdr agent send-keys <PANE> <chars...>` to filter by a substring of the exact display name (search is literal: "flash-free" finds nothing, "v4.1 flash free" works)
+- `enter`, then `enter` again on the `Default` variant
+- re-read the pane and confirm the model in the footer.
+
+Check the default model is not rate-limited before spawning. A global default (e.g. Grok 4.7 out of credits) kills the child on first prompt. Prefer the parent session's own working model for child panes.
+
+Report proof of start, not intent: model slug, `agent_status`, and context usage from `herdr agent read`.
 
 ---
 
