@@ -26,10 +26,6 @@ keywords = [
     "tui",
     "ergo"
 ]
-
-[project.urls]
-Homepage = "https://github.com/pank85/AiHead-Orchestrator"
-Repository = "https://github.com/pank85/AiHead-Orchestrator"
 classifiers = [
     "Development Status :: 4 - Beta",
     "Environment :: Console",
@@ -53,6 +49,10 @@ dependencies = [
     "tomli-w>=1.0.0",
     "ruamel.yaml>=0.18,<0.19",
 ]
+
+[project.urls]
+Homepage = "https://github.com/pank85/AiHead-Orchestrator"
+Repository = "https://github.com/pank85/AiHead-Orchestrator"
 
 [project.optional-dependencies]
 dev = [
@@ -87,4 +87,3 @@ select = ["E", "F", "W", "I", "B"]
 [tool.pytest.ini_options]
 asyncio_mode = "auto"
 asyncio_default_fixture_loop_scope = "function"
-
