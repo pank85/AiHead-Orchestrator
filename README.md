@@ -180,12 +180,26 @@ pipx install --editable .
 
 Verify your installation:
 ```bash
-herdm --help
+aihead --help
 ```
 
 ---
 
 ## 💻 CLI Usage Guide
+
+`herdm` is deprecated; its existing subcommands remain available for compatibility.
+
+Quick start: `aihead` shows help without launching. Use `aihead --task "..."` for
+interactive AiHead, `aihead --tui` for the cockpit, or delegate in the background:
+Delegation requires the caller's `HERDR_PANE_ID` or a unique existing `ai-head` pane;
+otherwise it stops rather than launching an unparented agent.
+
+```bash
+aihead --ergo "Implement Redis rate limiting middleware"
+aihead --council "Architect the telemetry pipeline"
+aihead --orchestration "Implement a rate limiter"
+aihead --herdr-master "Audit the microservices roadmap"
+```
 
 ### 1. Workspace Initialization & Status
 ```bash
@@ -202,7 +216,7 @@ herdm config
 ### 2. Launch Ergo Pipeline (Single Major Job)
 ```bash
 # Simple launch using authoritative default squad configuration
-herdm ergo "Implement Redis rate limiting middleware"
+aihead --ergo "Implement Redis rate limiting middleware"
 
 # Launch with custom role overrides
 herdm ergo "Add WebSocket notification server" \
@@ -214,14 +228,14 @@ herdm ergo "Add WebSocket notification server" \
 
 ### 3. Launch Native Orchestration (Single Harness)
 ```bash
-# Launch a self-contained pipeline on a specific harness
-herdm orchestration "Implement token bucket rate limiter" --harness agy
+# Launch a self-contained pipeline using the configured harness
+aihead --orchestration "Implement token bucket rate limiter"
 ```
 
 ### 4. Launch AI Council Deliberation
 ```bash
 # Launch multi-agent deliberation to reach consensus on architectural design
-herdm council "Architect event-driven telemetry pipeline"
+aihead --council "Architect event-driven telemetry pipeline"
 ```
 
 ### 5. Launch Root Herdr Master (Multiple Jobs)
@@ -230,22 +244,22 @@ herdm council "Architect event-driven telemetry pipeline"
 herdm master start --name backend-lead
 
 # Launch with an initial task
-herdm master start --name backend-lead --task "Audit microservices roadmap"
+aihead --herdr-master "Audit microservices roadmap"
 ```
 
 ### 6. Interactive AiHead & Headless Decisions
 
-* **Interactive AiHead (`herdm aihead` / `aihead`)**:
+* **Interactive AiHead (`aihead --task`)**:
   Adopts an existing Herdr workspace if one is open, or starts Herdr and creates a new workspace. AiHeadDev is not required.
   ```bash
   # Launch interactive AiHead session
-  herdm aihead
+  aihead --task "Review the project"
 
   # Launch with an initial task assigned
-  herdm aihead --task "Review database migration schema"
+  aihead --task "Review database migration schema"
 
   # Background launch without terminal attachment
-  herdm aihead --task "Investigate flaky integration test" --no-attach
+  aihead --task "Investigate flaky integration test" --no-attach
   ```
 
 * **Headless AiHead CLI (`herdm aihead-cli`)**:

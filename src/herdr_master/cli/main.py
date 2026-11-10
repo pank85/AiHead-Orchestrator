@@ -36,7 +36,6 @@ from herdr_master.herdr.client import HerdrClient
 from herdr_master.herdr.socket import HerdrConnectionError
 from herdr_master.pipeline.council import CouncilError
 from herdr_master.pipeline.launcher import (
-    COUNCIL_COORDINATOR_NAME,
     LaunchContextError,
     ensure_herdr_server,
     launch_ai_head,
@@ -53,7 +52,23 @@ from herdr_master.pipeline.squad import (
     resolve_squad,
 )
 
+
+class DeprecatedGroup(typer.core.TyperGroup):
+    def main(self, args=None, *pos, **kwargs):
+        arguments = list(sys.argv[1:] if args is None else args)
+        mapping = {
+            "ergo": "--ergo", "council": "--council", "orchestration": "--orchestration",
+            "master": "--herdr-master", "aihead": "--task", "head": "--task",
+            "tui": "--tui", "aihead-setup": "--help", "--aihead-setup": "--help",
+            "--aihead": "--task",
+        }
+        replacement = next((mapping[arg] for arg in arguments if arg in mapping), "--help")
+        typer.echo(f"[deprecated] use aihead {replacement} ...", err=True)
+        return super().main(args, *pos, **kwargs)
+
+
 app = typer.Typer(
+    cls=DeprecatedGroup,
     name="herdm",
     help="👑 Universal multi-master, multi-worker cross-harness AI orchestrator built on Herdr.",
     add_completion=True,
@@ -1481,8 +1496,57 @@ def _print_standalone_launch_result(res: Any, fallback_session: str) -> str:
     return str(target_session)
 
 
+def _launch_skill(skill: str, intent: str, session: Optional[str], cwd: Optional[Path]) -> None:
+    """Launch a delegated skill in its own background workspace."""
+    try:
+        ctx = resolve_launch_context(session)
+        client = HerdrClient(session=ctx.session_name, socket_path=ctx.socket_path)
+        label = f"{skill}-{datetime.now().strftime('%Y%m%d-%H%M')}"
+        common = dict(client=client, cwd=str(cwd.resolve()) if cwd else None,
+                      session=session, fresh_workspace=True, focus=False, delegated=True)
+        if skill == "ergo":
+            resolved = _resolve_ergo_once(models=None, scout=None, architect=None,
+                                          workers=None, coder=None, reviewer=None, run_squad=None)
+            operation = launch_ergo(
+                intent=intent, workspace_label=label, squad=resolved.squad, **common
+            )
+        elif skill == "council":
+            operation = launch_council(intent=intent, workspace_label=label,
+                                       council=load_project_config(cwd).council, **common)
+        elif skill == "orchestration":
+            orch = load_project_config(cwd).orchestration
+            operation = launch_orchestration(
+                intent=intent, workspace_label=label, harness=orch.harness,
+                scout_model=orch.scout_model or "gemini-3.8-flash",
+                architect_model=orch.architect_model or "gemini-3.8-flash",
+                coder_model=" | ".join(orch.worker_models) or "gemini-3.8-flash",
+                reviewer_model=orch.reviewer_model or "gemini-3.8-flash",
+                scout_effort=orch.scout_effort, architect_effort=orch.architect_effort,
+                reviewer_effort=orch.reviewer_effort, **common,
+            )
+        else:
+            operation = launch_master(name=label, initial_task=intent, **common)
+        result = asyncio.run(operation)
+        typer.echo(
+            f"Started {skill}: workspace {result.get('workspace_id')}, "
+            f"pane {result.get('pane_id')}"
+        )
+    except (*_RESOLVE_ERRORS, RuntimeError) as err:
+        _abort(str(err))
+
+
 @aihead_app.callback(invoke_without_command=True)
 def launch_standalone_aihead(
+    ctx: typer.Context,
+    tui_flag: bool = typer.Option(False, "--tui", help="Launch the AiHeadDev cockpit."),
+    ergo: Optional[str] = typer.Option(None, "--ergo", help="Delegate an Ergo intent."),
+    council: Optional[str] = typer.Option(None, "--council", help="Delegate a Council intent."),
+    orchestration: Optional[str] = typer.Option(
+        None, "--orchestration", help="Delegate an orchestration intent."
+    ),
+    herdr_master: Optional[str] = typer.Option(
+        None, "--herdr-master", help="Delegate multiple jobs."
+    ),
     harness: Optional[str] = typer.Option(
         None,
         "--harness",
@@ -1552,6 +1616,21 @@ def launch_standalone_aihead(
     ),
 ) -> None:
     """Launch an interactive AiHead session in a Herdr workspace."""
+    skills = [(name, value) for name, value in (
+        ("ergo", ergo), ("council", council), ("orchestration", orchestration),
+        ("herdr-master", herdr_master),
+    ) if value is not None]
+    if len(skills) + int(tui_flag) > 1 or (task is not None and (skills or tui_flag)):
+        _abort("Choose only one launch mode.")
+    if tui_flag:
+        tui(session=session, demo=False)
+        return
+    if skills:
+        _launch_skill(skills[0][0], skills[0][1], session, cwd)
+        return
+    if all(ctx.get_parameter_source(name).name == "DEFAULT" for name in ctx.params):
+        typer.echo(ctx.get_help())
+        return
     try:
         ctx = resolve_launch_context(session)
     except _RESOLVE_ERRORS as err:

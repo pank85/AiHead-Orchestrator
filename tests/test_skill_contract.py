@@ -556,9 +556,9 @@ def test_canonical_skills_hermes_support():
     assert "Hermes has no catalog native-subagent adapter or direct headless AiHead runner" in aihead_body
     assert "--yolo" in aihead_body
     assert "--no-skip-permissions" in aihead_body
-    assert 'herdm orchestration "<intent>"' in aihead_body
-    assert 'herdm ergo "<intent>"' in aihead_body
-    assert 'herdm council "<intent>"' in aihead_body
+    assert 'aihead --orchestration "<intent>"' in aihead_body
+    assert 'aihead --ergo "<intent>"' in aihead_body
+    assert 'aihead --council "<intent>"' in aihead_body
 
     hm_body = load_skill_body("herdr-master")
     assert "--kind hermes" in hm_body

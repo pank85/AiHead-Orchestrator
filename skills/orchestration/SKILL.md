@@ -9,6 +9,8 @@ metadata:
 
 # /orchestration — Self-Contained Subagent Pipeline
 
+Launch with `aihead --orchestration "<intent>"`; `herdm` is deprecated.
+
 Run the orchestration pipeline for: `${@:-$ARGUMENTS}` (if no intent or spec path was supplied, ask what to build and stop).
 
 You are the orchestrator. **Never implement code directly in the main conversation.** Every role below runs as a subagent spawned by *this* harness — same agent, same model family, no Herdr workspace, no `herdr` CLI, no `herdm` CLI, no catalog lookup.

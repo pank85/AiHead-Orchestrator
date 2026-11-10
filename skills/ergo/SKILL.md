@@ -9,6 +9,8 @@ metadata:
 
 # /ergo — Scout → Architect → Parallel Specialist Coders → Reviewer Loop
 
+Launch with `aihead --ergo "<intent>"`; `herdm` is deprecated.
+
 Run an Ergo pipeline for: `${@:-$ARGUMENTS}` (if no intent or spec path was supplied, ask what to build and stop).
 
 You are the orchestrator. **Never implement code directly in the main conversation.**

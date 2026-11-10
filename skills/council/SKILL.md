@@ -9,6 +9,8 @@ metadata:
 
 # /council — Multi-Agent AI Council Planning & Consensus Protocol
 
+Launch with `aihead --council "<intent>"`; `herdm` is deprecated.
+
 Run an AI Council planning deliberation for: `${@:-$ARGUMENTS}` (if no specification, plan intent, or idea path was supplied, prompt the user for requirements and stop).
 
 The AI Council coordinates multiple specialized agent members to independently draft, cross-review, synthesize, and converge upon an optimal technical architecture and implementation plan.
