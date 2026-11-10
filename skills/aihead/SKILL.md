@@ -73,11 +73,12 @@ The fundamental difference between AiHead and Herdr-Master is:
 When presented with any user request, problem statement, or objective, AiHead examines it immediately and decides which execution path to take:
 
 1. **Simple Direct Agent (Single-Agent Focus)**:
-   - **Criteria**: Small, atomic, or routine tasks (e.g. single-file bugfixes, quick diagnosis, small scripts, minor doc adjustments) where full multi-agent pipeline ceremony is unnecessary overhead.
-   - **Execution**: Dispatch to a dedicated background agent tab (`herdr tab create --no-focus`) or async background subagent. Never tie up the main chat session with inline execution.
+   - **Criteria**: Small, atomic, or routine tasks (e.g. single-file bugfixes, quick diagnosis, small scripts, minor doc adjustments) where full multi-agent pipeline ceremony is unnecessary overhead. Small tasks may also use `/orchestration` when appropriate.
+   - **Execution**: Dispatch to a dedicated background Herdr agent tab (`herdr tab create --no-focus`). Never tie up the main chat session with inline execution.
+   - **Optional review**: For a small job, AiHead may instruct the worker pane to arrange a review after the job is done, specifying an appropriate model for faster work. Delegate that review to a new background Herdr pane, not a same-session subagent.
 
 2. **`/orchestration` (Single-Harness Native Pipeline)**:
-   - **Criteria**: Fast, cohesive feature tasks self-contained inside a single agent ecosystem (`agy`, `pi`, `claude`, `opencode`, `hermes`) where single-harness velocity and simplicity are preferred.
+   - **Criteria**: Fast, cohesive tasks, including small tasks, self-contained inside a single agent ecosystem (`agy`, `pi`, `claude`, `opencode`, `hermes`) where single-harness velocity and simplicity are preferred.
    - **Architecture**: Scout $\rightarrow$ Architect $\rightarrow$ parallel Coders $\rightarrow$ Reviewer running entirely via native subagents with zero Herdr daemon dependency.
    - **Invocation**: `aihead --orchestration "<intent>"` or slash command `/orchestration <intent>`.
 
@@ -100,10 +101,12 @@ When presented with any user request, problem statement, or objective, AiHead ex
 
 ## 3. Always Delegate to Background Agents (Main Chat Stays Always Available)
 
-Both **AiHead** and **Herdr-Master** must always delegate user task requests to background agents (new background Herdr tabs spawned with `--no-focus` or asynchronous subagents):
+**AiHead** delegates every task for execution, including simple tasks and pipeline coordinators, to a new background Herdr pane (`herdr tab create --no-focus`). Same-session asynchronous background subagents are allowed **only** to evaluate or select the execution skill/path (such as `/ergo`, `/council`, or `/orchestration`); they must not execute the task, monitor children, or perform other delegated work. Once a path is selected, launch its work in a new background Herdr pane. This restriction applies to AiHead's own delegation, not to native subagents inside a separately delegated pipeline or to standalone workflows.
+
+**Herdr-Master** delegates user task requests to background Herdr panes as described in its own skill.
 - **Never block the main chat (No Polling Loops)**: Parent sessions NEVER block or wait in polling loops — they return immediately after spawning/prompting children. The primary interactive session must never perform long-running implementation or synchronous wait loops directly.
 - **Main chat is always available**: The orchestrator must return control immediately so the user can submit new tasks, query status, adjust priorities, or make decisions in the main terminal without waiting for child work to finish.
-- **Async monitoring / Push callbacks**: Rely on the child's mandatory `herdr agent prompt <DIRECT_PARENT_PANE_ID>` push notifications or non-blocking async watchers rather than blocking the main turn.
+- **Async monitoring / Push callbacks**: Rely on the child's mandatory `herdr agent prompt <DIRECT_PARENT_PANE_ID>` push notifications or non-blocking background process watchers, not same-session subagents, rather than blocking the main turn.
 - **Mandatory Parent Directive on Delegation**:
   When delegating child pipelines, including `/ergo`, `/orchestration`, `/council`, or a Herdr master, record the child pane, workspace, worktree, branch and run directory as applicable, and pass **AiHead's own `$HERDR_PANE_ID` as the child's direct parent**, never the grandparent. Same-session agents can impersonate one another or send prompts; this is shared-session trust, not authenticated sender verification or security isolation. A missing or ambiguous parent stops the child without integration or cleanup.
   Use `aihead --ergo "<intent>"`, `aihead --orchestration "<intent>"`, `aihead --council "<intent>"` or `aihead --herdr-master "<task>"` for background delegation. These commands pass the caller's `HERDR_PANE_ID` as `HERDR_PARENT_PANE_ID` and include the following directive in the initial prompt. For manually created tabs, set the same environment variable and provide the directive explicitly:
@@ -189,16 +192,19 @@ Once jobs and tasks finish:
 1. **Verification**: Confirm all tasks pass review and test verification.
 2. **Serial Squash-Merge into `develop`**: Always squash-merge completed feature branches into `develop` (or the target branch) with a single comprehensive, clean commit:
    `git merge --squash <child-branch>` followed by `git commit -m "<summary>"`.
-3. **Never leave dangling branches or unmerged worktrees**: Ensure the integration branch cleanly includes all verified work before cleanup.
+3. **Never leave completed work unmerged**: Complete review and squash-merge into `develop` **before** final cleanup. If integration is genuinely blocked (failing gates, conflicting branches, missing authorization), **preserve the work** — the branch, worktree, and commit stay intact — report the blocker to the direct parent, and never discard it.
+4. **Never leave dangling branches or unmerged worktrees**: Ensure the integration branch cleanly includes all verified work before cleanup.
 
 ---
 
 ## 7. Aggressive Tab and Agent Lifecycle Cleanup
 
 Never accumulate idle or unneeded tabs and agents. Close tabs as soon as their lifecycle stage finishes:
+- **Only the direct parent closes a pane/agent**: The pane that created a pane or agent is its **DIRECT parent**, and only that parent may close it (`herdr tab close <tab-id>`). **No pane closes itself and no agent closes its own tab** — a finished worker reports completion to `$HERDR_PARENT_PANE_ID` and stops; it never removes the tab it is running in.
+- **Ownership chain (AiHead -> Ergo -> workers)**: In `/ergo`, the **Ergo orchestrator closes its worker panes** (Scout, Architect, Coders, Reviewer); **AiHead closes the Ergo pane** once Ergo reports completion. **AiHead owns final integration**; a child never lands into the integration branch on its own.
 - **Planning Stage Pruning**: In `/ergo` and multi-stage pipelines, as soon as the Architect finishes `plan.md` and Coders have started, **close the Scout and Architect tabs immediately** (`herdr tab close <tab-id>`). They are no longer needed during implementation.
 - **Worker Pruning During Review**:
-  - **A worker whose work is approved is no longer needed**: As each worker passes review (`APPROVED`), **close that worker's tab/agent immediately**.
+  - **A worker whose work is approved is no longer needed**: As each worker passes review (`APPROVED`), **close that worker's tab/agent immediately** — but only once the parent has **retained the work** (the committed branch, worktree, and review report) and carries it to integration. Closing a worker pane must never discard or forget its output.
   - **Workers still in review or needing fixes remain active**: Only keep open workers whose work `NEEDS FIXES` until their fixes pass review.
 - **Reviewer Pruning**: Once the reviewer confirms all fixes and finishes, close the Reviewer tab.
 - **Post-Landing Cleanup**: After squash-merging into `develop`, remove worktrees (`git worktree remove`) and delete temporary branches (`git branch -D`).

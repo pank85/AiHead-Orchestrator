@@ -507,6 +507,48 @@ def test_aihead_skill_contract():
     assert "aiheaddev" in body.lower()
 
 
+def test_aihead_delegation_limits_same_session_subagents_to_path_selection():
+    body = load_skill_body("aihead")
+    assert (
+        "Same-session asynchronous background subagents are allowed **only** to evaluate "
+        "or select the execution skill/path" in body
+    )
+    assert (
+        "they must not execute the task, monitor children, or perform other delegated work" in body
+    )
+    assert "launch its work in a new background Herdr pane" in body
+    assert "Small tasks may also use `/orchestration` when appropriate" in body
+    assert "specifying an appropriate model for faster work" in body
+    assert "Delegate that review to a new background Herdr pane" in body
+    assert (
+        "not to native subagents inside a separately delegated pipeline or to standalone workflows"
+        in body
+    )
+    assert "or async background subagent" not in body
+    assert "not same-session subagents" in body
+
+
+def test_aihead_pane_lifecycle_ownership_contract():
+    """Assert AiHead makes pane close ownership and unmerged-work rules explicit."""
+    body = load_skill_body("aihead")
+
+    # Only the direct parent closes; no self-closing or own-tab closing
+    assert "Only the direct parent closes a pane/agent" in body
+    assert "No pane closes itself and no agent closes its own tab" in body
+    assert "Ergo orchestrator closes its worker panes" in body
+    assert "AiHead closes the Ergo pane" in body
+    assert "AiHead owns final integration" in body
+
+    # APPROVED pruning requires retained work carried to integration
+    assert "retained the work" in body
+    assert "carries it to integration" in body
+
+    # Never abandon completed work; block instead of discarding
+    assert "Never leave completed work unmerged" in body
+    assert "preserve the work" in body
+    assert "report the blocker to the direct parent, and never discard it" in body
+
+
 def test_aihead_initial_parent_directive_has_workflow_specific_completion():
     """The actual child prompt must not require plan-only Council to commit."""
     body = load_skill_body("aihead")
