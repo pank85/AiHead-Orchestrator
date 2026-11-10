@@ -499,7 +499,8 @@ class OrchestrationConfig(BaseModel):
     def sync_active_to_harnesses(self) -> None:
         """Sync top-level flat fields into the per-harness entry for the active harness."""
         active_key = self.harness.value
-        self.harnesses[active_key] = HarnessOrchestrationSettings(
+        previous = self.harnesses.get(active_key) or HarnessOrchestrationSettings()
+        self.harnesses[active_key] = previous.model_copy(update=dict(
             scout_model=self.scout_model,
             architect_model=self.architect_model,
             worker_models=list(self.worker_models),
@@ -507,7 +508,7 @@ class OrchestrationConfig(BaseModel):
             scout_effort=self.scout_effort,
             architect_effort=self.architect_effort,
             reviewer_effort=self.reviewer_effort,
-        )
+        ))
 
     def sync_harness_to_active(
         self, harness: Optional[Union[HarnessKind, str]] = None
@@ -1067,6 +1068,7 @@ class HerdrMasterConfig(BaseModel):
     orchestration: OrchestrationConfig = Field(default_factory=OrchestrationConfig)
     council: CouncilConfig = Field(default_factory=CouncilConfig)
     ai_head: AiHeadConfig = Field(default_factory=AiHeadConfig)
+    master_coordinator: Optional[HarnessBinding] = None
 
 
 def find_project_config_path(

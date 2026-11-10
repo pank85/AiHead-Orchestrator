@@ -299,8 +299,6 @@ def test_orchestration_skill_is_herdr_free_and_keeps_every_gate():
         "owns_workspace",
         "herdr agent start",
         "herdr agent wait",
-        "herdr agent read",
-        "herdr agent get",
         "herdr agent send-keys",
     ):
         assert forbidden not in body, f"/orchestration must not reference {forbidden}"
@@ -318,7 +316,7 @@ def test_orchestration_skill_is_herdr_free_and_keeps_every_gate():
 
     # Ensure no other 'herdr agent' subcommands exist anywhere in the body
     agent_subcommands = re.findall(r"herdr agent\s+([a-zA-Z0-9_-]+)", body)
-    assert all(cmd == "prompt" for cmd in agent_subcommands), (
+    assert all(cmd in {"prompt", "get", "read"} for cmd in agent_subcommands), (
         f"Forbidden herdr agent subcommands in /orchestration: {agent_subcommands}"
     )
 
@@ -558,9 +556,9 @@ def test_canonical_skills_hermes_support():
     assert "Hermes has no catalog native-subagent adapter or direct headless AiHead runner" in aihead_body
     assert "--yolo" in aihead_body
     assert "--no-skip-permissions" in aihead_body
-    assert 'herdm orchestration "<intent>"' in aihead_body
-    assert 'herdm ergo "<intent>"' in aihead_body
-    assert 'herdm council "<intent>"' in aihead_body
+    assert 'aihead --orchestration "<intent>"' in aihead_body
+    assert 'aihead --ergo "<intent>"' in aihead_body
+    assert 'aihead --council "<intent>"' in aihead_body
 
     hm_body = load_skill_body("herdr-master")
     assert "--kind hermes" in hm_body
@@ -682,6 +680,22 @@ def test_strict_one_level_up_hierarchy_and_nonblocking_contract():
     assert 'herdr agent prompt "$HERDR_PARENT_PANE_ID" "Council deliberation finished:' in council
     assert 'herdr agent prompt "$HERDR_PARENT_PANE_ID" "Council decision/blocker needed:' in council
     assert "NEVER notify AiHead or Herdr-Master directly" in council
+
+
+def test_all_skills_require_pane_launch_verification():
+    """Every skill that spawns panes must demand evidence of a successful launch."""
+    for skill in ("aihead", "herdr-master", "ergo", "orchestration", "council"):
+        body = load_skill_body(skill)
+        assert "Pane launch verification" in body, skill
+        assert "herdr agent get" in body, skill
+        assert "agent_status" in body, skill
+        assert "agent_not_found" in body, skill
+
+    for skill in ("aihead", "herdr-master"):
+        body = load_skill_body(skill)
+        assert "opencode v2.2.6 TUI has no `--model` flag" in body, skill
+        assert 'herdr agent prompt <PANE> "/models"' in body, skill
+        assert "rate-limited" in body, skill
 
 
 def test_hermes_skill_discovery_production_lookup_in_sandbox(tmp_path):

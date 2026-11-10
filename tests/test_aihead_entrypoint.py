@@ -117,42 +117,12 @@ def test_aihead_app_help_is_a_direct_launch_command():
         assert option in text, option
 
 
-def test_bare_invocation_launches_without_a_subcommand(tmp_path: Path):
-    ctx = _ctx(
-        inside=True,
-        session="alpha",
-        socket=tmp_path / "missing.sock",
-        workspace_id="ws-1",
-        pane_id="pane-1",
-    )
-    client = _live_client("ws-1")
-    launch = AsyncMock(return_value=_launch_result("alpha", "ws-1", split=True))
-    with (
-        patch("herdr_master.cli.main.resolve_launch_context", return_value=ctx),
-        patch("herdr_master.cli.main.HerdrClient", return_value=client) as client_cls,
-        patch("herdr_master.cli.main.launch_ai_head", launch),
-        patch("herdr_master.cli.main.ensure_herdr_server", new_callable=AsyncMock) as server,
-        patch("herdr_master.cli.main.os.execvp") as execvp,
-        patch("herdr_master.pipeline.ai_head.execute_cli_decision_sync") as headless,
-        patch("shutil.which", side_effect=_which),
-        patch("importlib.util.find_spec", wraps=importlib.util.find_spec) as spec,
-    ):
+def test_bare_invocation_prints_help_without_launching():
+    with patch("herdr_master.cli.main.launch_ai_head", new_callable=AsyncMock) as launch:
         result = runner.invoke(aihead_app, [])
-
-    text = _output(result)
-    assert result.exit_code == 0, text
-    assert "Launching AiHead" in text
-    assert "split layout" in text
-    launch.assert_awaited_once()
-    assert launch.await_args.kwargs["initial_task"] is None
-    assert launch.await_args.kwargs["workspace"] is None
-    assert launch.await_args.kwargs["session"] is None
-    server.assert_not_called()
-    client.create_workspace.assert_not_called()
-    execvp.assert_not_called()
-    headless.assert_not_called()
-    assert any(call.kwargs.get("timeout") == 1.0 for call in client_cls.call_args_list)
-    assert all(call.args[:1] != ("aiheaddev",) for call in spec.call_args_list)
+    assert result.exit_code == 0, result.output
+    assert "Usage:" in result.output
+    launch.assert_not_called()
 
 
 def test_nested_aihead_argument_is_rejected(tmp_path: Path):
@@ -548,7 +518,7 @@ def test_attach_and_no_attach(tmp_path: Path):
         patch("shutil.which", side_effect=_which),
         patch("importlib.util.find_spec", wraps=importlib.util.find_spec) as spec,
     ):
-        attached = runner.invoke(aihead_app, [])
+        attached = runner.invoke(aihead_app, ["--task", "test"])
         detached = runner.invoke(aihead_app, ["--no-attach"])
 
     assert attached.exit_code == 0, _output(attached)
@@ -575,7 +545,7 @@ def test_missing_herdr_executable_fails_before_panes_or_server(tmp_path: Path):
         patch("herdr_master.pipeline.ai_head.execute_cli_decision_sync") as headless,
     ):
         with patch("herdr_master.cli.main.resolve_launch_context", return_value=live_ctx):
-            attach_blocked = runner.invoke(aihead_app, [])
+            attach_blocked = runner.invoke(aihead_app, ["--task", "test"])
         with patch("herdr_master.cli.main.resolve_launch_context", return_value=missing_ctx):
             start_blocked = runner.invoke(aihead_app, ["--no-attach"])
 
@@ -627,7 +597,7 @@ def test_launch_failure_does_not_fall_back_to_headless(tmp_path: Path):
         patch("herdr_master.cli.main.ensure_herdr_server", new_callable=AsyncMock) as server,
         patch("herdr_master.pipeline.ai_head.execute_cli_decision_sync") as headless,
     ):
-        result = runner.invoke(aihead_app, [])
+        result = runner.invoke(aihead_app, ["--task", "test"])
 
     text = _output(result)
     assert result.exit_code != 0, text

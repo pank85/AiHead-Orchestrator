@@ -9,6 +9,8 @@ metadata:
 
 # /orchestration — Self-Contained Subagent Pipeline
 
+Launch with `aihead --orchestration "<intent>"`; `herdm` is deprecated.
+
 Run the orchestration pipeline for: `${@:-$ARGUMENTS}` (if no intent or spec path was supplied, ask what to build and stop).
 
 You are the orchestrator. **Never implement code directly in the main conversation.** Every role below runs as a subagent spawned by *this* harness — same agent, same model family, no Herdr workspace, no `herdr` CLI, no `herdm` CLI, no catalog lookup.
@@ -101,6 +103,12 @@ When running delegated under a parent orchestrator:
 5. Unless already stated, determine `unitTestsMode ∈ {none, new, update-only}`: for a delegated run ask the direct parent and wait for its decision; if unavailable STOP. Only a genuinely standalone run asks the user. Forward the result to every role.
 
 `<run-id>`: short unique slug, e.g. `date +%Y%m%d-%H%M%S`.
+
+---
+
+## Pane launch verification (mandatory)
+
+A spawn succeeded only when `herdr agent get <pane>` reports `agent_status: working` and `herdr agent read <pane>` shows the expected model with no startup, permission, or credit error. `agent_not_found` (or a vanished pane) means the launch FAILED. Never report a started job without that evidence; report the model slug, `agent_status`, and context usage.
 
 ---
 

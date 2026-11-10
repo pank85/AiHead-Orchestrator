@@ -24,18 +24,23 @@ except Exception:
 import typer
 from rich.console import Console
 
+from herdr_master.cli.aihead_setup import run_aihead_setup, run_skill_setup
 from herdr_master.cli.catalog import catalog_app
 from herdr_master.cli.skills import install_skills as run_install_skills
 from herdr_master.cli.skills import skills_app
 from herdr_master.core.catalog import CatalogError, supported_harnesses
-from herdr_master.core.config import CouncilConfig, find_project_config_path, load_project_config
+from herdr_master.core.config import (
+    DEFAULT_ORCHESTRATION_MODELS,
+    CouncilConfig,
+    find_project_config_path,
+    load_project_config,
+)
 from herdr_master.core.context import HerdrContext
 from herdr_master.core.slug import InvalidBindingSlugError
 from herdr_master.herdr.client import HerdrClient
 from herdr_master.herdr.socket import HerdrConnectionError
 from herdr_master.pipeline.council import CouncilError
 from herdr_master.pipeline.launcher import (
-    COUNCIL_COORDINATOR_NAME,
     LaunchContextError,
     ensure_herdr_server,
     launch_ai_head,
@@ -45,6 +50,7 @@ from herdr_master.pipeline.launcher import (
     launch_orchestration,
     resolve_coordinator_binding,
     resolve_launch_context,
+    resolve_master_binding,
 )
 from herdr_master.pipeline.squad import (
     SquadValidationError,
@@ -52,10 +58,28 @@ from herdr_master.pipeline.squad import (
     resolve_squad,
 )
 
+
+class DeprecatedGroup(typer.core.TyperGroup):
+    def main(self, args=None, *pos, **kwargs):
+        arguments = list(sys.argv[1:] if args is None else args)
+        mapping = {
+            "ergo": "--ergo", "council": "--council", "orchestration": "--orchestration",
+            "master": "--herdr-master", "aihead": "--task", "head": "--task",
+            "tui": "--tui", "aihead-setup": "--help", "--aihead-setup": "--help",
+            "--aihead": "--task",
+        }
+        replacement = next((mapping[arg] for arg in arguments if arg in mapping), "--help")
+        typer.echo(f"[deprecated] use aihead {replacement} ...", err=True)
+        return super().main(args, *pos, **kwargs)
+
+
 app = typer.Typer(
+    cls=DeprecatedGroup,
     name="herdm",
     help="👑 Universal multi-master, multi-worker cross-harness AI orchestrator built on Herdr.",
     add_completion=True,
+    invoke_without_command=True,
+    no_args_is_help=False,
 )
 # Console-script entry for `aihead`. One callback, no nested command, and never
 # the headless `herdm aihead-cli` decision path.
@@ -113,6 +137,63 @@ def _abort(message: str) -> None:
     raise typer.Exit(1)
 
 
+@app.callback()
+def root(
+    ctx: typer.Context,
+    aihead: bool = typer.Option(
+        False,
+        "--aihead",
+        help="Launch an interactive AiHead session (same as `herdm aihead`).",
+    ),
+    aihead_setup: bool = typer.Option(
+        False,
+        "--aihead-setup",
+        help="Configure per-role AiHead models (same as `herdm aihead-setup`).",
+    ),
+    task: Optional[str] = typer.Option(
+        None, "--task", "-t", help="Initial instruction for `--aihead`."
+    ),
+    harness: Optional[str] = typer.Option(
+        None, "--harness", help="Harness override for `--aihead`."
+    ),
+    model: Optional[str] = typer.Option(None, "--model", help="Model override for `--aihead`."),
+    effort: Optional[str] = typer.Option(
+        None, "--effort", help="Reasoning effort override for `--aihead`."
+    ),
+    cwd: Optional[Path] = typer.Option(
+        None, "--cwd", "--folder", "-C", help="Initial folder for `--aihead`."
+    ),
+    attach: bool = typer.Option(
+        True, "--attach/--no-attach", help="Attach to Herdr if outside Herdr."
+    ),
+    config: Optional[Path] = typer.Option(
+        None, "--config", help="Optional path to .herdr-master.toml."
+    ),
+    defaults: bool = typer.Option(
+        False, "--defaults", help="Apply `--aihead-setup` defaults without prompting."
+    ),
+    yes: bool = typer.Option(False, "--yes", "-y", help="Skip the `--aihead-setup` confirmation."),
+) -> None:
+    """Root launcher flags. Subcommands keep their existing behaviour."""
+    if aihead_setup:
+        run_aihead_setup(defaults=defaults, yes=yes, config=config)
+        raise typer.Exit(0)
+    if aihead:
+        run_aihead(
+            harness=harness,
+            model=model,
+            effort=effort,
+            task=task,
+            cwd=cwd,
+            attach=attach,
+            config=config,
+        )
+        raise typer.Exit(0)
+    if ctx.invoked_subcommand is None:
+        typer.echo(ctx.get_help())
+        raise typer.Exit(0)
+
+
 @app.command()
 def init(
     target_branch: str = typer.Option("develop", help="Target integration branch"),
@@ -155,7 +236,7 @@ def master_start(
 ):
     """Launch a new Herdr Master orchestrator for multiple jobs."""
     try:
-        kind, model_slug, effort_level = resolve_coordinator_binding(harness, model, effort)
+        kind, model_slug, effort_level = resolve_master_binding(harness, model, effort)
         ctx = resolve_launch_context(session)
     except _RESOLVE_ERRORS as err:
         _abort(str(err))
@@ -201,6 +282,7 @@ def _resolve_ergo_once(
     coder: Optional[str],
     reviewer: Optional[str],
     run_squad: Optional[Path],
+    project_path: Optional[Path] = None,
 ):
     if coder is not None and workers is not None and workers != coder:
         _abort("--workers and --coder disagree. Pass only one worker override.")
@@ -212,7 +294,7 @@ def _resolve_ergo_once(
         reviewer=reviewer,
     )
     return resolve_squad(
-        None,
+        project_path,
         mode="herdr",
         run_squad_path=run_squad,
         overrides=overrides or None,
@@ -633,6 +715,20 @@ def run_aihead(
             f"[yellow]Attaching to isolated Herdr session '{target_session}'...[/yellow]"
         )
         os.execvp("herdr", ["herdr", "--session", target_session])
+
+
+@app.command("aihead-setup")
+def aihead_setup_cmd(
+    defaults: bool = typer.Option(
+        False, "--defaults", help="Apply defaults without prompting."
+    ),
+    yes: bool = typer.Option(False, "--yes", "-y", help="Skip the confirmation prompt."),
+    config: Optional[Path] = typer.Option(
+        None, "--config", help="Target .herdr-master.toml (defaults to the project file)."
+    ),
+) -> None:
+    """Configure per-role AiHead harnesses, models, and efforts."""
+    run_aihead_setup(defaults=defaults, yes=yes, config=config)
 
 
 @app.command("aihead-cli")
@@ -1407,8 +1503,66 @@ def _print_standalone_launch_result(res: Any, fallback_session: str) -> str:
     return str(target_session)
 
 
+def _launch_skill(skill: str, intent: str, session: Optional[str], cwd: Optional[Path],
+                  config: Optional[Path], harness: Optional[str], model: Optional[str],
+                  effort: Optional[str]) -> None:
+    """Launch a delegated skill in its own background workspace."""
+    try:
+        ctx = resolve_launch_context(session)
+        client = HerdrClient(session=ctx.session_name, socket_path=ctx.socket_path)
+        label = f"{skill}-{datetime.now().strftime('%Y%m%d-%H%M')}"
+        common = dict(client=client, cwd=str(cwd.resolve()) if cwd else None,
+                      session=session, fresh_workspace=True, focus=False, delegated=True)
+        if skill == "ergo":
+            resolved = _resolve_ergo_once(models=None, scout=None, architect=None,
+                                          workers=None, coder=None, reviewer=None, run_squad=None,
+                                          project_path=config or cwd)
+            operation = launch_ergo(
+                intent=intent, workspace_label=label, squad=resolved.squad, **common
+            )
+        elif skill == "council":
+            operation = launch_council(intent=intent, workspace_label=label,
+                                       council=load_project_config(config or cwd).council, **common)
+        elif skill == "orchestration":
+            orch = load_project_config(config or cwd).orchestration
+            if harness and harness != orch.harness.value:
+                orch.harnesses.setdefault(harness, orch.for_harness(harness))
+                orch.sync_harness_to_active(harness)
+            defaults = DEFAULT_ORCHESTRATION_MODELS.get(orch.harness.value, {})
+            operation = launch_orchestration(
+                intent=intent, workspace_label=label, harness=harness or orch.harness,
+                scout_model=orch.scout_model or defaults.get("scout", ""),
+                architect_model=orch.architect_model or defaults.get("architect", ""),
+                coder_model=" | ".join(orch.worker_models) or defaults.get("coder", ""),
+                reviewer_model=orch.reviewer_model or defaults.get("reviewer", ""),
+                scout_effort=orch.scout_effort, architect_effort=orch.architect_effort,
+                reviewer_effort=orch.reviewer_effort, **common,
+            )
+        else:
+            operation = launch_master(name=label, initial_task=intent, config_path=config,
+                                      harness=harness, model=model, effort=effort, **common)
+        result = asyncio.run(operation)
+        typer.echo(
+            f"Started {skill}: workspace {result.get('workspace_id')}, "
+            f"pane {result.get('pane_id')}"
+        )
+    except (*_RESOLVE_ERRORS, RuntimeError) as err:
+        _abort(str(err))
+
+
 @aihead_app.callback(invoke_without_command=True)
 def launch_standalone_aihead(
+    ctx: typer.Context,
+    setup: bool = typer.Option(False, "--setup", help="Configure a skill interactively."),
+    tui_flag: bool = typer.Option(False, "--tui", help="Launch the AiHeadDev cockpit."),
+    ergo: Optional[str] = typer.Option(None, "--ergo", help="Delegate an Ergo intent."),
+    council: Optional[str] = typer.Option(None, "--council", help="Delegate a Council intent."),
+    orchestration: Optional[str] = typer.Option(
+        None, "--orchestration", help="Delegate an orchestration intent."
+    ),
+    herdr_master: Optional[str] = typer.Option(
+        None, "--herdr-master", help="Delegate multiple jobs."
+    ),
     harness: Optional[str] = typer.Option(
         None,
         "--harness",
@@ -1478,6 +1632,38 @@ def launch_standalone_aihead(
     ),
 ) -> None:
     """Launch an interactive AiHead session in a Herdr workspace."""
+    skills = [(name, value) for name, value in (
+        ("ergo", ergo), ("council", council), ("orchestration", orchestration),
+        ("herdr-master", herdr_master),
+    ) if value is not None]
+    if len(skills) + int(tui_flag) + int(setup) > 1 or (
+        task is not None and (skills or tui_flag or setup)
+    ):
+        _abort("Choose only one launch mode.")
+    if setup:
+        if harness is not None or model is not None or effort is not None:
+            _abort("Configure bindings in the wizard, not with launch overrides.")
+        target = config
+        if target is None and cwd is not None:
+            target = find_project_config_path(cwd) or cwd / ".herdr-master.toml"
+        run_skill_setup(config=target)
+        return
+    if tui_flag:
+        tui(session=session, demo=False)
+        return
+    if skills:
+        if config is not None and not config.expanduser().exists():
+            _abort(f"Configuration file not found: {config}")
+        if skills[0][0] != "herdr-master" and (model is not None or effort is not None):
+            _abort("--model and --effort apply to AiHead or Herdr Master only.")
+        if skills[0][0] not in ("herdr-master", "orchestration") and harness is not None:
+            _abort("--harness is not supported for this skill; configure its bindings instead.")
+        _launch_skill(skills[0][0], skills[0][1], session, cwd,
+                      config.expanduser() if config else None, harness, model, effort)
+        return
+    if all(ctx.get_parameter_source(name).name == "DEFAULT" for name in ctx.params):
+        typer.echo(ctx.get_help())
+        return
     try:
         ctx = resolve_launch_context(session)
     except _RESOLVE_ERRORS as err:

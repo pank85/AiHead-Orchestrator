@@ -9,6 +9,8 @@ metadata:
 
 # /ergo — Scout → Architect → Parallel Specialist Coders → Reviewer Loop
 
+Launch with `aihead --ergo "<intent>"`; `herdm` is deprecated.
+
 Run an Ergo pipeline for: `${@:-$ARGUMENTS}` (if no intent or spec path was supplied, ask what to build and stop).
 
 You are the orchestrator. **Never implement code directly in the main conversation.**
@@ -168,6 +170,12 @@ Every agent prompt must be assembled in this order:
 >   `herdr agent prompt <ORCHESTRATOR_PANE_ID> "<Role> finished: <brief outcome/artifact path/verdict>"`.
 > - **Decision / Question / Blocker Needed:** If you encounter an unresolvable blocker, ambiguity, or fatal error requiring a decision, notify your direct parent orchestrator immediately:
 >   `herdr agent prompt <ORCHESTRATOR_PANE_ID> "<Role> blocked/decision needed: <reason or question>"`.
+
+---
+
+## Pane launch verification (mandatory)
+
+A spawn succeeded only when `herdr agent get <pane>` reports `agent_status: working` and `herdr agent read <pane>` shows the expected model with no startup, permission, or credit error. `agent_not_found` (or a vanished pane) means the launch FAILED. Never report a started job without that evidence; report the model slug, `agent_status`, and context usage.
 
 ---
 

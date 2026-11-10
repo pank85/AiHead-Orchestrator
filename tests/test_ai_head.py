@@ -1556,7 +1556,7 @@ model = "gemini-3.8-flash-high"
     server.assert_not_called()
     subprocess_exec.assert_not_called()
     execvp.assert_not_called()
-    discovery = json.loads(result.output)
+    discovery = json.loads(result.stdout)
     assert discovery["argv"] == [
         "agy",
         "--output-format",
@@ -1633,4 +1633,3 @@ async def test_ensure_restarts_when_saved_permission_changes_agent_args(tmp_path
     assert started == ["--model", "gemini-2.5-pro", "--effort", "high"]
     assert "--dangerously-skip-permissions" not in started
     assert started.count("--effort") == 1
-

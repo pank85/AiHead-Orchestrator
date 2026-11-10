@@ -9,6 +9,8 @@ metadata:
 
 # /council — Multi-Agent AI Council Planning & Consensus Protocol
 
+Launch with `aihead --council "<intent>"`; `herdm` is deprecated.
+
 Run an AI Council planning deliberation for: `${@:-$ARGUMENTS}` (if no specification, plan intent, or idea path was supplied, prompt the user for requirements and stop).
 
 The AI Council coordinates multiple specialized agent members to independently draft, cross-review, synthesize, and converge upon an optimal technical architecture and implementation plan.
@@ -40,6 +42,12 @@ The Council operates with a strictly partitioned roster:
      Level 3 workers **NEVER notify AiHead or Herdr-Master directly!**
    - **Level 2 (`Council Coordinator`) -> Level 1 (`AiHead` or `Herdr-Master` at `HERDR_PARENT_PANE_ID`)**:
      When the Council Coordinator is delegated under a parent (`HERDR_PARENT_PANE_ID` / bootstrap `parent_pane_id`), the Coordinator notifies its direct Level 1 parent via `herdr agent prompt "$HERDR_PARENT_PANE_ID" ...` for **BOTH** `"user/decision needed"` (ambiguous specifications, blockers, approval/consultation) **AND** `"completed"` (`RUN_DIR/final_plan.md` finalized).
+
+---
+
+## Pane launch verification (mandatory)
+
+A spawn succeeded only when `herdr agent get <pane>` reports `agent_status: working` and `herdr agent read <pane>` shows the expected model with no startup, permission, or credit error. `agent_not_found` (or a vanished pane) means the launch FAILED. Never report a started job without that evidence; report the model slug, `agent_status`, and context usage.
 
 ---
 
