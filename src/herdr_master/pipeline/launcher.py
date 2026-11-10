@@ -372,7 +372,11 @@ async def _allocate_launch_target(
     eff_parent_pane = (
         parent_pane_id
         if parent_pane_id is not None
-        else (os.environ.get("HERDR_PARENT_PANE_ID") or getattr(ctx, "pane_id", None))
+        else (
+            (getattr(ctx, "pane_id", None) or os.environ.get("HERDR_PARENT_PANE_ID"))
+            if getattr(ctx, "is_inside_herdr", False)
+            else None
+        )
     )
     tab_env = {"HERDR_PARENT_PANE_ID": str(eff_parent_pane)} if eff_parent_pane else None
 
@@ -552,7 +556,9 @@ async def _resolve_and_wire_ai_head(
 
     if allocated.workspace_id and allocated.client:
         try:
-            caller_pane = allocated.parent_pane_id or os.environ.get("HERDR_PANE_ID")
+            caller_pane = allocated.parent_pane_id or (
+                os.environ.get("HERDR_PANE_ID") if not allocated.owns_workspace else None
+            )
             try:
                 head_info = await ensure_herdr_ai_head(
                     allocated.client,

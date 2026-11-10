@@ -76,18 +76,22 @@ Identify which harness you are running in (`agy`, `pi`, `claude`, `opencode`, or
 - On an approval request, review the exact plan and its run/version, check architectural alignment, then send an explicit `APPROVED` or `REVISE` decision with the run/version and guidance to the recorded child pane using `herdr agent prompt <child-pane-id> "<decision>"`. A changed plan needs fresh approval. Make routine in-scope decisions when delegated authority permits; otherwise consult the user. Destructive operations, security bypasses, and out-of-scope actions require explicit user approval.
 - Provide a self-contained prompt: objective, context, constraints, ownership/files, target (`develop`) and worktree branch, acceptance criteria, verification, and the mandatory **Parent Notification Requirement**. Each child works only in its assigned worktree, commits its own completed work there, and reports the commit SHA, base, changes, and blockers. **Children/workers must NOT run test suites**: running tests is reserved solely for the master coordinator once all tasks finish. No child may merge into `develop`, push, deploy, delete branches/worktrees, or modify other worktrees. Keep separate writers in separate worktrees; account for semantic conflicts between parallel jobs.
 - **Hierarchical Parent Notification Protocol (One Level Up)**:
-  Every child prompt must explicitly include instructions to notify its direct parent coordinator via Herdr upon completion:
+  - **Non-blocking parents**: Parent sessions NEVER block or wait in polling loops — they return immediately after spawning/prompting children.
+  - Every child prompt must explicitly include `HERDR_PARENT_PANE_ID` (set to this dispatching master's `$HERDR_PANE_ID`) and instructions to notify its **DIRECT parent** coordinator via `herdr agent prompt <DIRECT_PARENT_PANE_ID> ...` for **BOTH** `"user/decision needed"` (approval gates, questions, blockers, dirty tree, `unitTestsMode`) **AND** `"completed"` (task/stage/pipeline finished):
   ```
   Parent Notification Requirement:
-  When your assigned work is complete (after committing on your worktree branch and generating summary artifacts), you MUST notify your direct parent by running:
-  herdr agent prompt <PARENT_PANE_ID> "Job <name> completed: commit <SHA> on <branch>, verification <status>"
+  1. For any question, decision, approval gate, dirty tree, or blocker (user/decision needed), notify your direct parent immediately:
+     herdr agent prompt <PARENT_PANE_ID> "Job <name> decision/approval needed: <question / plan / blocker>"
+  2. When your assigned work is complete (after committing on your worktree branch and generating summary artifacts), you MUST notify your direct parent by running:
+     herdr agent prompt <PARENT_PANE_ID> "Job <name> completed: commit <SHA> on <branch>, verification <status>"
   If you encounter an unresolvable blocker, notify your direct parent immediately:
-  herdr agent prompt <PARENT_PANE_ID> "Job <name> blocked: <reason>"
+     herdr agent prompt <PARENT_PANE_ID> "Job <name> blocked: <reason>"
   ```
-  This creates a strict hierarchical escalation:
-  - In multi-stage pipelines (`/ergo`): Coders and Reviewer notify the Ergo Orchestrator (`Level 3 -> Level 2`).
-  - The Ergo Orchestrator or Council Coordinator notifies AiHead upon pipeline completion (`Level 2 -> Level 1`).
-  - Receiving this prompt awakens the parent coordinator immediately so it can inspect artifacts, brief the user in plain language, and proceed without latency.
+  This enforces a **strict one-level-up hierarchy (NEVER skipping levels!)**:
+  - **Level 3 -> Level 2 ONLY**: In multi-stage pipelines (`/ergo`, `/council`), Level 3 workers (Ergo Scout, Architect, Coders, Reviewer; Council Scout, Council Members) notify **ONLY** their Level 2 parent (Ergo Orchestrator via `ORCHESTRATOR_PANE_ID` or Council Coordinator via `COORDINATOR_PANE_ID`), **NEVER AiHead or Herdr-Master directly!**
+  - **Level 2 -> Level 1**: Level 2 (Ergo Orchestrator, Council Coordinator, Orchestration, or Herdr-Master job worker) notifies its direct Level 1 parent (AiHead or Herdr-Master Coordinator via `HERDR_PARENT_PANE_ID`) upon needing a decision/approval or upon pipeline/job completion.
+  - **When Herdr-Master itself is delegated under AiHead (`HERDR_PARENT_PANE_ID` is set)**: Herdr-Master notifies its direct parent AiHead (`herdr agent prompt "$HERDR_PARENT_PANE_ID" ...`) whenever an escalated decision is needed AND when all delegated jobs have completed and been squash-merged.
+  - Receiving this prompt awakens the direct parent coordinator immediately so it can inspect artifacts, brief the user in plain language, and proceed without latency.
 - **Forwarding `/ergo` to Child Sessions**:
   Whenever the user includes `/ergo` (or `/ergo --herdr` / `/ergo --models ...`) in a job request, always forward `/ergo` to the child session opened for that job (and instruct the child to use `/ergo` when a complex task warrants its multi-stage planning/review workflow). Resolve the canonical `/ergo` skill path from the catalog via `herdm catalog show --json` (or `get_skill_source('ergo')`), rather than looking in obsolete paths or static locations. Explicitly constrain it to the assigned worktree, branch, and adopted workspace:
   - Planning/approval, specialist `Expert Persona` assignment, and review gates remain in force.

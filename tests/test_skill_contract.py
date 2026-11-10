@@ -647,6 +647,43 @@ def test_delegated_shared_session_parent_contract():
     assert "not authenticated sender verification or security isolation" in aihead
 
 
+def test_strict_one_level_up_hierarchy_and_nonblocking_contract():
+    """Verify all 5 skills enforce non-blocking parents, both decision+completion notifications, and strict 1-level-up hierarchy."""
+    aihead = load_skill_body("aihead")
+    master = load_skill_body("herdr-master")
+    ergo = load_skill_body("ergo")
+    council = load_skill_body("council")
+    orch = load_skill_body("orchestration")
+
+    for name, body in (
+        ("aihead", aihead),
+        ("herdr-master", master),
+        ("ergo", ergo),
+        ("council", council),
+        ("orchestration", orch),
+    ):
+        assert "NEVER block or wait in polling loops" in body, f"{name} missing non-blocking rule"
+        assert "HERDR_PARENT_PANE_ID" in body, f"{name} missing HERDR_PARENT_PANE_ID"
+
+    # Ergo Level 3 briefs (Scout, Architect, Coder, Reviewer) notify ONLY ORCHESTRATOR_PANE_ID
+    assert 'herdr agent prompt <ORCHESTRATOR_PANE_ID> "Scout finished:' in ergo
+    assert 'herdr agent prompt <ORCHESTRATOR_PANE_ID> "Scout blocked/decision needed:' in ergo
+    assert 'herdr agent prompt <ORCHESTRATOR_PANE_ID> "Architect finished:' in ergo
+    assert 'herdr agent prompt <ORCHESTRATOR_PANE_ID> "Architect blocked/decision needed:' in ergo
+    assert 'herdr agent prompt <ORCHESTRATOR_PANE_ID> "Coder <N> finished:' in ergo
+    assert 'herdr agent prompt <ORCHESTRATOR_PANE_ID> "Coder <N> blocked/decision needed:' in ergo
+    assert 'herdr agent prompt <ORCHESTRATOR_PANE_ID> "Reviewer finished:' in ergo
+    assert 'herdr agent prompt <ORCHESTRATOR_PANE_ID> "Reviewer blocked/decision needed:' in ergo
+    assert "NEVER AiHead" in ergo
+
+    # Council Level 3 (Scout & Members) notify ONLY COORDINATOR_PANE_ID; Level 2 notifies HERDR_PARENT_PANE_ID
+    assert "COORDINATOR_PANE_ID" in council
+    assert "herdr agent prompt <COORDINATOR_PANE_ID>" in council
+    assert 'herdr agent prompt "$HERDR_PARENT_PANE_ID" "Council deliberation finished:' in council
+    assert 'herdr agent prompt "$HERDR_PARENT_PANE_ID" "Council decision/blocker needed:' in council
+    assert "NEVER notify AiHead or Herdr-Master directly" in council
+
+
 def test_hermes_skill_discovery_production_lookup_in_sandbox(tmp_path):
     """Optional subprocess integration: synthetic candidates, manually assigned tier only."""
     import os

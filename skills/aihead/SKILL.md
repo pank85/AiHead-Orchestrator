@@ -84,12 +84,12 @@ When presented with any user request, problem statement, or objective, AiHead ex
 ## 3. Always Delegate to Background Agents (Main Chat Stays Always Available)
 
 Both **AiHead** and **Herdr-Master** must always delegate user task requests to background agents (new background Herdr tabs spawned with `--no-focus` or asynchronous subagents):
-- **Never block the main chat**: The primary interactive session must never perform long-running implementation or blocking loops directly.
+- **Never block the main chat (No Polling Loops)**: Parent sessions NEVER block or wait in polling loops — they return immediately after spawning/prompting children. The primary interactive session must never perform long-running implementation or synchronous wait loops directly.
 - **Main chat is always available**: The orchestrator must return control immediately so the user can submit new tasks, query status, adjust priorities, or make decisions in the main terminal without waiting for child work to finish.
-- **Async monitoring**: Monitor background sessions via native async watchers (`herdr agent wait`) or background completion events rather than blocking the main turn.
+- **Async monitoring / Push callbacks**: Rely on the child's mandatory `herdr agent prompt <DIRECT_PARENT_PANE_ID>` push notifications or non-blocking async watchers rather than blocking the main turn.
 - **Mandatory Parent Directive on Delegation**:
   When delegating child pipelines, including `/ergo`, `/orchestration`, `/council`, or a Herdr master, record the child pane, workspace, worktree, branch and run directory as applicable, and pass **AiHead's own `$HERDR_PANE_ID` as the child's direct parent**, never the grandparent. Same-session agents can impersonate one another or send prompts; this is shared-session trust, not authenticated sender verification or security isolation. A missing or ambiguous parent stops the child without integration or cleanup.
-  When creating child tabs for delegated pipelines, AiHead passes its pane ID via `herdr tab create ... --env "HERDR_PARENT_PANE_ID=$HERDR_PANE_ID"` (or sets `HERDR_PARENT_PANE_ID="$HERDR_PANE_ID"` in the spawned shell) and explicitly instructs the child agent in its initial prompt:
+  When creating child tabs for delegated pipelines (or invoking `herdm ergo --no-attach`, `herdm orchestration --no-attach`, `herdm council --no-attach`, `herdm master start --no-attach`), AiHead passes its pane ID via `herdr tab create ... --env "HERDR_PARENT_PANE_ID=$HERDR_PANE_ID"` (or sets `HERDR_PARENT_PANE_ID="$HERDR_PANE_ID"` in the spawned shell / CLI invocation) and explicitly instructs the child agent in its initial prompt:
   ```
   AiHead Parent Directive:
   AiHead is active at pane $HERDR_PANE_ID as the authoritative technical decision-maker.
@@ -118,24 +118,26 @@ Whenever AiHead approves a plan (from an Architect in `/ergo`, `/orchestration`,
 
 To eliminate orphaned finished jobs, eliminate delays, and shield the human user from routine pipeline gates, every delegated agent operates under strict two-way hierarchical parent-child communication:
 
-1. **Passing Parent Identity**:
-   - Whenever AiHead or an orchestrator creates a child session in Herdr, it passes its own pane ID (`$HERDR_PANE_ID`):
+1. **Non-Blocking Parents & Passing Direct Parent Identity**:
+   - **Parents NEVER block or wait in polling loops** — they return immediately after spawning and prompting children.
+   - Whenever AiHead or an orchestrator creates a child session in Herdr, it passes its own pane ID (`$HERDR_PANE_ID`) as the child's `DIRECT_PARENT_PANE_ID`:
      - Pass via environment: `herdr tab create ... --env HERDR_PARENT_PANE_ID="$HERDR_PANE_ID"`
-     - Pass in the prompt instructions:
+     - Every child agent MUST have explicit instructions and `HERDR_PARENT_PANE_ID` to notify its **DIRECT parent** (via `herdr agent prompt <DIRECT_PARENT_PANE_ID> ...`) for **BOTH** `"user/decision needed"` (approval gates, questions, blockers, dirty tree, `unitTestsMode`) **AND** `"completed"` (task/stage/pipeline finished):
        ```
        Parent Notification & Decision Requirement:
-       1. For any question, decision, or approval:
-          herdr agent prompt <PARENT_PANE_ID> "<question / plan>"
-       2. Upon task completion (or if blocked):
+       1. For any question, decision, approval gate, dirty tree, or blocker (user/decision needed):
+          herdr agent prompt <PARENT_PANE_ID> "<question / plan / blocker>"
+       2. Upon task/stage/pipeline completion:
           herdr agent prompt <PARENT_PANE_ID> "<Role/Job> completed: <summary, artifacts, verification>"
        ```
 
-2. **Strict Multi-Tier Hierarchy (One Level Up)**:
-   - **Level 3 (Workers/Coders) -> Level 2 (Pipeline Orchestrator)**:
-     - Coders, Reviewer, and Council Members notify the Ergo Orchestrator or Council Coordinator (`herdr agent prompt <orchestrator-pane-id> "Coder <N> finished: ..."`).
-   - **Level 2 (Pipeline Orchestrator / Job Worker) <-> Level 1 (AiHead / Master Coordinator)**:
-     - The orchestrator prompts AiHead for Plan Approval Gates, working tree actions, or trade-offs (`herdr agent prompt <aihead-pane-id> "Approval request: <plan>"`).
-     - AiHead evaluates and returns the decision (`herdr agent prompt <orchestrator-pane-id> "APPROVED: <guidance>"`).
+2. **Strict One-Level-Up Hierarchy (NEVER Skip Levels)**:
+   Each child notifies **ONLY** the level immediately above it, **NEVER skipping levels**:
+   - **Level 3 (Ergo Scout / Architect / Coder / Reviewer, Council Scout / Members) -> Level 2 ONLY (Ergo Orchestrator or Council Coordinator)**:
+     - Level 3 workers notify **ONLY** their Level 2 parent (`ORCHESTRATOR_PANE_ID` for Ergo roles, `COORDINATOR_PANE_ID` for Council roles via `herdr agent prompt <ORCHESTRATOR_PANE_ID|COORDINATOR_PANE_ID> "..."`), **NEVER AiHead directly!**
+   - **Level 2 (Ergo Orchestrator, Council Coordinator, Orchestration, Herdr-Master Job Worker) <-> Level 1 (AiHead or Herdr-Master Coordinator)**:
+     - Level 2 notifies Level 1 (`HERDR_PARENT_PANE_ID`) via `herdr agent prompt "$HERDR_PARENT_PANE_ID" "..."` for BOTH decisions needed (Plan Approval Gates, dirty working tree, `unitTestsMode`, trade-offs, blockers) AND completion.
+     - AiHead (or Master Coordinator) evaluates and returns the decision (`herdr agent prompt <orchestrator-pane-id> "APPROVED: <guidance>"`), returning immediately without blocking.
      - When a delegated implementation pipeline completes its assigned branch commit, it notifies its direct parent with the commit, review and actual verification; the parent owns integration and cleanup. A delegated Council instead notifies its direct parent when deliberation completes or is blocked, with its actual plan or blocker.
    - **Level 1 (AiHead)**:
      - The incoming prompt wakes AiHead immediately.

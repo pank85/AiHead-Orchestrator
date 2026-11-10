@@ -196,3 +196,37 @@ def test_bootstrap_ai_head_instructions_reflect_readiness(as_model, overrides, u
     else:
         assert instructions.startswith("AiHead is available for autonomous technical decisions")
         assert "structured JSON responses" in instructions
+
+
+def test_bootstrap_caller_is_ai_head_not_marked_busy_and_preserves_parent_pane_id():
+    from herdr_master.pipeline.ai_head import AiHeadDiscovery
+
+    # Simulate AiHead launching a child pipeline from its own pane (wT:p2),
+    # where Herdr temporarily reports AiHead status as busy/working during launch.
+    head = AiHeadDiscovery(
+        mode="herdr",
+        enabled=True,
+        harness="agy",
+        model="gemini-3.8-flash",
+        origin_cwd="/tmp/repo",
+        workspace_id="wT",
+        tab_id="wT:t1",
+        pane_id="wT:p2",
+        status="busy",
+        reconciled=False,
+    )
+    prompt = build_bootstrap_prompt(
+        "ergo",
+        _context(pane_id="wT:p3", parent_pane_id="wT:p2"),
+        ai_head=head,
+    )
+    payload = _payload(prompt)
+    assert payload["parent_pane_id"] == "wT:p2"
+    assert payload["ai_head"]["pane_id"] == "wT:p2"
+    assert payload["ai_head"]["status"] == "ready"
+    assert payload["ai_head"]["busy"] is False
+    assert payload["ai_head"]["reconciled"] is True
+    assert "Do not consult AiHead" not in payload["ai_head"]["instructions"]
+    assert payload["ai_head"]["instructions"].startswith(
+        "AiHead is available for autonomous technical decisions"
+    )
