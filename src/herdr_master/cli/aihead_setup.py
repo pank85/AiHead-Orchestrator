@@ -73,6 +73,12 @@ def _opencode_models() -> Optional[set[str]]:
     return models or None
 
 
+def _default_state() -> RoleState:
+    state: RoleState = {role: default for role, default in ROLE_DEFAULTS.items()}
+    state["workers"] = list(DEFAULT_WORKERS)
+    return state
+
+
 def _current_state(config_path: Optional[Path]) -> RoleState:
     overrides = project_model_overrides(load_project_config(config_path))
     state: RoleState = {}
@@ -239,7 +245,7 @@ def run_aihead_setup(
     """Interactively configure per-role harnesses/models and save them."""
     target = _target_config_path(config)
     try:
-        state = _current_state(target)
+        state = _default_state() if defaults else _current_state(target)
         if not defaults:
             models = _opencode_models()
             harnesses = supported_harnesses(mode="native")

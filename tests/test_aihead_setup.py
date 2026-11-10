@@ -50,6 +50,64 @@ def test_defaults_writes_expected_role_models(tmp_path: Path):
     assert orch["worker_models"] == ["opencode/deepseek-v4.1-flash-free"]
 
 
+def test_defaults_overwrite_existing_config(tmp_path: Path):
+    cfg = tmp_path / ".herdr-master.toml"
+    cfg.write_text(
+        """
+[general]
+default_session = "default"
+
+[models.default_squad]
+scout = "agy:gemini-3.8-flash:low"
+architect = "pi:xai/grok-4.7:max"
+reviewer = "agy:gemini-3.8-flash:low"
+
+[models.worker_pool.worker-1]
+binding = "agy:gemini-3.8-flash"
+
+[ai_head.binding]
+kind = "pi"
+model = "openai-codex/gpt-6.1-sol"
+effort = "max"
+label = "ai-head"
+""".lstrip(),
+        encoding="utf-8",
+    )
+
+    result = runner.invoke(
+        app, ["--aihead-setup", "--defaults", "--yes", "--config", str(cfg)]
+    )
+    assert result.exit_code == 0, result.output
+
+    data = _load(cfg)
+    squad = data["models"]["default_squad"]
+    assert squad["scout"] == "opencode:opencode/beam-free:medium"
+    assert squad["architect"] == "opencode:openai/gpt-6.1-sol:high"
+    assert squad["reviewer"] == "opencode:openai/gpt-6.1-sol:medium"
+
+    pool = data["models"]["worker_pool"]
+    assert list(pool) == ["worker-1"]
+    assert pool["worker-1"]["binding"] == "opencode:opencode/deepseek-v4.1-flash-free"
+
+    orch = data["orchestration"]
+    assert orch["harness"] == "opencode"
+    assert orch["scout_model"] == "opencode/beam-free"
+    assert orch["scout_effort"] == "medium"
+    assert orch["architect_model"] == "openai/gpt-6.1-sol"
+    assert orch["architect_effort"] == "high"
+    assert orch["reviewer_model"] == "openai/gpt-6.1-sol"
+    assert orch["reviewer_effort"] == "medium"
+    assert orch["worker_models"] == ["opencode/deepseek-v4.1-flash-free"]
+
+    # Unrelated existing sections survive untouched.
+    binding = data["ai_head"]["binding"]
+    assert binding["kind"] == "pi"
+    assert binding["model"] == "openai-codex/gpt-6.1-sol"
+    assert binding["effort"] == "max"
+    assert binding["label"] == "ai-head"
+    assert data["general"]["default_session"] == "default"
+
+
 def test_root_flag_runs_the_same_wizard(tmp_path: Path):
     cfg = tmp_path / ".herdr-master.toml"
     result = runner.invoke(
