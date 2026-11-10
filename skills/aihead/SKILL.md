@@ -192,16 +192,19 @@ Once jobs and tasks finish:
 1. **Verification**: Confirm all tasks pass review and test verification.
 2. **Serial Squash-Merge into `develop`**: Always squash-merge completed feature branches into `develop` (or the target branch) with a single comprehensive, clean commit:
    `git merge --squash <child-branch>` followed by `git commit -m "<summary>"`.
-3. **Never leave dangling branches or unmerged worktrees**: Ensure the integration branch cleanly includes all verified work before cleanup.
+3. **Never leave completed work unmerged**: Complete review and squash-merge into `develop` **before** final cleanup. If integration is genuinely blocked (failing gates, conflicting branches, missing authorization), **preserve the work** — the branch, worktree, and commit stay intact — report the blocker to the direct parent, and never discard it.
+4. **Never leave dangling branches or unmerged worktrees**: Ensure the integration branch cleanly includes all verified work before cleanup.
 
 ---
 
 ## 7. Aggressive Tab and Agent Lifecycle Cleanup
 
 Never accumulate idle or unneeded tabs and agents. Close tabs as soon as their lifecycle stage finishes:
+- **Only the direct parent closes a pane/agent**: The pane that created a pane or agent is its **DIRECT parent**, and only that parent may close it (`herdr tab close <tab-id>`). **No pane closes itself and no agent closes its own tab** — a finished worker reports completion to `$HERDR_PARENT_PANE_ID` and stops; it never removes the tab it is running in.
+- **Ownership chain (AiHead -> Ergo -> workers)**: In `/ergo`, the **Ergo orchestrator closes its worker panes** (Scout, Architect, Coders, Reviewer); **AiHead closes the Ergo pane** once Ergo reports completion. **AiHead owns final integration**; a child never lands into the integration branch on its own.
 - **Planning Stage Pruning**: In `/ergo` and multi-stage pipelines, as soon as the Architect finishes `plan.md` and Coders have started, **close the Scout and Architect tabs immediately** (`herdr tab close <tab-id>`). They are no longer needed during implementation.
 - **Worker Pruning During Review**:
-  - **A worker whose work is approved is no longer needed**: As each worker passes review (`APPROVED`), **close that worker's tab/agent immediately**.
+  - **A worker whose work is approved is no longer needed**: As each worker passes review (`APPROVED`), **close that worker's tab/agent immediately** — but only once the parent has **retained the work** (the committed branch, worktree, and review report) and carries it to integration. Closing a worker pane must never discard or forget its output.
   - **Workers still in review or needing fixes remain active**: Only keep open workers whose work `NEEDS FIXES` until their fixes pass review.
 - **Reviewer Pruning**: Once the reviewer confirms all fixes and finishes, close the Reviewer tab.
 - **Post-Landing Cleanup**: After squash-merging into `develop`, remove worktrees (`git worktree remove`) and delete temporary branches (`git branch -D`).
