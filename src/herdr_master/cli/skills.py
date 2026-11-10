@@ -2,10 +2,14 @@
 
 from __future__ import annotations
 
+import os
+import re
 from pathlib import Path
 from typing import Dict, List, NamedTuple
 
 import typer
+from ruamel.yaml import YAML
+from ruamel.yaml.error import YAMLError
 from rich.console import Console
 from rich.table import Table
 
@@ -81,13 +85,82 @@ def _evaluate_link_status(target_path: Path, canonical_path: Path | None) -> str
     return "[red]✗ Missing[/red]"
 
 
+def _hermes_frontmatter_name(path: Path) -> str | None:
+    """Read a Hermes skill name using its YAML 1.1 safe-loader semantics.
+
+    Unlike Hermes' permissive malformed-YAML fallback, installation must fail
+    closed when metadata cannot be trusted for collision detection.
+    """
+    content = path.read_text(encoding="utf-8-sig")
+    if not content.startswith("---"):
+        return None
+    end = re.search(r"\n---\s*\n", content[3:])
+    if end is None:
+        raise ValueError(f"Unterminated frontmatter in {path}")
+    try:
+        parser = YAML(typ="safe", pure=True)
+        parser.version = (1, 1)
+        parser.allow_duplicate_keys = False
+        metadata = parser.load(content[3 : end.start() + 3])
+    except (YAMLError, ValueError, TypeError, RecursionError) as exc:
+        raise ValueError(f"Malformed or ambiguous frontmatter in {path}: {exc}") from exc
+    if metadata is None:
+        return None
+    if not isinstance(metadata, dict) or any(not isinstance(key, str) for key in metadata):
+        raise ValueError(f"Malformed or ambiguous frontmatter mapping in {path}")
+    declared = metadata.get("name")
+    if declared is None or declared == "":
+        return None
+    if not isinstance(declared, str) or not declared.strip() or declared != declared.strip():
+        raise ValueError(f"Malformed or ambiguous frontmatter name in {path}")
+    return declared
+
+
+def _hermes_collision(root: Path, target: Path, name: str) -> Path | None:
+    """Conservatively detect same-name local Hermes candidates before writing."""
+    if root.is_symlink():
+        raise OSError(f"Cannot safely inspect symlinked Hermes skills root: {root}")
+    if not root.exists():
+        return None
+
+    def fail(error: OSError) -> None:
+        raise error
+
+    for directory, dirs, files in os.walk(root, followlinks=False, onerror=fail):
+        base = Path(directory)
+        excluded = {".git"}
+        if "SKILL.md" in files:
+            excluded |= {"references", "templates", "assets", "scripts"}
+        dirs[:] = [d for d in dirs if d not in excluded]
+        for dirname in dirs:
+            if (base / dirname).is_symlink():
+                raise OSError(f"Cannot safely inspect symlinked skill directory: {base / dirname}")
+        for filename in files:
+            path = base / filename
+            if path == target:
+                continue
+            if filename == f"{name}.md":
+                return path
+            if filename != "SKILL.md":
+                continue
+            if base.name == name:
+                return path
+            # Previously installed canonical files are known inputs.
+            if (path.is_symlink() and base.parent == root and base.name in CANONICAL_SKILLS
+                    and path.resolve() == get_skill_source(base.name).resolve()):
+                continue
+            if _hermes_frontmatter_name(path) == name:
+                return path
+    return None
+
+
 @skills_app.command("install")
 def install_skills(
     force: bool = typer.Option(
         True,
         "--force/--no-force",
         "-f",
-        help="Overwrite or update existing symlinks",
+        help="Overwrite existing non-Hermes files or links; Hermes unowned targets are always protected",
     ),
 ) -> None:
     """Install and symlink standalone skills and commands across all supported harnesses."""
@@ -113,6 +186,29 @@ def install_skills(
 
         for target in targets:
             try:
+                if target.harness == "Hermes (hermes)":
+                    root = target.path.parent.parent
+                    collision = _hermes_collision(root, target.path, skill_name)
+                    if collision:
+                        console.print(f"[red]Hermes skill collision for {skill_name}: {collision}[/red]")
+                        has_error = True
+                        continue
+                    if target.path.is_symlink() and target.path.resolve() == canonical_file.resolve():
+                        console.print(f"[dim]Already installed: {target.path}[/dim]")
+                        installed_count += 1
+                        continue
+                    if target.path.is_symlink() or target.path.exists():
+                        console.print(f"[red]Refusing to overwrite unowned Hermes target {target.path}[/red]")
+                        has_error = True
+                        continue
+                    if target.path.parent.is_symlink():
+                        raise OSError(f"Refusing symlinked Hermes skill directory: {target.path.parent}")
+                    target.path.parent.mkdir(parents=True, exist_ok=True)
+                    # Exclusive creation: never unlink a Hermes user's file, even with --force.
+                    target.path.symlink_to(canonical_file)
+                    console.print(f"[green]✓[/green] {target.harness}: {target.path}")
+                    installed_count += 1
+                    continue
                 target.path.parent.mkdir(parents=True, exist_ok=True)
                 if target.path.is_symlink():
                     if force:
@@ -153,8 +249,12 @@ def install_skills(
         f"\n[bold green]✨ Done! {installed_count} skill/command links configured.[/bold green]"
     )
     console.print(
+        "[yellow]Hermes collision checks cover only the default HOME/.hermes/skills root; "
+        "active profiles, project and external roots are not checked.[/yellow]"
+    )
+    console.print(
         "Available commands in [bold]agy[/bold], [bold]pi[/bold], "
-        "[bold]claude[/bold], [bold]opencode[/bold]:"
+        "[bold]claude[/bold], [bold]opencode[/bold], [bold]hermes[/bold]:"
     )
     console.print("  • [cyan]/herdr-master [task][/cyan] — Root orchestrator for multiple jobs")
     console.print("  • [cyan]/ergo [--native] [--models ...] [intent][/cyan] — Phased pipeline")

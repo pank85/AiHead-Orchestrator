@@ -45,6 +45,7 @@ dependencies = [
     "psutil>=5.9.0",
     "tomli>=2.0.1;python_version<'3.11'",
     "tomli-w>=1.0.0",
+    "ruamel.yaml>=0.18,<0.19",
 ]
 
 [project.optional-dependencies]

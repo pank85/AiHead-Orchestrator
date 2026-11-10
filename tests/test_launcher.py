@@ -672,3 +672,53 @@ async def test_launch_orchestration_passes_role_efforts_not_worker_effort():
     assert "reviewer=" not in res["intent"].split("--efforts", 1)[1]
     prompt = client.prompt_agent.await_args.args[1]
     assert "--efforts scout=low,architect=max" in prompt
+
+
+@pytest.mark.asyncio
+async def test_launch_passes_herdr_parent_pane_id_and_caller_is_ai_head_not_busy():
+    client = _client()
+    ctx = _inside()  # ctx.pane_id == "w9:p1"
+
+    # Simulate caller IS AiHead (pane_id == ctx.pane_id == "w9:p1"), reported busy by Herdr
+    head_info = {
+        "tab_id": "w9:t1",
+        "pane_id": "w9:p1",
+        "busy": True,
+        "reconciled": False,
+        "model": "running-head-model",
+        "enabled": True,
+    }
+
+    with (
+        patch("herdr_master.pipeline.launcher.resolve_herdr_context", return_value=ctx),
+        patch(
+            "herdr_master.pipeline.launcher.ensure_herdr_ai_head",
+            AsyncMock(return_value=head_info),
+        ) as mock_ensure,
+    ):
+        res = await launch_ergo(
+            client=client,
+            intent="feature from aihead",
+            workspace_label="ergo-from-aihead",
+            squad=Squad(),
+            cwd="/tmp/repo",
+            ai_head=True,
+        )
+
+    # 1. create_tab passed HERDR_PARENT_PANE_ID in env
+    assert client.create_tab.await_args.kwargs["env"] == {"HERDR_PARENT_PANE_ID": "w9:p1"}
+
+    # 2. ensure_herdr_ai_head received caller_pane_id == "w9:p1"
+    assert mock_ensure.await_args.kwargs.get("caller_pane_id") == "w9:p1"
+
+    # 3. Because caller IS AiHead (w9:p1 == head_info["pane_id"]), discovery is ready (NOT busy!)
+    discovery = res["ai_head"]
+    assert discovery is not None
+    assert discovery.status == "ready"
+    assert discovery.reconciled is True
+
+    # 4. Bootstrap payload includes parent_pane_id and ready instructions
+    payload = _payload(client.prompt_agent.await_args.args[1])
+    assert payload["parent_pane_id"] == "w9:p1"
+    assert payload["ai_head"]["status"] == "ready"
+    assert "Do not consult AiHead" not in payload["ai_head"]["instructions"]

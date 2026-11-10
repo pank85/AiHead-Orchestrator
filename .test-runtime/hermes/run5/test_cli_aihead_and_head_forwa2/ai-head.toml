@@ -1,0 +1,8 @@
+[ai_head]
+enabled = true
+dangerously_skip_permissions = false
+
+[ai_head.binding]
+kind = "agy"
+model = "gemini-2.5-pro"
+effort = "high"

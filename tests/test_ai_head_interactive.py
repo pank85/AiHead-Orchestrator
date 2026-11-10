@@ -794,9 +794,17 @@ async def test_launch_ai_head_with_explicit_workspace():
 
 
 @pytest.mark.asyncio
-async def test_launch_ai_head_binding_overrides():
+@pytest.mark.parametrize(
+    "harness,model",
+    [
+        (HarnessKind.AGY, "gemini-3.8-flash-high"),
+        (HarnessKind.HERMES, "openai-codex/gpt-6.1-terra"),
+    ],
+)
+async def test_launch_ai_head_binding_overrides(harness, model):
     """Overrides for harness, model, and effort should propagate into launch metadata."""
     client = AsyncMock(spec=HerdrClient)
+    client.get_agent = AsyncMock(return_value={"agent": {"agent_status": "idle"}})
     client.split_pane = AsyncMock(return_value={"pane_id": "pane-agy-1"})
     client.swap_panes = AsyncMock(return_value={"status": "ok"})
     client.focus_pane = AsyncMock(return_value={"status": "ok"})
@@ -815,18 +823,24 @@ async def test_launch_ai_head_binding_overrides():
     with patch("herdr_master.pipeline.launcher.resolve_launch_context", return_value=ctx):
         res = await launch_ai_head(
             client=client,
-            harness=HarnessKind.AGY,
-            model="gemini-3.8-flash-high",
+            harness=harness,
+            model=model,
             effort=EffortLevel.HIGH,
             split=True,
             cwd="/tmp/my-project",
         )
 
-    assert res["harness"] == "agy"
-    assert res["model"] == "gemini-3.8-flash-high"
+    assert res["harness"] == harness.value
+    assert res["model"] == model
     assert res["effort"] == "high"
     client.start_agent.assert_awaited_once()
-    assert client.start_agent.await_args.kwargs["kind"] == "agy"
+    assert client.start_agent.await_args.kwargs["kind"] == harness.value
+    if harness is HarnessKind.HERMES:
+        assert client.start_agent.await_args.kwargs["args"] == [
+            "--provider", "openai-codex", "--model", "gpt-6.1-terra",
+            "--reasoning", "high", "--yolo",
+        ]
+        assert "You are AiHead" in client.prompt_agent.await_args.args[1]
 
 
 # ===========================================================================

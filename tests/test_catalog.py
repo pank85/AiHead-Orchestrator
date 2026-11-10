@@ -55,6 +55,7 @@ def test_harness_kind_is_reexported_same_object():
         "opencode",
         "codex",
         "gemini",
+        "hermes",
     ]
 
 
@@ -85,7 +86,12 @@ def test_harness_identity_matches_enum(kind):
     else:
         assert spec.supports_native is False
         assert spec.native is None
-        assert spec.install_targets == ()
+        if kind == "hermes":
+            assert spec.install_targets[0].path_template == (
+                "{home}/.hermes/skills/{skill}/SKILL.md"
+            )
+        else:
+            assert spec.install_targets == ()
 
 
 def test_no_hidden_per_host_default_squad():
@@ -96,8 +102,10 @@ def test_no_hidden_per_host_default_squad():
         assert "default_squad" not in spec
         assert spec["default_model"] is None
     targets = [target for spec in document["identities"] for target in spec["install_targets"]]
-    assert len(targets) == 5
-    assert {target["harness"] for target in targets} == {"agy", "pi", "claude", "opencode"}
+    assert len(targets) == 6
+    assert {target["harness"] for target in targets} == {
+        "agy", "pi", "claude", "opencode", "hermes"
+    }
     for target in targets:
         template = target["path_template"]
         assert "{home}" in template and "{skill}" in template

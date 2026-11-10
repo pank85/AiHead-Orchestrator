@@ -32,7 +32,7 @@ async def test_prompt_agent_invalid_attempt_counts():
 async def test_prompt_agent_default_retry_compatibility_eventual_success(
     monkeypatch: pytest.MonkeyPatch,
 ):
-    """Verify existing 20-attempt default retries on transient errors and succeeds."""
+    """Verify existing 60-attempt default retries on transient errors and succeeds."""
     client = HerdrClient(socket_path="/tmp/fake.sock")
     client._rpc = AsyncMock(
         side_effect=[
@@ -45,7 +45,7 @@ async def test_prompt_agent_default_retry_compatibility_eventual_success(
     sleep_calls = []
     monkeypatch.setattr(asyncio, "sleep", AsyncMock(side_effect=lambda s: sleep_calls.append(s)))
 
-    res = await client.prompt_agent("pane-1", "hello")  # default max_attempts=20
+    res = await client.prompt_agent("pane-1", "hello")  # default max_attempts=60
 
     assert res == agent_prompted(pane_id="pane-1")
     assert client._rpc.call_count == 3
@@ -56,7 +56,7 @@ async def test_prompt_agent_default_retry_compatibility_eventual_success(
 async def test_prompt_agent_default_retry_compatibility_exhausted(
     monkeypatch: pytest.MonkeyPatch,
 ):
-    """Verify default max_attempts=20 exhausts all 20 attempts before raising last error."""
+    """Verify default max_attempts=60 exhausts all 60 attempts before raising last error."""
     client = HerdrClient(socket_path="/tmp/fake.sock")
     client._rpc = AsyncMock(side_effect=HerdrRPCError("agent_busy", "agent is busy"))
 
@@ -67,8 +67,8 @@ async def test_prompt_agent_default_retry_compatibility_exhausted(
         await client.prompt_agent("pane-1", "hello")
 
     assert exc_info.value.code == "agent_busy"
-    assert client._rpc.call_count == 20
-    assert len(sleep_calls) == 19
+    assert client._rpc.call_count == 60
+    assert len(sleep_calls) == 59
 
 
 @pytest.mark.asyncio
@@ -153,7 +153,7 @@ async def test_prompt_agent_transport_timeout_no_replay():
 
     assert client._rpc.call_count == 1
 
-    # Connection error with default max_attempts=20 must also NOT replay
+    # Connection error with default max_attempts=60 must also NOT replay
     client._rpc = AsyncMock(side_effect=HerdrConnectionError("Connection lost"))
 
     with pytest.raises(HerdrConnectionError):

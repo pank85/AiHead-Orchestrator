@@ -28,6 +28,7 @@ _REQUIRED = (
 _OPTIONAL = (
     "pane_id",
     "tab_id",
+    "parent_pane_id",
     "squad",
     "allowed_coder_models",
     "models",
@@ -87,10 +88,17 @@ _AI_HEAD_BUSY_INSTRUCTIONS = (
 )
 
 
-def _normalize_ai_head(ai_head: Any) -> dict[str, Any] | None:
+def _normalize_ai_head(
+    ai_head: Any,
+    *,
+    parent_pane_id: str | None = None,
+) -> dict[str, Any] | None:
     """Normalize AiHead (dict or model) into a block with readiness-aware instructions.
 
     Returns None when AiHead is absent or disabled.
+    When ``parent_pane_id`` matches ``ai_head.pane_id``, the caller IS AiHead
+    (whose status in Herdr is temporarily 'working' during the launch call),
+    so AiHead is treated as ready/available and never marked busy/unavailable.
     """
     if ai_head is None:
         return None
@@ -102,6 +110,13 @@ def _normalize_ai_head(ai_head: Any) -> dict[str, Any] | None:
         if not getattr(ai_head, "enabled", False):
             return None
         res = ai_head.model_dump() if hasattr(ai_head, "model_dump") else dict(ai_head)
+
+    head_pane = res.get("pane_id")
+    if parent_pane_id and head_pane and str(head_pane) == str(parent_pane_id):
+        res["status"] = "ready"
+        res["busy"] = False
+        res["reconciled"] = True
+
     unavailable = (
         res.get("status") in ("busy", "pending", "unavailable")
         or res.get("busy") is True
@@ -111,9 +126,13 @@ def _normalize_ai_head(ai_head: Any) -> dict[str, Any] | None:
     return res
 
 
-def _format_ai_head_data(ai_head: Any) -> dict[str, Any] | None:
+def _format_ai_head_data(
+    ai_head: Any,
+    *,
+    parent_pane_id: str | None = None,
+) -> dict[str, Any] | None:
     """Format AiHead discovery block when enabled; return None when disabled/None."""
-    return _normalize_ai_head(ai_head)
+    return _normalize_ai_head(ai_head, parent_pane_id=parent_pane_id)
 
 
 def _bootstrap_document(context: dict[str, Any]) -> dict[str, Any]:
@@ -151,7 +170,10 @@ def _bootstrap_document(context: dict[str, Any]) -> dict[str, Any]:
                 document["council"] = _format_council_data(context["council"])
         elif key == "ai_head":
             if "ai_head" in context and context["ai_head"] is not None:
-                formatted_head = _format_ai_head_data(context["ai_head"])
+                formatted_head = _format_ai_head_data(
+                    context["ai_head"],
+                    parent_pane_id=context.get("parent_pane_id"),
+                )
                 if formatted_head is not None:
                     document["ai_head"] = formatted_head
         elif key == "config_path":

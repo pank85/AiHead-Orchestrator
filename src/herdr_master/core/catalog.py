@@ -50,6 +50,7 @@ class HarnessKind(str, Enum):
     OPENCODE = "opencode"
     CODEX = "codex"
     GEMINI = "gemini"
+    HERMES = "hermes"
 
 
 @dataclass(frozen=True)
@@ -292,6 +293,26 @@ def _build_specs() -> dict[str, HarnessSpec]:
                     "command",
                     "{home}/.config/opencode/commands/{skill}.md",
                     "OpenCode command",
+                ),
+            ),
+        ),
+        HarnessSpec(
+            kind="hermes",
+            label="Hermes",
+            summary="Hermes interactive CLI. Provider/model split; effort uses --reasoning.",
+            supports_herdr=True,
+            supports_native=False,
+            default_model=None,
+            herdr=_herdr(
+                splits_provider=True, effort_flag="--reasoning", permission_flags=("--yolo",)
+            ),
+            native=None,
+            install_targets=(
+                _install(
+                    "hermes",
+                    "skill",
+                    "{home}/.hermes/skills/{skill}/SKILL.md",
+                    "Hermes skill",
                 ),
             ),
         ),
@@ -592,6 +613,22 @@ def _pi_model_args(model: str, effort: str | None) -> list[str]:
     return args
 
 
+def _hermes_model_args(model: str, effort: str | None) -> list[str]:
+    """Hermes CLI flags, not Pi's --thinking or a provider-prefixed model override."""
+    exact = _require_model("hermes", model)
+    args: list[str] = []
+    if "/" in exact:
+        provider, rest = exact.split("/", 1)
+        if not provider or not rest:
+            raise CatalogError(f"Hermes model '{exact}' must be provider/model.")
+        args.extend(["--provider", provider, "--model", rest])
+    else:
+        args.extend(["--model", exact])
+    if effort is not None:
+        args.extend(["--reasoning", effort])
+    return args
+
+
 def _passthrough_args(kind: str, model: str, effort: str | None) -> list[str]:
     exact = _require_model(kind, model)
     if effort is not None:
@@ -619,6 +656,8 @@ def build_agent_args(
         args = _agy_model_args(model, effort_key)
     elif kind == "pi":
         args = _pi_model_args(model, effort_key)
+    elif kind == "hermes":
+        args = _hermes_model_args(model, effort_key)
     elif kind == "claude":
         args = ["--model", _require_model(kind, model)]
     elif kind == "opencode":
@@ -902,7 +941,7 @@ def _allowed_efforts(kind: str, model: str, *, mode: str) -> list[str]:
     kind_key = get_harness(kind).kind
     mode_key = validate_mode(mode)
     if mode_key == "native":
-        if kind_key in {"codex", "gemini"}:
+        if not get_harness(kind_key).supports_native:
             return []
         return list(_VALID_EFFORTS)
     if kind_key == "agy" and (model == _FLASH_BASE or model in _EFFORT_BY_FLASH):
@@ -911,7 +950,7 @@ def _allowed_efforts(kind: str, model: str, *, mode: str) -> list[str]:
         return ["low", "medium", "high"]
     if kind_key == "agy":
         return list(_VALID_EFFORTS)
-    if kind_key == "pi":
+    if kind_key in {"pi", "hermes"}:
         return list(_VALID_EFFORTS)
     if kind_key in {"claude", "opencode"}:
         return list(_VALID_EFFORTS)
@@ -964,6 +1003,12 @@ def worker_route_note(
         return (
             "per-task efforts: low, medium, high, max; "
             f"route: --model {model} --thinking <low|medium|high|max>"
+        )
+    if kind_key == "hermes":
+        route = " ".join(_hermes_model_args(model, None))
+        return (
+            "per-task efforts: low, medium, high, max; "
+            f"route: {route} --reasoning <low|medium|high|max>"
         )
     if kind_key == "claude":
         return (

@@ -288,22 +288,51 @@ def test_orchestration_skill_is_herdr_free_and_keeps_every_gate():
     assert "Never `git reset --hard`" in body
     assert "Never invent a model ID" in body
 
-    # No Herdr surface of any kind
+    # Herdr surface strictly forbidden from all pipeline execution and state management
     for forbidden in (
-        "herdr agent",
         "herdr tab",
         "herdr workspace",
         "herdr status",
         "herdm catalog",
         "herdm ergo",
         "HERDR_WORKSPACE_ID",
-        "HERDR_PANE_ID",
         "owns_workspace",
+        "herdr agent start",
+        "herdr agent wait",
+        "herdr agent read",
+        "herdr agent get",
+        "herdr agent send-keys",
     ):
         assert forbidden not in body, f"/orchestration must not reference {forbidden}"
 
-    # Host adapter table covers all four native subagent hosts
-    for host_tool in ("invoke_subagent", "subagent", "Agent"):
+    # Precisely assert that any 'herdr agent' command is strictly a parent notification prompt
+    import re
+    prompt_targets = re.findall(r"herdr agent prompt\s+([^\s\"]+|\"[^\"]+\")", body)
+    assert prompt_targets, "Expected delegated parent prompt notification"
+    allowed_parent_targets = {'"$HERDR_PARENT_PANE_ID"'}
+    for target in prompt_targets:
+        assert target in allowed_parent_targets, (
+            f"Forbidden herdr agent prompt target in /orchestration: {target}. "
+            f"Must target parent pane ID variable only."
+        )
+
+    # Ensure no other 'herdr agent' subcommands exist anywhere in the body
+    agent_subcommands = re.findall(r"herdr agent\s+([a-zA-Z0-9_-]+)", body)
+    assert all(cmd == "prompt" for cmd in agent_subcommands), (
+        f"Forbidden herdr agent subcommands in /orchestration: {agent_subcommands}"
+    )
+
+    # Negative assertions: ensure no arbitrary agent target, raw placeholder, or pane target exists
+    for bad_target in ('"$HERDR_PANE_ID"', '<child', '$child', '<worker', '<target>', '<PARENT_PANE_ID>'):
+        assert f"herdr agent prompt {bad_target}" not in body, (
+            f"Forbidden non-parent target in /orchestration: {bad_target}"
+        )
+
+    # HERDR_PANE_ID must only ever appear as HERDR_PARENT_PANE_ID
+    assert "HERDR_PANE_ID" not in body.replace("HERDR_PARENT_PANE_ID", "")
+
+    # Host adapter table covers all native subagent hosts
+    for host_tool in ("invoke_subagent", "subagent", "Agent", "delegate_task"):
         assert host_tool in body
     assert "EnableWriteTools: false" in body
 
@@ -325,6 +354,19 @@ def test_orchestration_can_run_as_a_delegated_job():
 
     # Delegation must not weaken the mandatory gates
     assert "do not get skipped just because a master is watching" in body
+
+
+def test_delegated_report_preserves_actual_results():
+    body = load_skill_body("orchestration")
+    report = body.split("## 9. Report & Hierarchical Parent Notification", 1)[1].split("## Hard Rules", 1)[0]
+    assert "actual assigned branch" in report
+    assert "commit SHA (or say no commit was made)" in report
+    assert "actual Reviewer verdict" in report
+    assert "including `unitTestsMode=none`" in report
+    assert "never describe skipped tests as passed" in report
+    assert "Never claim a target-branch squash or integration for delegated work" in report
+    assert "review <actual-verdict-or-not-run>" in report
+    assert "verification <actual-results-and-skips>" in report
 
 
 def test_herdr_master_forwards_orchestration_jobs():
@@ -417,19 +459,20 @@ def test_orchestration_skill_ai_head_section():
     assert "correlation ID" in body
     assert "Destructive operations, security bypasses, or out-of-scope actions always require explicit user approval" in body
 
-    # Verify no Herdr surface was introduced
+    # Verify no Herdr surface was introduced in AiHead section
     for forbidden in (
-        "herdr agent",
         "herdr tab",
         "herdr workspace",
         "herdr status",
         "herdm catalog",
         "herdm ergo",
         "HERDR_WORKSPACE_ID",
-        "HERDR_PANE_ID",
         "owns_workspace",
+        "herdr agent start",
+        "herdr agent wait",
     ):
         assert forbidden not in body, f"/orchestration must not reference {forbidden}"
+    assert "HERDR_PANE_ID" not in body.replace("HERDR_PARENT_PANE_ID", "")
 
 
 def test_aihead_skill_contract():
@@ -466,6 +509,20 @@ def test_aihead_skill_contract():
     assert "aiheaddev" in body.lower()
 
 
+def test_aihead_initial_parent_directive_has_workflow_specific_completion():
+    """The actual child prompt must not require plan-only Council to commit."""
+    body = load_skill_body("aihead")
+    directive = body.split("  AiHead Parent Directive:\n", 1)[1].split("  ```", 1)[0]
+
+    assert "herdr agent prompt $HERDR_PANE_ID" in directive
+    assert "For an implementation pipeline, upon completion of the assigned branch commit and review" in directive
+    assert "report the commit, review, and actual verification" in directive
+    assert "For plan-only Council, upon finalization report the outcome and RUN_DIR/final_plan.md" in directive
+    assert "do not wait for or make an implementation commit" in directive
+    assert "If either workflow is blocked, report the blocker immediately" in directive
+    assert "Upon completion of the assigned branch commit and review (or if blocked)" not in directive
+
+
 def test_no_obsolete_dotfiles_or_hardcoded_paths():
     """Ensure no obsolete dotfiles or hardcoded user paths remain in owned files."""
     aihead_raw = (REPO_ROOT / "skills" / "aihead" / "SKILL.md").read_text(encoding="utf-8")
@@ -491,3 +548,191 @@ def test_no_obsolete_dotfiles_or_hardcoded_paths():
         assert "/home/pank/projects/herdr-master" not in content, (
             f"Found hardcoded project path in {path_str}"
         )
+
+
+def test_canonical_skills_hermes_support():
+    """Assert all 5 canonical skills accurately define Hermes contracts and constraints."""
+    aihead_body = load_skill_body("aihead")
+    assert "aihead --harness hermes" in aihead_body
+    assert "--provider openai-codex --model gpt-6.1-terra --reasoning high" in aihead_body
+    assert "Hermes has no catalog native-subagent adapter or direct headless AiHead runner" in aihead_body
+    assert "--yolo" in aihead_body
+    assert "--no-skip-permissions" in aihead_body
+    assert 'herdm orchestration "<intent>"' in aihead_body
+    assert 'herdm ergo "<intent>"' in aihead_body
+    assert 'herdm council "<intent>"' in aihead_body
+
+    hm_body = load_skill_body("herdr-master")
+    assert "--kind hermes" in hm_body
+    assert "supports_native=False" in hm_body
+    assert "terminal(command=\"herdr agent wait <target> --timeout <ms>\"" in hm_body
+    assert "delegate_task" in hm_body
+    assert "--reasoning" in hm_body
+    assert "--yolo" in hm_body
+    assert "Async delivery is runtime/session-dependent" in hm_body
+    assert "Scope this check strictly to when a Hermes child route is selected" in hm_body
+
+    ergo_body = load_skill_body("ergo")
+    assert "--kind hermes" in ergo_body
+    assert "Hermes (`hermes`)" in ergo_body
+    assert "supports_native=False" in ergo_body
+    assert "--yolo" in ergo_body
+    assert "index.lock" in ergo_body
+    assert "Scope Hermes catalog checks strictly" in ergo_body
+    assert "STOP and report that native mode is unsupported" in ergo_body
+    assert "Do NOT silently switch execution mode to Herdr" in ergo_body
+    assert "Branch A — Parent Master Coordinator Gate" in ergo_body
+    assert "Branch B — Delegated Autonomous AiHead Gate" in ergo_body
+    assert "Branch C — Direct Standalone Human Approval Gate" in ergo_body
+    assert "HERDR_NEEDS_USER: Please review and approve" in ergo_body
+    assert "STOP and wait for explicit user approval" in ergo_body
+
+    orch_body = load_skill_body("orchestration")
+    assert "| Hermes (`hermes`)" in orch_body
+    assert "delegate_task" in orch_body
+    assert "runtime- and session-dependent" in orch_body
+    assert "MUST FAIL CLOSED" in orch_body
+
+    council_body = load_skill_body("council")
+    assert "--kind hermes" in council_body
+    assert "supports_native=False" in council_body
+    assert "Scope this catalog check strictly to requested Hermes member routes" in council_body
+    assert "Hermes does not provide a headless CLI runner" in council_body
+
+    aihead_body = load_skill_body("aihead")
+    assert "herdm aihead" in aihead_body
+    assert "herdm skills install --no-force" in aihead_body
+    assert "Harness Skill Target Inventory" in aihead_body
+    assert "Profile-Aware No-Clobber Opt-In Collision Procedure" in aihead_body
+    assert "NEVER alter, rename, or delete user skills without explicit permission" in aihead_body
+
+
+
+def test_delegated_shared_session_parent_contract():
+    """Static prose contracts; these do not prove runtime sender identity."""
+    import re
+    import shlex
+
+    for skill in ("ergo", "orchestration"):
+        body = load_skill_body(skill)
+        assert "same-session agents can impersonate" in body
+        assert "no authenticated sender or security isolation claim" in body
+        assert "dispatching parent's own pane ID" in body
+        assert "never its grandparent" in body
+        assert "no-integration/no-cleanup restrictions" in body
+        assert "Only a genuinely standalone invocation may use standalone routing or landing" in body
+        assert "A changed plan requires fresh approval" in body
+        assert "no Coder starts before approval" in body
+        assert "Destructive operations, security bypasses, and out-of-scope actions" in body
+        assert "independent trusted provenance" not in body
+        assert "authenticated parent approval" not in body
+
+    orch = load_skill_body("orchestration")
+    for command in re.findall(r"`(herdr agent prompt [^`]+)`", orch):
+        assert shlex.split(command)[3] == "$HERDR_PARENT_PANE_ID"
+    assert "Never convert it to standalone" in orch
+    gate = orch.split("## 5. User Approval Gate", 1)[1].split("## 6.", 1)[0]
+    for branch in ("Delegated parent gate", "Standalone AiHead gate", "Standalone human gate"):
+        assert branch in gate
+    assert "A plan change invalidates prior approval" in gate
+
+    master = load_skill_body("herdr-master")
+    assert "this dispatching master's own `$HERDR_PANE_ID` as the child's direct parent" in master
+    assert "master's parent is the child's grandparent" in master
+    assert "a root master may have no parent" in master
+    assert 'herdr agent prompt <child-pane-id> "<decision>"' in master
+    assert "same-session agents can impersonate" in master
+    aihead = load_skill_body("aihead")
+    assert "AiHead's own `$HERDR_PANE_ID` as the child's direct parent" in aihead
+    assert "not authenticated sender verification or security isolation" in aihead
+
+
+def test_strict_one_level_up_hierarchy_and_nonblocking_contract():
+    """Verify all 5 skills enforce non-blocking parents, both decision+completion notifications, and strict 1-level-up hierarchy."""
+    aihead = load_skill_body("aihead")
+    master = load_skill_body("herdr-master")
+    ergo = load_skill_body("ergo")
+    council = load_skill_body("council")
+    orch = load_skill_body("orchestration")
+
+    for name, body in (
+        ("aihead", aihead),
+        ("herdr-master", master),
+        ("ergo", ergo),
+        ("council", council),
+        ("orchestration", orch),
+    ):
+        assert "NEVER block or wait in polling loops" in body, f"{name} missing non-blocking rule"
+        assert "HERDR_PARENT_PANE_ID" in body, f"{name} missing HERDR_PARENT_PANE_ID"
+
+    # Ergo Level 3 briefs (Scout, Architect, Coder, Reviewer) notify ONLY ORCHESTRATOR_PANE_ID
+    assert 'herdr agent prompt <ORCHESTRATOR_PANE_ID> "Scout finished:' in ergo
+    assert 'herdr agent prompt <ORCHESTRATOR_PANE_ID> "Scout blocked/decision needed:' in ergo
+    assert 'herdr agent prompt <ORCHESTRATOR_PANE_ID> "Architect finished:' in ergo
+    assert 'herdr agent prompt <ORCHESTRATOR_PANE_ID> "Architect blocked/decision needed:' in ergo
+    assert 'herdr agent prompt <ORCHESTRATOR_PANE_ID> "Coder <N> finished:' in ergo
+    assert 'herdr agent prompt <ORCHESTRATOR_PANE_ID> "Coder <N> blocked/decision needed:' in ergo
+    assert 'herdr agent prompt <ORCHESTRATOR_PANE_ID> "Reviewer finished:' in ergo
+    assert 'herdr agent prompt <ORCHESTRATOR_PANE_ID> "Reviewer blocked/decision needed:' in ergo
+    assert "NEVER AiHead" in ergo
+
+    # Council Level 3 (Scout & Members) notify ONLY COORDINATOR_PANE_ID; Level 2 notifies HERDR_PARENT_PANE_ID
+    assert "COORDINATOR_PANE_ID" in council
+    assert "herdr agent prompt <COORDINATOR_PANE_ID>" in council
+    assert 'herdr agent prompt "$HERDR_PARENT_PANE_ID" "Council deliberation finished:' in council
+    assert 'herdr agent prompt "$HERDR_PARENT_PANE_ID" "Council decision/blocker needed:' in council
+    assert "NEVER notify AiHead or Herdr-Master directly" in council
+
+
+def test_hermes_skill_discovery_production_lookup_in_sandbox(tmp_path):
+    """Optional subprocess integration: synthetic candidates, manually assigned tier only."""
+    import os
+    import subprocess
+
+    python = os.environ.get("HERMES_TEST_PYTHON")
+    workspace = os.environ.get("HERMES_TEST_WORKSPACE")
+    if not python and not workspace:
+        pytest.skip("Optional production discovery not run: set HERMES_TEST_PYTHON and HERMES_TEST_WORKSPACE")
+    assert python and workspace, "Both HERMES_TEST_PYTHON and HERMES_TEST_WORKSPACE are required"
+    assert Path(python).is_absolute() and Path(workspace).is_absolute()
+    script = r'''
+import sys
+import socket
+from pathlib import Path
+# This subprocess must not contact a network, regardless of imported modules.
+def deny_network(*args, **kwargs):
+    raise RuntimeError("network disabled in discovery test")
+socket.socket.connect = deny_network
+socket.socket.connect_ex = deny_network
+sys.path.insert(0, sys.argv[1])
+from tools.skills_tool import _collect_skill_candidates
+from agent.skill_utils import pick_skill_candidate
+root = Path(sys.argv[2]) / "skills"
+user = root / "custom" / "ergo"
+canonical = root / "ergo"
+for directory in (user, canonical):
+    directory.mkdir(parents=True)
+    (directory / "SKILL.md").write_text("---\nname: ergo\ndescription: test\n---\n# Test\n")
+candidates = _collect_skill_candidates("ergo", None, [root])
+assert len(candidates) == 2
+winner, contenders = pick_skill_candidate([(1, str(root), 1, c[1]) for c in candidates])
+assert winner is None and len(contenders) == 2
+(user / "SKILL.md").write_text("---\nname: overlay\ndescription: test\n---\n# Test\n")
+assert len(_collect_skill_candidates("ergo", None, [root])) == 2
+user.rename(user.with_name("overlay"))
+assert len(_collect_skill_candidates("ergo", None, [root])) == 1
+assert len(_collect_skill_candidates("overlay", None, [root])) == 1
+quoted = root / "group" / "other" / "SKILL.md"
+quoted.parent.mkdir(parents=True)
+for text in ('---\n"name": ergo\ndescription: user\n---\n',
+             '\ufeff---\n\'name\': ergo\ndescription: user\n---\n'):
+    quoted.write_text(text, encoding="utf-8")
+    found = _collect_skill_candidates("ergo", None, [root])
+    assert {item[1] for item in found} == {canonical / "SKILL.md", quoted}
+'''
+    env = {"HOME": str(tmp_path), "HERMES_HOME": str(tmp_path / "hermes"),
+           "TMPDIR": str(tmp_path), "PYTHONDONTWRITEBYTECODE": "1",
+           "PATH": os.defpath}
+    result = subprocess.run([python, "-B", "-I", "-c", script, workspace, str(tmp_path)],
+                            cwd=tmp_path, env=env, capture_output=True, text=True, timeout=60)
+    assert result.returncode == 0, result.stdout + result.stderr

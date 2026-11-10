@@ -60,7 +60,7 @@ Do NOT maintain or consult hardcoded default model tables. The single authority 
    ```bash
    herdm catalog agent --mode <mode> [--harness <native-host>] --binding <binding> --role <role> --json
    ```
-   - In Herdr mode, the returned `argv` array is used verbatim in `herdr agent start <name> --kind <kind> --pane <pane-id> -- <argv...>`.
+   - In Herdr mode, the returned `argv` array is used verbatim in `herdr agent start <name> --kind <kind> --pane <pane-id> -- <argv...>`. Scope Hermes catalog checks strictly to when a Hermes child route is selected: when a Hermes child binding is requested, verify Hermes is present in the active catalog (via `herdm catalog show --json`). If the active catalog lacks `hermes`, report that Hermes catalog support is not yet integrated into the active environment and STOP for that Hermes route rather than fabricating launch arguments. Standard non-Hermes roles (e.g. default agy/pi roles) do not require Hermes in the catalog and proceed normally. When Hermes is supported and selected, child sessions use `--kind hermes -- --provider <provider> --model <model> --reasoning <effort>` (`--yolo` is passed by default to skip tool prompt confirmations; use `--no-skip-permissions` to require interactive confirmation). Disclose this security bypass: `--yolo` skips tool prompts inside the child pane, but does NOT approve the Plan Approval Gate, Reviewer verdict, or landing. Provider/model splits on the first slash; do not use `--thinking`, `--resume`, or `--continue`.
    - In Native mode, the returned descriptor contains `tool`, `kwargs`, `setup`, `prompt_param`, and optional `effort_prefix`. Use these verbatim.
 
 ---
@@ -74,6 +74,7 @@ When `--native` is explicitly passed:
   - **Pi (`pi`)**: uses `subagent({ agent, model, task })` with model effort suffixes (e.g. `xai/grok-4.7:high`).
   - **Claude Code (`claude`)**: uses `Agent` tool with prompt effort phrases on line 1.
   - **OpenCode (`opencode`)**: uses `subagent` tool with prompt effort phrases on line 1.
+  - **Hermes (`hermes`)**: Currently has no catalog native-subagent adapter (`supports_native=False` in catalog; `describe_native_agent` raises an error). If `--native` is explicitly requested under Hermes, **STOP and report that native mode is unsupported by the catalog**. Do NOT silently switch execution mode to Herdr or alter bindings; require an explicit user decision before changing execution mode or bindings, and preserve any user-specified model/effort overrides if the user approves switching to Herdr mode.
 - **Read-Only Reviewer Constraint**:
   Reviewer is spawned as read-only (in `agy`: `EnableWriteTools: false`; in `pi`: read-only agent). If a native reviewer cannot write its report (`RUN_DIR/review.md` and `RUN_DIR/fixes_<N>.md`) because its tools are read-only, the orchestrator persists the returned report text under the concrete `RUN_DIR` rather than granting source-write permissions.
 
@@ -98,15 +99,18 @@ Plain `/ergo` and master-forwarded Ergo jobs execute in Herdr mode.
   - **No Recursive Coordinator Kickoff**:
     Do NOT recursively invoke `herdm ergo` to start another coordinator. The current session IS the orchestrator.
 
-### Spawning Role Tabs
+### Spawning Role Tabs (Non-Blocking & Strict One-Level-Up Hierarchy)
 1. Ensure the Herdr server is accessible (`herdr status server`).
-2. Create one tab per role in the workspace, forwarding the orchestrator's pane ID via `--env`:
+2. Create one tab per role in the workspace, forwarding the Ergo Orchestrator's own pane ID (`$HERDR_PANE_ID` as `ORCHESTRATOR_PANE_ID`) via `--env`:
    `herdr tab create --workspace <WS_ID> --cwd "$WORKTREE" --label <role> --env "HERDR_PARENT_PANE_ID=$HERDR_PANE_ID" --no-focus` → record `<PANE_ID>`.
 3. Start the agent using the exact argv resolved from `herdm catalog agent`:
    `herdr agent start <name> --kind <kind> --pane <PANE_ID> -- <resolved_argv...>`
 4. Send the prompt with `herdr agent prompt <PANE_ID> "<prompt>"`.
-5. For parallel `INDEPENDENT` tasks, start and prompt all coder tabs in the same turn, wait on each (`herdr agent wait <PANE_ID> --timeout 600000`), and verify completion via `herdr agent get/read` plus expected summary files.
-6. On Reviewer fix cycles, send fix prompts to the **existing** coder tabs rather than opening duplicate tabs.
+5. **Non-Blocking Parent Rule**: Parent sessions (including the Ergo Orchestrator) NEVER block or wait in polling loops after spawning/prompting children — return immediately after spawning/prompting a role tab (or arm a non-blocking async watcher if supported) and resume when the child sends its `herdr agent prompt <ORCHESTRATOR_PANE_ID> "..."` notification. For parallel `INDEPENDENT` tasks, start and prompt all coder tabs in the same turn and return immediately; verify completion via `herdr agent get/read` plus expected summary files when notified.
+6. **Strict One-Level-Up Hierarchy (NEVER Skip Levels)**:
+   - **Level 3 workers (Scout, Architect, Coders, Reviewer)** notify **ONLY** the Level 2 Ergo Orchestrator (`ORCHESTRATOR_PANE_ID` = `$HERDR_PANE_ID`) via `herdr agent prompt <ORCHESTRATOR_PANE_ID> ...` for BOTH `"user/decision needed"` (questions, blockers) AND `"completed"` (stage/task finished) — **NEVER AiHead or Herdr-Master directly!**
+   - **Level 2 (Ergo Orchestrator)** notifies its direct Level 1 parent (`HERDR_PARENT_PANE_ID`, i.e., AiHead or Herdr-Master Coordinator) via `herdr agent prompt "$HERDR_PARENT_PANE_ID" ...` for BOTH `"user/decision needed"` (dirty tree, `unitTestsMode`, Plan Approval Gate, architectural mismatches, blockers) AND `"completed"` (pipeline finished).
+7. On Reviewer fix cycles, send fix prompts to the **existing** coder tabs rather than opening duplicate tabs.
 
 ---
 
@@ -159,14 +163,22 @@ Every agent prompt must be assembled in this order:
 >
 > **Unit tests — `unitTestsMode`:** Obey `unitTestsMode` (`none` / `new` / `update-only`): `none` = no test work at all; `update-only` = modify affected existing tests only, never add new ones; `new` = add/update tests as planned.
 >
-> **Parent Notification Protocol:** When you finish your assigned task and have written your designated summary or artifact, you MUST notify your direct parent orchestrator by executing:
-> `herdr agent prompt <ORCHESTRATOR_PANE_ID> "<Role> finished: <brief outcome/artifact path/verdict>"`.
-> If you encounter an unresolvable blocker or fatal error, notify your orchestrator immediately:
-> `herdr agent prompt <ORCHESTRATOR_PANE_ID> "<Role> blocked: <reason>"`.
+> **Parent Notification Protocol (Strict One-Level-Up — Notify ONLY `ORCHESTRATOR_PANE_ID`, NEVER AiHead directly):** Your direct parent is the Ergo Orchestrator at `<ORCHESTRATOR_PANE_ID>` (`$HERDR_PARENT_PANE_ID`). NEVER skip levels to message AiHead or a grandparent coordinator directly.
+> - **Completed:** When you finish your assigned task and have written your designated summary or artifact, you MUST notify your direct parent orchestrator by executing:
+>   `herdr agent prompt <ORCHESTRATOR_PANE_ID> "<Role> finished: <brief outcome/artifact path/verdict>"`.
+> - **Decision / Question / Blocker Needed:** If you encounter an unresolvable blocker, ambiguity, or fatal error requiring a decision, notify your direct parent orchestrator immediately:
+>   `herdr agent prompt <ORCHESTRATOR_PANE_ID> "<Role> blocked/decision needed: <reason or question>"`.
 
 ---
 
 ## 5. Pipeline Sequence
+
+**Shared-session parent routing:** The dispatching parent's own pane ID is the child's direct parent, never its grandparent. The parent passes it as `HERDR_PARENT_PANE_ID` and records the child pane, workspace, worktree, branch and run directory. This is a practical shared-session trust model: same-session agents can impersonate one another or send prompts; there is no authenticated sender or security isolation claim, and this prose is not runtime enforcement.
+1. A known delegated run uses its assigned worktree, branch and run directory and retains no-integration/no-cleanup restrictions. Only a genuinely standalone invocation may use standalone routing or landing. If delegation status or parent ID is missing, ambiguous, or conflicts with the assignment, STOP and report the blocker without guessing a pane.
+2. Send the plan, its run and version, and the child pane ID to the direct parent with `herdr agent prompt "$HERDR_PARENT_PANE_ID" "<approval request>"`. The parent reviews the exact plan and sends its decision to the child pane with a Herdr prompt to the recorded child pane containing `APPROVED/REVISE`, the run, plan version and guidance. Wait for an explicit decision; no Coder starts before approval. A changed plan requires fresh approval. If the parent or decision is unavailable, STOP.
+3. Route routine questions and completion or blocker reports to the direct parent in the same way. Destructive operations, security bypasses, and out-of-scope actions still require explicit user approval; the parent obtains it before authorizing the child.
+
+A known delegated run retains its assigned worktree, branch, run directory, and no-integration/no-cleanup restrictions even when parent identity is unavailable. If delegation status is uncertain, STOP until clarified; never fall back to standalone or AiHead approval.
 
 Track one checklist item per step and complete in order:
 
@@ -174,7 +186,7 @@ Track one checklist item per step and complete in order:
 1. **Adoption or Creation of Worktree/Branch**:
    - If a parent orchestrator provided `worktree` and `run_dir` (e.g. forwarded by `/herdr-master` or bootstrap context), **adopt** them directly.
    - Otherwise:
-     - Require a clean working tree (`git status --porcelain` empty; if dirty, STOP and ask user to commit/stash).
+     - Require a clean working tree (`git status --porcelain` empty; if dirty and delegated with a known direct parent, prompt parent for decision via `herdr agent prompt "$HERDR_PARENT_PANE_ID"`; if delegation or identity is uncertain STOP as above; only if genuinely standalone ask the user to commit/stash).
      - If already inside an `ergo/*` worktree (`git rev-parse --git-dir` ≠ `--git-common-dir` and branch matches `ergo/*`), reuse it and keep its branch.
      - Otherwise, record `ORIGIN_BRANCH=$(git rev-parse --abbrev-ref HEAD)` and create an isolated worktree `WORKTREE=<project_parent>/<repo>-ergo-<run-id>` on branch `ergo/<run-id>`:
        `git worktree add "$WORKTREE" -b "ergo/<run-id>"`
@@ -192,7 +204,7 @@ Track one checklist item per step and complete in order:
 3. **Workspace Setup**:
    - In Herdr mode: if `workspace_id` is set, adopt that workspace. Do not call `herdr workspace create` when `workspace_id` is already set. Only if no `workspace_id` exists anywhere, create a temporary Herdr workspace `ergo-<run-id>` and record `owns_workspace = true`.
 4. **Unit Tests Question**:
-   - Unless stated in the prompt, ask `unitTestsMode ∈ {none, new, update-only}` and forward to all agents.
+   - Unless stated in the prompt, determine `unitTestsMode ∈ {none, new, update-only}` (if delegated with a known direct parent, prompt parent via `herdr agent prompt "$HERDR_PARENT_PANE_ID"`; if delegation or identity is uncertain STOP as above; only if genuinely standalone ask user) and forward to all agents.
 
 ### Step 2: Scout — Fast Discovery (NEVER skip)
 - Spawn **Scout** with confirmed intent, 3–5 specific questions to answer, `WORKTREE`, `RUN_DIR`, and `unitTestsMode`.
@@ -209,13 +221,25 @@ Track one checklist item per step and complete in order:
 
 ### Step 4: User Approval Gate (NEVER skip)
 - If `~/.claude/lib/render-md.js` exists, render `RUN_DIR/plan.md` to HTML and share the path alongside the summary.
-- Present the plan to the user in simple, plain language, clearly listing each task's scope, disjoint files, assigned **Expert Persona**, and assigned **Coder Model / Effort**.
+- Present the plan in simple, plain language (e.g. 2–3 concise bullets: intent, files, what stays off), clearly listing each task's scope, disjoint files, assigned **Expert Persona**, and assigned **Coder Model / Effort**.
 - **Architectural Alignment Verification**: Always verify that the plan fits seamlessly with the existing codebase architecture and conventions. If it does not fit, send the Architect back to find an architectural solution; if no solution exists, notify the user immediately for an authoritative decision.
-- **STOP and wait for explicit user approval.** Ask if any task's persona or coder model should be adjusted. No Coder may start before explicit user approval.
-  *(When `--ai-head` is enabled: An authorized AiHead decision within delegated scope may satisfy plan approval, provided it presents the plan in simple terms, verifies architectural alignment with the existing codebase, resolves any mismatch or escalates to the user if no solution exists, and records its structured decision and rationale in `RUN_DIR/aihead_decision.json`. Genuinely ambiguous requirements, destructive actions, or scope expansions must still STOP and wait for explicit user approval).*
+- **Approval Gate Routing (Mutually Exclusive Branches)**:
+  Evaluate exactly one of the following mutually exclusive conditions in order:
+  1. **Branch A — Parent Master Coordinator Gate (known delegation and direct parent)**:
+     Submit the plan and child pane ID to the direct parent:
+     `herdr agent prompt "$HERDR_PARENT_PANE_ID" "<plan>"`
+     **STOP and wait for explicit parent approval** for this run and plan version as specified above. Do NOT print `HERDR_NEEDS_USER`. No Coder starts without approval; if unavailable, STOP with delegated restrictions intact. A plan change invalidates approval.
+  2. **Branch B — Delegated Autonomous AiHead Gate (`--ai-head` is enabled in a genuinely standalone invocation without a parent coordinator)**:
+     An authorized AiHead decision within delegated scope evaluates the plan:
+     - Verify architectural alignment with existing patterns, interfaces, and test conventions.
+     - If requirements are ambiguous, destructive actions are involved, or scope expansions occur, escalate to the human user by printing `HERDR_NEEDS_USER: <specific question>` and **STOP to wait for explicit human approval.**
+     - If the plan is approved within delegated scope, record the structured decision, architectural checks, and rationale in `RUN_DIR/aihead_decision.json` **before** proceeding to Step 5. Do NOT output `HERDR_NEEDS_USER` when AiHead approves without escalation.
+  3. **Branch C — Direct Standalone Human Approval Gate (Default standalone / no `--ai-head`)**:
+     Print `HERDR_NEEDS_USER: Please review and approve the implementation plan for <intent>` and **STOP and wait for explicit user approval.** The `HERDR_NEEDS_USER` marker strictly signals that execution is paused and awaiting user input — never output this marker while continuing execution in the same turn. A prior general instruction to work autonomously cannot pre-approve an unseen plan. Ask if any task's persona or coder model should be adjusted. No Coder may start before explicit user approval.
 
 ### Step 5: Parallel Specialist Coders & Planning Stage Tab Pruning (NEVER code in the orchestrator)
 - **Lifecycle Tab Pruning (Scout & Architect)**: As soon as the plan is approved and Coders are started, **close the Scout and Architect tabs/agents immediately** (`herdr tab close <scout-tab-id>`, `herdr tab close <architect-tab-id>`). Their planning phase is complete and they are no longer needed. Never leave idle planning tabs open during implementation.
+- **Git Lock Collision Avoidance (`index.lock`)**: Two parallel agents executing git commands in the same checkout collide on `.git/index.lock` even with disjoint files. Coders modify only files assigned to their task; worker prompts strictly forbid all git operations (`git add`, `git commit`, `git checkout`, `git reset`). Only the orchestrator lands and commits.
 - For each approved task in `plan.md`, make the Coder a task-specific specialist by injecting `Adopt this expert persona: <Expert Persona from plan>.` at the top of its prompt.
 - Use the exact model approved for that task in `plan.md`.
 - Launch all `INDEPENDENT` tasks **in parallel in a single turn**. Tasks marked `DEPENDS ON` wait until their upstream dependencies finish and read `RUN_DIR/coder_<upstream>_summary.md`.
@@ -236,7 +260,7 @@ Track one checklist item per step and complete in order:
   - If critical/major issues remain after the cycle cap, STOP, keep `WORKTREE` and `ergo/<run-id>` intact, and report to the user.
 
 ### Step 7: Land — Sync `<TARGET_BRANCH>` & Single Squash Commit (MANDATORY squash-merge; NEVER run `git reset --hard`)
-Only after the Reviewer verdict is **APPROVED**:
+Only after the Reviewer verdict is **APPROVED**; for a delegated run preserve the assigned scope:
 *(Note: If running as a delegated child session under `/herdr-master` with explicit worktree/branch constraints, commit once on the assigned worktree branch and stop as instructed by `/herdr-master`; master alone integrates into `develop`).* Otherwise, the orchestrator MUST squash-merge the completed work:
 1. Delete `RUN_DIR` (after copying `.orchestration/carryover.md` to canonical checkout if present), then in `WORKTREE` on `ergo/<run-id>`:
    `git add -A` and create **exactly one** `git commit -m "<one-line summary>"` (body: plan task list).
@@ -252,16 +276,16 @@ Only after the Reviewer verdict is **APPROVED**:
    - Close the workspace only when bootstrap `owns_workspace` is true, and close only that ID (`herdr workspace close <WS_ID>`). Adopted workspaces (`owns_workspace == false`) are NEVER closed.
    - Verify `git branch --list 'ergo/*'` is empty.
 6. **Never push and never open a PR** unless explicitly requested.
+   - **Remote Ref & Reflog Verification**: Before reporting to the user that a run is unpushed, independently inspect `git log origin/<TARGET_BRANCH> -1`, `git branch -r`, and `git reflog` (or `git ls-remote`). Child agents must never push; independently verify remote heads rather than assuming.
+   - **Environment Isolation**: Before running project test suites, clear `PYTHONPATH` (`env -u PYTHONPATH pytest`) to prevent host site-package leakage.
 
 ### Step 8: Done & Carryover
-- Update `<canonical_root>/.orchestration/carryover.md` with intent, branches, squash commit SHA, and constraints.
-- Report what was built, `TARGET_BRANCH`, squash commit SHA, and confirm cleanup.
-- **Hierarchical Parent Notification (One Level Up)**:
-  If this Ergo run was launched by or has a parent orchestrator / AiHead (e.g. `PARENT_PANE_ID` / `HERDR_PARENT_PANE_ID` is set or an `ai-head` pane exists in the workspace):
-  The Ergo Orchestrator **MUST** immediately notify the parent session upon completion:
-  `herdr agent prompt <PARENT_PANE_ID> "Ergo run <run-id> finished: squash commit <SHA> on <TARGET_BRANCH>, review APPROVED, tests passed, worktree cleaned up."`
-  If blocked at any gate or unresolvable error:
-  `herdr agent prompt <PARENT_PANE_ID> "Ergo run <run-id> blocked: <reason>"`
+- For a genuinely standalone run only, update `<canonical_root>/.orchestration/carryover.md` with intent, branches, squash commit SHA, and constraints; report what was built, `TARGET_BRANCH`, squash commit SHA, and cleanup.
+- **Hierarchical Parent Notification (One Level Up)**: For a delegated run, after the assigned branch commit, notify only the direct parent under the shared-session protocol above; report the assigned branch, commit, review and actual verification, not a fictitious integration or cleanup:
+  `herdr agent prompt "$HERDR_PARENT_PANE_ID" "Ergo run <run-id> finished on assigned branch: commit <SHA>, review APPROVED, verification <status>."`
+  If blocked and the direct parent is known, notify that parent:
+  `herdr agent prompt "$HERDR_PARENT_PANE_ID" "Ergo run <run-id> blocked: <reason>"`
+  If the parent ID is missing or ambiguous, STOP and report the blocker in the current conversation; do not guess a pane and do not integrate or clean up.
 
 ---
 
@@ -276,7 +300,7 @@ Only after the Reviewer verdict is **APPROVED**:
 - **Read-only roles stay read-only** — Scout, Architect, and Reviewer must never modify repository source files.
 - **NEVER run `git reset --hard`** — sync `<TARGET_BRANCH>` inside `ergo/<run-id>` first and resolve conflicts via Coder + Reviewer; if unresolvable, STOP and preserve state.
 - **Adopted workspaces are NEVER closed.** Close only when bootstrap `owns_workspace` is true, and only that workspace ID.
-- **Single squash commit on `<TARGET_BRANCH>` only after `APPROVED`**, never push, never open a PR unless asked.
+- **Single squash commit on `<TARGET_BRANCH>` only after `APPROVED` and only for a genuinely standalone run**; delegated runs never integrate or clean up. Never push, never open a PR unless asked.
 
 ---
 
@@ -309,6 +333,10 @@ Write `RUN_DIR/context.md` with these sections:
 ## Risks & Constraints
 - <constraints the Architect must design around>
 ```
+- **Notify Direct Parent Orchestrator (Level 3 -> Level 2 ONLY, NEVER AiHead)**: Immediately upon writing `RUN_DIR/context.md`, notify ONLY your direct parent Ergo Orchestrator:
+  `herdr agent prompt <ORCHESTRATOR_PANE_ID> "Scout finished: context written to RUN_DIR/context.md"`
+  If you hit a blocker or question requiring a decision, notify ONLY `<ORCHESTRATOR_PANE_ID>`:
+  `herdr agent prompt <ORCHESTRATOR_PANE_ID> "Scout blocked/decision needed: <reason>"`
 
 ### Architect Brief
 **READ-ONLY: never edit source code.** You are the Architect: you design the change AND allocate the specialist personas and coder models to build it. You write **only** `RUN_DIR/plan.md`.
@@ -327,6 +355,10 @@ Write `RUN_DIR/context.md` with these sections:
      - **Verification** (exact build/test command or behavior check)
    - **Out of scope** — what was deliberately excluded.
 4. Honor `unitTestsMode` (`none` = plan no test work). Do not implement, review, commit, or spawn.
+5. **Notify Direct Parent Orchestrator (Level 3 -> Level 2 ONLY, NEVER AiHead)**: Immediately upon writing `RUN_DIR/plan.md`, notify ONLY your direct parent Ergo Orchestrator:
+   `herdr agent prompt <ORCHESTRATOR_PANE_ID> "Architect finished: plan written to RUN_DIR/plan.md"`
+   If you hit a blocker or architectural question requiring a decision, notify ONLY `<ORCHESTRATOR_PANE_ID>`:
+   `herdr agent prompt <ORCHESTRATOR_PANE_ID> "Architect blocked/decision needed: <reason>"`
 
 ### Coder Brief
 You are a specialist Coder implementing **ONE** approved task from `plan.md`.
@@ -336,14 +368,16 @@ You are a specialist Coder implementing **ONE** approved task from `plan.md`.
 4. Run build/compile/targeted test checks where supported. Fix anything your changes broke. Honor `unitTestsMode`.
 5. Do **not** run `git commit`, `git push`, `git merge`, `git reset --hard`, or switch branches, and do **not** spawn subagents.
 6. Write `RUN_DIR/coder_<N>_summary.md`: files changed (with brief per-file notes), decisions or deviations from the plan (flag prominently), verification run, and anything the Reviewer should scrutinize.
-7. **Notify Parent Orchestrator**: Immediately upon saving `coder_<N>_summary.md`, notify your direct parent orchestrator:
+7. **Notify Direct Parent Orchestrator (Level 3 -> Level 2 ONLY, NEVER AiHead)**: Immediately upon saving `coder_<N>_summary.md`, notify ONLY your direct parent orchestrator:
    `herdr agent prompt <ORCHESTRATOR_PANE_ID> "Coder <N> finished: <brief outcome>, summary at RUN_DIR/coder_<N>_summary.md, verification passed"`
+   If you encounter a blocker or question requiring a decision, notify ONLY `<ORCHESTRATOR_PANE_ID>`:
+   `herdr agent prompt <ORCHESTRATOR_PANE_ID> "Coder <N> blocked/decision needed: <reason>"`
 
 ### Reviewer Brief
 **READ-ONLY: never edit source code.** You are the final quality gate, independent of the Architect and Coders. You write **only** `RUN_DIR/review.md` and (when fixes are needed) `RUN_DIR/fixes_<N>.md`.
 
 - **When `MODE: fix-verification` is stated in your prompt (fix cycles & conflict-resolution checks only)**:
-  Read only the `fixes_*.md` briefs, the coders' updated summaries, and the explicit files listed in your prompt. Judge ONLY whether each finding/conflict is cleanly resolved and nothing new broke in those files. Mark each finding `RESOLVED` or `NOT RESOLVED` with reason. Rewrite `RUN_DIR/review.md` with verdict (`APPROVED` / `NEEDS FIXES`) and refresh `RUN_DIR/fixes_<N>.md` only for unresolved findings. Notify parent orchestrator: `herdr agent prompt <ORCHESTRATOR_PANE_ID> "Reviewer fix-verification finished: verdict <APPROVED|NEEDS FIXES>"`.
+  Read only the `fixes_*.md` briefs, the coders' updated summaries, and the explicit files listed in your prompt. Judge ONLY whether each finding/conflict is cleanly resolved and nothing new broke in those files. Mark each finding `RESOLVED` or `NOT RESOLVED` with reason. Rewrite `RUN_DIR/review.md` with verdict (`APPROVED` / `NEEDS FIXES`) and refresh `RUN_DIR/fixes_<N>.md` only for unresolved findings. Notify ONLY your direct parent orchestrator (NEVER AiHead): `herdr agent prompt <ORCHESTRATOR_PANE_ID> "Reviewer fix-verification finished: verdict <APPROVED|NEEDS FIXES>"`.
 
 - **Full First-Pass Review**:
   1. Read `RUN_DIR/plan.md` and every `RUN_DIR/coder_<N>_summary.md`. Inspect the actual `git diff` and changed files.
@@ -351,5 +385,7 @@ You are a specialist Coder implementing **ONE** approved task from `plan.md`.
   3. **Independent Diff-First Correctness Pass**: Go line-by-line over the diff hunting for: logic and off-by-one errors; null/empty/boundary inputs; missing `await`, sync-over-async, disposal/lifetime bugs; swallowed exceptions; money/decimal rounding errors; SQL/EF correctness (N+1, missing index, batch limits, transaction/concurrency bugs); security (OWASP, trust-boundary validation, hardcoded secrets); and reinvented utilities. Do not flag missing tests when `unitTestsMode = none`.
   4. Write `RUN_DIR/review.md` with verdict (**`APPROVED`** or **`NEEDS FIXES`**) and findings (severity + `file:line`).
   5. For each coder needing fixes, write `RUN_DIR/fixes_<N>.md` with concrete, actionable instructions (file, problem, expected fix). Approve when no critical/major issues remain (list minor nitpicks as optional notes).
-  6. **Notify Parent Orchestrator**: Immediately upon saving `RUN_DIR/review.md`, notify your direct parent orchestrator:
+  6. **Notify Direct Parent Orchestrator (Level 3 -> Level 2 ONLY, NEVER AiHead)**: Immediately upon saving `RUN_DIR/review.md`, notify ONLY your direct parent orchestrator:
      `herdr agent prompt <ORCHESTRATOR_PANE_ID> "Reviewer finished: verdict <APPROVED|NEEDS FIXES> at RUN_DIR/review.md"`
+     If you encounter a blocker or question requiring a decision, notify ONLY `<ORCHESTRATOR_PANE_ID>`:
+     `herdr agent prompt <ORCHESTRATOR_PANE_ID> "Reviewer blocked/decision needed: <reason>"`

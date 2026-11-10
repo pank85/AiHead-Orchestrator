@@ -742,6 +742,22 @@ async def test_ensure_herdr_ai_head_defers_reconcile_when_agent_busy(tmp_path: P
     assert res["reused"] is True
     assert res["model"] == "old-model"
 
+    # When the caller IS the ai-head pane itself (HERDR_PANE_ID == pane-ai-head),
+    # its 'working' status is from the launch command itself — must NOT be marked busy!
+    res_caller = await ensure_herdr_ai_head(
+        client,
+        workspace_id="ws-1",
+        head_config=cfg_new,
+        origin_cwd=origin_cwd,
+        caller_pane_id="pane-ai-head",
+    )
+    client.start_agent.assert_not_called()
+    client.prompt_agent.assert_not_called()
+    assert res_caller["busy"] is False
+    assert res_caller["reconciled"] is True
+    assert res_caller["status"] == "ready"
+    assert res_caller["reused"] is True
+
 
 @pytest.mark.asyncio
 async def test_ensure_herdr_ai_head_starts_agent_when_dead_or_missing():
