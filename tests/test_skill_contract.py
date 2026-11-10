@@ -568,6 +568,20 @@ def test_pane_lifecycle_and_unmerged_ownership_contract_all_skills():
         assert "never closes panes, merges, pushes, or edits child work" in body, skill
         assert "never block or poll" in body, skill
 
+        # Post-integration cleanup is mandatory, automatic, and safe
+        assert "Post-integration cleanup is MANDATORY and automatic" in body, skill
+        assert "never optional and never a question to the user" in body, skill
+        assert 'do not ask "do you want cleanup"' in body, skill
+        assert "definition of done" in body, skill
+        assert "closes the child tabs/panes it owns" in body, skill
+        assert "removes the child worktrees with `git worktree remove`" in body, skill
+        assert "deletes the temporary branches with `git branch -D`" in body, skill
+        assert "no dangling branches or worktrees" in body, skill
+        assert (
+            "no unmerged, unowned or ambiguous content would be lost" in body
+        ), skill
+        assert "preserve it and report the blocker to the direct parent instead of deleting" in body, skill
+
     # Herdr-based parents run the 10-minute monitor and register it like a child
     for skill in ("aihead", "herdr-master", "ergo", "council"):
         body = load_skill_body(skill)
