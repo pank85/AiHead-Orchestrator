@@ -13,6 +13,8 @@ authors = [
     { name = "Herdr Master Team" }
 ]
 keywords = [
+    "aihead-orchestrator",
+    "aihead-cockpit",
     "herdr",
     "agent-orchestration",
     "multi-agent",
@@ -24,6 +26,10 @@ keywords = [
     "tui",
     "ergo"
 ]
+
+[project.urls]
+Homepage = "https://github.com/pank85/AiHead-Orchestrator"
+Repository = "https://github.com/pank85/AiHead-Orchestrator"
 classifiers = [
     "Development Status :: 4 - Beta",
     "Environment :: Console",

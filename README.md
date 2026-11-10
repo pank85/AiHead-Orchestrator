@@ -1,8 +1,8 @@
-# 👑 Herdr-Master (`herdm`)
+# 👑 AiHead-Orchestrator / Herdr-Master (`herdm`)
 
 > **Universal Multi-Master, Multi-Worker Cross-Harness AI Agent Orchestrator built on [Herdr](https://herdr.dev).**
 
-[![GitHub Repo](https://img.shields.io/badge/GitHub-pank85%2Fherdr--master-181717?style=flat&logo=github)](https://github.com/pank85/herdr-master)
+[![GitHub Repo](https://img.shields.io/badge/GitHub-pank85%2FAiHead--Orchestrator-181717?style=flat&logo=github)](https://github.com/pank85/AiHead-Orchestrator)
 [![License: MIT](https://img.shields.io/badge/License-MIT-blue.svg)](LICENSE)
 [![Python: 3.10+](https://img.shields.io/badge/python-3.10+-3776AB.svg?logo=python&logoColor=white)](https://www.python.org/downloads/)
 [![Herdr: v0.9.5+](https://img.shields.io/badge/herdr-v0.9.5+-8A2BE2.svg)](https://herdr.dev)
@@ -110,7 +110,7 @@ herdm skills list
 
 ## 🖥️ Terminal Management Cockpit
 
-The interactive terminal management cockpit is provided by the separate **AiHeadDev** application. Running `herdm tui` launches this cockpit (or `herdm tui --demo` for demo mode) to inspect Herdr sessions, manage workspaces, and view agent output.
+The interactive terminal management cockpit is provided by the separate **[AiHead-Cockpit](https://github.com/pank85/AiHead-Cockpit)** application (`aiheaddev`). Running `herdm tui` launches this cockpit (or `herdm tui --demo` for demo mode) to inspect Herdr sessions, manage workspaces, and view agent output.
 
 ---
 
@@ -168,8 +168,8 @@ Define agent bindings using the compact slug format: `<harness>:<model>`
 
 ```bash
 # Clone repository
-git clone https://github.com/pank85/herdr-master.git
-cd herdr-master
+git clone https://github.com/pank85/AiHead-Orchestrator.git
+cd AiHead-Orchestrator
 
 # Install with uv
 uv pip install -e .
@@ -275,7 +275,7 @@ herdm catalog squad --json
 # Create a Herdr workspace
 herdm workspace --label my-project
 
-# Launch the separate AiHeadDev management cockpit
+# Launch the separate AiHead-Cockpit management cockpit
 herdm tui
 ```
 

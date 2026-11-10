@@ -1062,11 +1062,11 @@ def tui(
         pass
 
     console.print(
-        "[bold red]AiHeadDev cockpit is not installed.[/bold red]\n"
+        "[bold red]AiHead-Cockpit is not installed.[/bold red]\n"
         "The TUI cockpit has been decoupled into an independent distribution.\n\n"
         "Install it via:\n"
         "  [cyan]pip install aiheaddev[/cyan] (or [cyan]uv pip install aiheaddev[/cyan])\n"
-        "Repository: https://github.com/pank85/AiHeadDev"
+        "Repository: https://github.com/pank85/AiHead-Cockpit"
     )
     raise typer.Exit(code=1)
 
