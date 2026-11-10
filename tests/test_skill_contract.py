@@ -528,25 +528,72 @@ def test_aihead_delegation_limits_same_session_subagents_to_path_selection():
     assert "not same-session subagents" in body
 
 
-def test_aihead_pane_lifecycle_ownership_contract():
-    """Assert AiHead makes pane close ownership and unmerged-work rules explicit."""
-    body = load_skill_body("aihead")
+def test_pane_lifecycle_and_unmerged_ownership_contract_all_skills():
+    """Only the direct parent closes panes; completed work is never left unmerged."""
+    registry_fields = (
+        "pane_id",
+        "role",
+        "tab_id",
+        "branch",
+        "worktree",
+        "run_dir",
+        "status",
+        "last_heartbeat",
+    )
 
-    # Only the direct parent closes; no self-closing or own-tab closing
-    assert "Only the direct parent closes a pane/agent" in body
-    assert "No pane closes itself and no agent closes its own tab" in body
-    assert "Ergo orchestrator closes its worker panes" in body
-    assert "AiHead closes the Ergo pane" in body
-    assert "AiHead owns final integration" in body
+    for skill in ("aihead", "herdr-master", "ergo", "orchestration", "council"):
+        body = load_skill_body(skill)
 
-    # APPROVED pruning requires retained work carried to integration
-    assert "retained the work" in body
-    assert "carries it to integration" in body
+        # Only the direct parent closes; no self-closing or own-tab closing
+        assert "Only the direct parent closes a pane/agent" in body, skill
+        assert "pane closes itself and no agent closes its own tab" in body, skill
+        assert "owns final integration" in body, skill
 
-    # Never abandon completed work; block instead of discarding
-    assert "Never leave completed work unmerged" in body
-    assert "preserve the work" in body
-    assert "report the blocker to the direct parent, and never discard it" in body
+        # Never abandon completed work; block instead of discarding
+        assert "Never leave completed work unmerged" in body, skill
+        assert "preserve the work" in body, skill
+        assert "report the blocker to the direct parent" in body, skill
+        assert "never discard it" in body, skill
+
+        # Children registry: one small file, parent-owned, with stable fields
+        assert "RUN_DIR/children.tsv" in body, skill
+        assert "Only the parent writes it" in body, skill
+        assert "remove only after that child is closed" in body, skill
+        assert "stale entries are the parent's responsibility" in body, skill
+        for field in registry_fields:
+            assert f"`{field}`" in body, (skill, field)
+
+        # Read-only background monitoring; parents never poll
+        assert "read-only" in body, skill
+        assert "never closes panes, merges, pushes, or edits child work" in body, skill
+        assert "never block or poll" in body, skill
+
+    # Herdr-based parents run the 10-minute monitor and register it like a child
+    for skill in ("aihead", "herdr-master", "ergo", "council"):
+        body = load_skill_body(skill)
+        assert "registered in the same file like any child" in body, skill
+        assert "About every 10 minutes" in body, skill
+        assert "herdr agent get" in body and "herdr agent read" in body, skill
+        assert "has not stalled after finishing without reporting" in body, skill
+        assert "background monitor is the polling mechanism" in body, skill
+
+    # Orchestration is pane-free: its delegating parent registers and monitors it
+    orchestration = load_skill_body("orchestration")
+    assert "delegating parent registers this run and the monitor" in orchestration
+    assert "never start Herdr tooling or a monitor pane here" in orchestration
+
+    # Each orchestrator closes its own children and lets its parent close it
+    assert "Ergo orchestrator closes its worker panes" in load_skill_body("aihead")
+    assert "AiHead closes the Ergo pane" in load_skill_body("aihead")
+    assert "Herdr-Master closes its own job/worker tabs" in load_skill_body("herdr-master")
+    assert "Ergo orchestrator closes its own worker panes" in load_skill_body("ergo")
+    assert "closes its own native subagents" in load_skill_body("orchestration")
+    assert "Coordinator closes its own Scout and Council Member tabs" in load_skill_body("council")
+
+    # APPROVED pruning requires retained work carried to integration (AiHead rule)
+    aihead = load_skill_body("aihead")
+    assert "retained the work" in aihead
+    assert "carries it to integration" in aihead
 
 
 def test_aihead_initial_parent_directive_has_workflow_specific_completion():
