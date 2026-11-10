@@ -15,18 +15,24 @@ from rich.table import Table
 from herdr_master.core.catalog import (
     CatalogError,
     HarnessKind,
+    describe_herdr_agent,
+    ensure_herdr_routable,
     get_harness,
+    native_binding_error,
     normalize_effort,
     supported_harnesses,
 )
 from herdr_master.core.config import (
+    DEFAULT_ORCHESTRATION_MODELS,
+    CouncilMember,
     load_project_config,
     project_model_overrides,
     save_project_config,
+    squad_to_project_config,
 )
 from herdr_master.core.models import HarnessBinding, Squad
 from herdr_master.core.slug import InvalidBindingSlugError
-from herdr_master.pipeline.squad import save_squad_as_default
+from herdr_master.pipeline.squad import resolve_squad, save_squad_as_default, validate_squad
 
 console = Console()
 
@@ -269,6 +275,241 @@ def run_aihead_setup(
         console.print(f"[red]AiHead setup failed:[/red] {err}")
         raise typer.Exit(1) from err
 
-    console.print(
-        f"[green]✓[/green] Saved to [cyan]{target or '.herdr-master.toml'}[/cyan]"
-    )
+    console.print(f"[green]✓[/green] Saved to [cyan]{target or '.herdr-master.toml'}[/cyan]")
+
+
+def run_skill_setup(*, config: Optional[Path] = None) -> None:
+    """Configure selected skills together, validate, then perform one atomic save."""
+    from herdr_master.pipeline.launcher import resolve_coordinator_binding
+
+    target = _target_config_path(config)
+    try:
+        cfg = load_project_config(target)
+        skills = ("aihead", "ergo", "orchestration", "council", "herdr-master")
+        selected = Prompt.ask("Skill", choices=[*skills, "all"], default="aihead")
+        chosen = skills if selected == "all" else (selected,)
+        preview = {}
+
+        def ask_binding(label: str, current: HarnessBinding, *, worker: bool = False):
+            value = Prompt.ask(
+                f"{label} binding (harness:model[:effort])", default=current.to_slug()
+            )
+            binding = HarnessBinding.from_slug(
+                value,
+                label=current.label,
+                description=current.description,
+                enabled=current.enabled,
+                order=current.order,
+            )
+            spec = get_harness(binding.kind.value)
+            if not spec.supports_herdr or not binding.model.strip():
+                raise SetupError(f"{label} requires a valid Herdr harness and model.")
+            if worker and binding.effort is not None:
+                raise SetupError("Workers cannot specify effort; the architect chooses it.")
+            describe_herdr_agent(
+                binding.kind.value,
+                binding.model,
+                binding.effort.value if binding.effort else None,
+                "master",
+            )
+            return current.model_copy(
+                update={"kind": binding.kind, "model": binding.model, "effort": binding.effort}
+            )
+
+        if "aihead" in chosen:
+            cfg.ai_head.binding = ask_binding("AiHead", cfg.ai_head.binding)
+            resolve_coordinator_binding(
+                cfg.ai_head.binding.kind, cfg.ai_head.binding.model, cfg.ai_head.binding.effort
+            )
+            preview["ai_head.binding"] = cfg.ai_head.binding.to_slug()
+
+        if "ergo" in chosen:
+            squad = resolve_squad(target).squad
+            for role in ("scout", "architect", "reviewer"):
+                setattr(squad, role, ask_binding(f"Ergo {role}", getattr(squad, role)))
+            default = ", ".join(w.to_slug() for w in squad.worker_pool)
+            raw = Prompt.ask("Ergo workers (comma-separated bindings, no effort)", default=default)
+            workers = []
+            for idx, slug in enumerate(raw.split(",")):
+                if not slug.strip():
+                    raise SetupError("Ergo workers cannot be empty.")
+                old = (
+                    squad.worker_pool[idx]
+                    if idx < len(squad.worker_pool)
+                    else HarnessBinding.from_slug(
+                        slug.strip(), label=f"worker-{idx + 1}", order=idx
+                    )
+                )
+                binding = HarnessBinding.from_slug(
+                    slug.strip(),
+                    label=old.label or f"worker-{idx + 1}",
+                    description=old.description,
+                    enabled=old.enabled,
+                    order=old.order,
+                )
+                if binding.effort or not get_harness(binding.kind.value).supports_herdr:
+                    raise SetupError("Workers require Herdr bindings without effort.")
+                workers.append(binding)
+            squad.worker_pool = workers
+            errors = validate_squad(squad)
+            if errors:
+                raise SetupError(" ".join(errors))
+            for role in ("scout", "architect", "reviewer"):
+                binding = getattr(squad, role)
+                ensure_herdr_routable(
+                    binding.kind.value,
+                    binding.model,
+                    binding.effort.value if binding.effort else None,
+                    role=role,
+                    require_effort=True,
+                )
+            for binding in squad.worker_pool:
+                if binding.enabled:
+                    ensure_herdr_routable(
+                        binding.kind.value,
+                        binding.model,
+                        None,
+                        role=binding.label or "worker",
+                        require_effort=False,
+                    )
+            old_pool = dict(cfg.models.worker_pool or {})
+            cfg = squad_to_project_config(squad, existing_config=cfg)
+            for key, entry in cfg.models.worker_pool.items():
+                previous = old_pool.get(key)
+                if isinstance(previous, dict):
+                    cfg.models.worker_pool[key] = {**previous, **entry}
+            preview["models"] = {
+                "roles": cfg.models.default_squad,
+                "worker_pool": cfg.models.worker_pool,
+            }
+
+        if "orchestration" in chosen:
+            orch = cfg.orchestration
+            native = supported_harnesses(mode="native")
+            host = Prompt.ask(
+                "Orchestration harness", choices=list(native), default=orch.harness.value
+            )
+            if host != orch.harness.value:
+                orch.sync_active_to_harnesses()
+                if host in orch.harnesses:
+                    orch.sync_harness_to_active(host)
+                else:
+                    orch.harnesses[host] = orch.for_harness(host)
+                    orch.sync_harness_to_active(host)
+            orch.default_harness = orch.harness
+            defaults = DEFAULT_ORCHESTRATION_MODELS.get(host, {})
+            for role in ("scout", "architect", "reviewer"):
+                model = Prompt.ask(
+                    f"Orchestration {role} model",
+                    default=getattr(orch, f"{role}_model") or defaults.get(role, ""),
+                ).strip()
+                if not model or any(
+                    model.startswith(f"{kind}:") for kind in supported_harnesses(mode="herdr")
+                ):
+                    raise SetupError(
+                        "Orchestration models must be model slugs for its single harness, "
+                        "not harness bindings."
+                    )
+                setattr(orch, f"{role}_model", model)
+                effort = Prompt.ask(
+                    f"Orchestration {role} effort (none/low/medium/high/max)",
+                    default=getattr(orch, f"{role}_effort") or "none",
+                )
+                setattr(
+                    orch,
+                    f"{role}_effort",
+                    None if effort.strip().lower() == "none" else normalize_effort(effort),
+                )
+            raw = Prompt.ask(
+                "Orchestration workers (comma-separated model slugs)",
+                default=", ".join(orch.worker_models) or defaults.get("coder", ""),
+            )
+            orch.worker_models = [x.strip() for x in raw.split(",")]
+            if any(
+                not x or any(x.startswith(f"{k}:") for k in supported_harnesses(mode="herdr"))
+                for x in orch.worker_models
+            ):
+                raise SetupError(
+                    "Orchestration workers must be model slugs for its single harness."
+                )
+            for role in ("scout", "architect", "reviewer"):
+                problem = native_binding_error(
+                    host, getattr(orch, f"{role}_model"), role=role, native_harness=host
+                )
+                if problem:
+                    raise SetupError(problem)
+            for worker in orch.worker_models:
+                problem = native_binding_error(host, worker, role="coder", native_harness=host)
+                if problem:
+                    raise SetupError(problem)
+            orch.sync_active_to_harnesses()
+            preview["orchestration"] = orch.model_dump(exclude_none=True)
+
+        if "council" in chosen:
+            council = cfg.council
+            council.coordinator = ask_binding("Council coordinator", council.coordinator)
+            council.scout = ask_binding("Council scout", council.scout)
+            default = ", ".join(m.to_slug() for m in council.members)
+            raw = Prompt.ask("Council members (comma-separated bindings)", default=default)
+            members = []
+            for idx, slug in enumerate(raw.split(",")):
+                if not slug.strip():
+                    raise SetupError("Council members cannot be empty.")
+                old = council.members[idx] if idx < len(council.members) else None
+                binding = HarnessBinding.from_slug(
+                    slug.strip(),
+                    label=old.label if old else f"council-{idx + 1}",
+                    description=old.description if old else None,
+                    enabled=old.enabled if old else True,
+                    order=old.order if old else idx,
+                )
+                if not get_harness(binding.kind.value).supports_herdr:
+                    raise SetupError("Council members require Herdr-capable harnesses.")
+                describe_herdr_agent(
+                    binding.kind.value,
+                    binding.model,
+                    binding.effort.value if binding.effort else None,
+                    "master",
+                )
+                members.append(
+                    old.model_copy(
+                        update={
+                            "kind": binding.kind,
+                            "model": binding.model,
+                            "effort": binding.effort,
+                        }
+                    )
+                    if old
+                    else CouncilMember(**binding.model_dump())
+                )
+            council.members = members
+            preview["council"] = council.model_dump(exclude_none=True)
+
+        if "herdr-master" in chosen:
+            if cfg.master_coordinator is None:
+                kind, model, effort = resolve_coordinator_binding()
+                cfg.master_coordinator = HarnessBinding(kind=kind, model=model, effort=effort)
+            cfg.master_coordinator = ask_binding("Master coordinator", cfg.master_coordinator)
+            resolve_coordinator_binding(
+                cfg.master_coordinator.kind,
+                cfg.master_coordinator.model,
+                cfg.master_coordinator.effort,
+            )
+            describe_herdr_agent(
+                cfg.master_coordinator.kind.value,
+                cfg.master_coordinator.model,
+                cfg.master_coordinator.effort.value if cfg.master_coordinator.effort else None,
+                "master",
+            )
+            preview["master_coordinator"] = cfg.master_coordinator.to_slug()
+
+        cfg = type(cfg).model_validate(cfg.model_dump())
+        console.print("[bold]Setup preview[/bold]", preview)
+        if not Confirm.ask("Save these settings?", default=False):
+            console.print("[yellow]Cancelled; configuration unchanged.[/yellow]")
+            return
+        saved = save_project_config(cfg, target)
+        console.print(f"[green]✓[/green] Saved to [cyan]{saved}[/cyan]")
+    except (SetupError, CatalogError, InvalidBindingSlugError, ValueError, OSError) as err:
+        console.print(f"[red]Setup failed:[/red] {err}")
+        raise typer.Exit(1) from err

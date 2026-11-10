@@ -218,6 +218,20 @@ def resolve_coordinator_binding(
     return HarnessKind(spec.kind), model_text, effort_level
 
 
+def resolve_master_binding(harness=None, model=None, effort=None, *, config_path=None):
+    """Use the configured master binding unless explicitly overridden."""
+    configured = load_project_config(config_path).master_coordinator
+    if configured is not None:
+        if harness is not None and _kind_name(harness) != configured.kind.value:
+            return resolve_coordinator_binding(harness, model, effort)
+        return resolve_coordinator_binding(
+            harness or configured.kind,
+            model if model is not None else configured.model,
+            effort if effort is not None else configured.effort,
+        )
+    return resolve_coordinator_binding(harness, model, effort)
+
+
 def _build_agent_args(
     harness: str,
     model: str,
@@ -739,6 +753,7 @@ async def launch_master(
     fresh_workspace: bool = False,
     focus: bool = True,
     delegated: bool = False,
+    config_path: Path | None = None,
 ) -> Dict[str, Any]:
     """Launch a Herdr Master coordinator with the canonical skill body.
 
@@ -747,7 +762,9 @@ async def launch_master(
     ``fresh_workspace`` is set. Outside Herdr, an isolated session is
     provisioned and marked owned.
     """
-    kind, model_slug, effort_level = resolve_coordinator_binding(harness, model, effort)
+    kind, model_slug, effort_level = resolve_master_binding(
+        harness, model, effort, config_path=config_path or cwd
+    )
     descriptor = _host_launch(kind.value, model_slug, effort_level, "master")
     ctx = resolve_launch_context(session)
     target_cwd = str(Path(cwd or os.getcwd()).resolve())

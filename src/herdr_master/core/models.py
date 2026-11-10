@@ -4,7 +4,7 @@ from datetime import datetime, timezone
 from enum import Enum
 from typing import Any, Dict, List, Optional
 
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, ConfigDict, Field
 
 from herdr_master.core.catalog import HarnessKind, default_squad_data
 
@@ -32,6 +32,8 @@ class EffortLevel(str, Enum):
 
 class HarnessBinding(BaseModel):
     """Specification of an agent harness, model slug, and reasoning effort."""
+
+    model_config = ConfigDict(extra="allow")
 
     kind: HarnessKind
     model: str

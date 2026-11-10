@@ -24,12 +24,17 @@ except Exception:
 import typer
 from rich.console import Console
 
-from herdr_master.cli.aihead_setup import run_aihead_setup
+from herdr_master.cli.aihead_setup import run_aihead_setup, run_skill_setup
 from herdr_master.cli.catalog import catalog_app
 from herdr_master.cli.skills import install_skills as run_install_skills
 from herdr_master.cli.skills import skills_app
 from herdr_master.core.catalog import CatalogError, supported_harnesses
-from herdr_master.core.config import CouncilConfig, find_project_config_path, load_project_config
+from herdr_master.core.config import (
+    DEFAULT_ORCHESTRATION_MODELS,
+    CouncilConfig,
+    find_project_config_path,
+    load_project_config,
+)
 from herdr_master.core.context import HerdrContext
 from herdr_master.core.slug import InvalidBindingSlugError
 from herdr_master.herdr.client import HerdrClient
@@ -45,6 +50,7 @@ from herdr_master.pipeline.launcher import (
     launch_orchestration,
     resolve_coordinator_binding,
     resolve_launch_context,
+    resolve_master_binding,
 )
 from herdr_master.pipeline.squad import (
     SquadValidationError,
@@ -230,7 +236,7 @@ def master_start(
 ):
     """Launch a new Herdr Master orchestrator for multiple jobs."""
     try:
-        kind, model_slug, effort_level = resolve_coordinator_binding(harness, model, effort)
+        kind, model_slug, effort_level = resolve_master_binding(harness, model, effort)
         ctx = resolve_launch_context(session)
     except _RESOLVE_ERRORS as err:
         _abort(str(err))
@@ -276,6 +282,7 @@ def _resolve_ergo_once(
     coder: Optional[str],
     reviewer: Optional[str],
     run_squad: Optional[Path],
+    project_path: Optional[Path] = None,
 ):
     if coder is not None and workers is not None and workers != coder:
         _abort("--workers and --coder disagree. Pass only one worker override.")
@@ -287,7 +294,7 @@ def _resolve_ergo_once(
         reviewer=reviewer,
     )
     return resolve_squad(
-        None,
+        project_path,
         mode="herdr",
         run_squad_path=run_squad,
         overrides=overrides or None,
@@ -1496,7 +1503,9 @@ def _print_standalone_launch_result(res: Any, fallback_session: str) -> str:
     return str(target_session)
 
 
-def _launch_skill(skill: str, intent: str, session: Optional[str], cwd: Optional[Path]) -> None:
+def _launch_skill(skill: str, intent: str, session: Optional[str], cwd: Optional[Path],
+                  config: Optional[Path], harness: Optional[str], model: Optional[str],
+                  effort: Optional[str]) -> None:
     """Launch a delegated skill in its own background workspace."""
     try:
         ctx = resolve_launch_context(session)
@@ -1506,26 +1515,32 @@ def _launch_skill(skill: str, intent: str, session: Optional[str], cwd: Optional
                       session=session, fresh_workspace=True, focus=False, delegated=True)
         if skill == "ergo":
             resolved = _resolve_ergo_once(models=None, scout=None, architect=None,
-                                          workers=None, coder=None, reviewer=None, run_squad=None)
+                                          workers=None, coder=None, reviewer=None, run_squad=None,
+                                          project_path=config or cwd)
             operation = launch_ergo(
                 intent=intent, workspace_label=label, squad=resolved.squad, **common
             )
         elif skill == "council":
             operation = launch_council(intent=intent, workspace_label=label,
-                                       council=load_project_config(cwd).council, **common)
+                                       council=load_project_config(config or cwd).council, **common)
         elif skill == "orchestration":
-            orch = load_project_config(cwd).orchestration
+            orch = load_project_config(config or cwd).orchestration
+            if harness and harness != orch.harness.value:
+                orch.harnesses.setdefault(harness, orch.for_harness(harness))
+                orch.sync_harness_to_active(harness)
+            defaults = DEFAULT_ORCHESTRATION_MODELS.get(orch.harness.value, {})
             operation = launch_orchestration(
-                intent=intent, workspace_label=label, harness=orch.harness,
-                scout_model=orch.scout_model or "gemini-3.8-flash",
-                architect_model=orch.architect_model or "gemini-3.8-flash",
-                coder_model=" | ".join(orch.worker_models) or "gemini-3.8-flash",
-                reviewer_model=orch.reviewer_model or "gemini-3.8-flash",
+                intent=intent, workspace_label=label, harness=harness or orch.harness,
+                scout_model=orch.scout_model or defaults.get("scout", ""),
+                architect_model=orch.architect_model or defaults.get("architect", ""),
+                coder_model=" | ".join(orch.worker_models) or defaults.get("coder", ""),
+                reviewer_model=orch.reviewer_model or defaults.get("reviewer", ""),
                 scout_effort=orch.scout_effort, architect_effort=orch.architect_effort,
                 reviewer_effort=orch.reviewer_effort, **common,
             )
         else:
-            operation = launch_master(name=label, initial_task=intent, **common)
+            operation = launch_master(name=label, initial_task=intent, config_path=config,
+                                      harness=harness, model=model, effort=effort, **common)
         result = asyncio.run(operation)
         typer.echo(
             f"Started {skill}: workspace {result.get('workspace_id')}, "
@@ -1538,6 +1553,7 @@ def _launch_skill(skill: str, intent: str, session: Optional[str], cwd: Optional
 @aihead_app.callback(invoke_without_command=True)
 def launch_standalone_aihead(
     ctx: typer.Context,
+    setup: bool = typer.Option(False, "--setup", help="Configure a skill interactively."),
     tui_flag: bool = typer.Option(False, "--tui", help="Launch the AiHeadDev cockpit."),
     ergo: Optional[str] = typer.Option(None, "--ergo", help="Delegate an Ergo intent."),
     council: Optional[str] = typer.Option(None, "--council", help="Delegate a Council intent."),
@@ -1620,13 +1636,30 @@ def launch_standalone_aihead(
         ("ergo", ergo), ("council", council), ("orchestration", orchestration),
         ("herdr-master", herdr_master),
     ) if value is not None]
-    if len(skills) + int(tui_flag) > 1 or (task is not None and (skills or tui_flag)):
+    if len(skills) + int(tui_flag) + int(setup) > 1 or (
+        task is not None and (skills or tui_flag or setup)
+    ):
         _abort("Choose only one launch mode.")
+    if setup:
+        if harness is not None or model is not None or effort is not None:
+            _abort("Configure bindings in the wizard, not with launch overrides.")
+        target = config
+        if target is None and cwd is not None:
+            target = find_project_config_path(cwd) or cwd / ".herdr-master.toml"
+        run_skill_setup(config=target)
+        return
     if tui_flag:
         tui(session=session, demo=False)
         return
     if skills:
-        _launch_skill(skills[0][0], skills[0][1], session, cwd)
+        if config is not None and not config.expanduser().exists():
+            _abort(f"Configuration file not found: {config}")
+        if skills[0][0] != "herdr-master" and (model is not None or effort is not None):
+            _abort("--model and --effort apply to AiHead or Herdr Master only.")
+        if skills[0][0] not in ("herdr-master", "orchestration") and harness is not None:
+            _abort("--harness is not supported for this skill; configure its bindings instead.")
+        _launch_skill(skills[0][0], skills[0][1], session, cwd,
+                      config.expanduser() if config else None, harness, model, effort)
         return
     if all(ctx.get_parameter_source(name).name == "DEFAULT" for name in ctx.params):
         typer.echo(ctx.get_help())

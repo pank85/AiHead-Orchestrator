@@ -119,7 +119,7 @@ def test_other_skills_use_fresh_background_workspace(skill):
     assert launch.await_args.kwargs["focus"] is False
 
 
-def test_orchestration_uses_legacy_defaults_when_config_is_empty():
+def test_orchestration_uses_native_defaults_when_config_is_empty():
     with (
         patch("herdr_master.cli.main.load_project_config", return_value=HerdrMasterConfig()),
         patch("herdr_master.cli.main.launch_orchestration", new_callable=AsyncMock) as launch,
@@ -127,5 +127,7 @@ def test_orchestration_uses_legacy_defaults_when_config_is_empty():
         launch.return_value = {"workspace_id": "new", "pane_id": "new:p1"}
         result = runner.invoke(aihead_app, ["--orchestration", "test"])
     assert result.exit_code == 0, result.output
-    for role in ("scout", "architect", "coder", "reviewer"):
-        assert launch.await_args.kwargs[f"{role}_model"] == "gemini-3.8-flash"
+    assert launch.await_args.kwargs["scout_model"] == "flash_lite"
+    assert launch.await_args.kwargs["architect_model"] == "pro"
+    assert launch.await_args.kwargs["coder_model"] == "flash"
+    assert launch.await_args.kwargs["reviewer_model"] == "pro"

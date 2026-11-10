@@ -194,6 +194,14 @@ interactive AiHead, `aihead --tui` for the cockpit, or delegate in the backgroun
 Delegation requires the caller's `HERDR_PANE_ID` or a unique existing `ai-head` pane;
 otherwise it stops rather than launching an unparented agent.
 
+Run `aihead --setup` to choose `aihead`, `ergo`, `orchestration`, `council`,
+`herdr-master`, or `all` and configure that skill. Use `--config PATH` for a
+specific TOML file. The wizard previews changes and saves only after confirmation;
+cancelling or invalid input leaves the file unchanged. Ergo bindings can use
+different harnesses; orchestration uses one selected harness for all its models.
+The optional `[master_coordinator]` binding supplies the master launcher default;
+explicit launcher overrides take precedence.
+
 ```bash
 aihead --ergo "Implement Redis rate limiting middleware"
 aihead --council "Architect the telemetry pipeline"
