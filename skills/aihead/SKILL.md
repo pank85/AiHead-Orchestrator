@@ -210,7 +210,7 @@ Never accumulate idle or unneeded tabs and agents. Close tabs as soon as their l
   - **A worker whose work is approved is no longer needed**: As each worker passes review (`APPROVED`), **close that worker's tab/agent immediately** — but only once the parent has **retained the work** (the committed branch, worktree, and review report) and carries it to integration. Closing a worker pane must never discard or forget its output.
   - **Workers still in review or needing fixes remain active**: Only keep open workers whose work `NEEDS FIXES` until their fixes pass review.
 - **Reviewer Pruning**: Once the reviewer confirms all fixes and finishes, close the Reviewer tab.
-- **Post-Landing Cleanup**: After squash-merging into `develop`, remove worktrees (`git worktree remove`) and delete temporary branches (`git branch -D`).
+- **Post-Landing Cleanup (MANDATORY)**: **Post-integration cleanup is MANDATORY and automatic** — never optional and never a question to the user; do not ask "do you want cleanup". Cleanup is part of the definition of done. After the squash-merge lands, the parent closes the child tabs/panes it owns, removes the child worktrees with `git worktree remove`, deletes the temporary branches with `git branch -D`, and verifies `git branch --list` and `git worktree list` show no dangling branches or worktrees. Before deleting, confirm the work is genuinely integrated and that no unmerged, unowned or ambiguous content would be lost; if something cannot be verified, preserve it and report the blocker to the direct parent instead of deleting.
 
 ---
 
