@@ -283,8 +283,8 @@ Only after the Reviewer verdict is **APPROVED**; for a delegated run preserve th
    - **NEVER run `git reset --hard`**. If a conflict is ambiguous, STOP and preserve state.
 4. **Squash-Merge in the Canonical Checkout**:
    - In canonical checkout: `git checkout <TARGET_BRANCH>` → `git merge --squash ergo/<run-id>` → **one** `git commit -m "<summary>"`.
-5. **Cleanup Temporary Traces**:
-   - Remove worktree (`git worktree remove --force "$WORKTREE"`) and delete temp branch (`git branch -D ergo/<run-id>`).
+5. **Cleanup Temporary Traces (MANDATORY)**: **Post-integration cleanup is MANDATORY and automatic** — never optional and never a question to the user; do not ask "do you want cleanup". Cleanup is part of the definition of done. After the squash-merge lands, the parent closes the child tabs/panes it owns, removes the child worktrees with `git worktree remove`, deletes the temporary branches with `git branch -D`, and verifies `git branch --list` and `git worktree list` show no dangling branches or worktrees. Before deleting, confirm the work is genuinely integrated and that no unmerged, unowned or ambiguous content would be lost; if something cannot be verified, preserve it and report the blocker to the direct parent instead of deleting.
+   - Remove worktree (`git worktree remove "$WORKTREE"`, never `--force`) and delete temp branch (`git branch -D ergo/<run-id>`) only after confirming the squash landed.
    - Close the workspace only when bootstrap `owns_workspace` is true, and close only that ID (`herdr workspace close <WS_ID>`). Adopted workspaces (`owns_workspace == false`) are NEVER closed.
    - Verify `git branch --list 'ergo/*'` is empty.
 6. **Never push and never open a PR** unless explicitly requested.

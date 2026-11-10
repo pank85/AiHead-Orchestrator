@@ -172,7 +172,7 @@ Only after `APPROVED`. **If this run was delegated by a master orchestrator, do 
 2. Resolve `TARGET_BRANCH` in the canonical checkout: `develop` > `main` > `master`.
 3. Sync `TARGET_BRANCH` into `orchestration/<run-id>` first (rebase or merge). On conflicts, dispatch the affected Coder to resolve them on the branch, re-run the verification, and pass a scoped fix-verification review on the resolved files.
 4. In the canonical checkout: `git checkout <TARGET_BRANCH>` → `git merge --squash orchestration/<run-id>` → one `git commit -m "<summary>"`. Inspect the staged diff before committing: it must contain only the intended work.
-5. Clean up: `git worktree remove "$WORKTREE"` (never `--force`) and `git branch -D orchestration/<run-id>` only after confirming the squash landed.
+5. **Cleanup (MANDATORY)**: **Post-integration cleanup is MANDATORY and automatic** — never optional and never a question to the user; do not ask "do you want cleanup". Cleanup is part of the definition of done. After the squash-merge lands, the parent closes the child tabs/panes it owns, removes the child worktrees with `git worktree remove`, deletes the temporary branches with `git branch -D`, and verifies `git branch --list` and `git worktree list` show no dangling branches or worktrees. Before deleting, confirm the work is genuinely integrated and that no unmerged, unowned or ambiguous content would be lost; if something cannot be verified, preserve it and report the blocker to the direct parent instead of deleting. Run `git worktree remove "$WORKTREE"` (never `--force`) and `git branch -D orchestration/<run-id>` only after confirming the squash landed.
 6. Never push and never open a PR unless explicitly asked.
 
 ## 9. Report & Hierarchical Parent Notification
