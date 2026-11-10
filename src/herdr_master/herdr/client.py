@@ -161,6 +161,7 @@ class HerdrClient:
         label: Optional[str] = None,
         focus: bool = False,
         cwd: Optional[str] = None,
+        env: Optional[Dict[str, str]] = None,
     ) -> Dict[str, Any]:
         """Create a new tab in the specified or focused workspace."""
         params: Dict[str, Any] = {"focus": focus}
@@ -170,6 +171,8 @@ class HerdrClient:
             params["label"] = label
         if cwd:
             params["cwd"] = cwd
+        if env:
+            params["env"] = env
         resp = await self._rpc("tab.create", params)
         return resp.get("result", {})
 

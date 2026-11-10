@@ -1,0 +1,7 @@
+[ai_head]
+enabled = true
+
+[ai_head.binding]
+kind = "agy"
+model = "gemini-2.5-pro"
+effort = "high"

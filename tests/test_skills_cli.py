@@ -47,7 +47,7 @@ def test_get_skill_targets_matches_catalog_registry():
     assert "aihead" in targets
 
     aihead_locs = targets["aihead"]
-    assert len(aihead_locs) == 5
+    assert len(aihead_locs) == 6
     aihead_harnesses = {loc.harness for loc in aihead_locs}
     assert "Antigravity (agy)" in aihead_harnesses
     assert "Pi (pi)" in aihead_harnesses
@@ -56,8 +56,12 @@ def test_get_skill_targets_matches_catalog_registry():
 
     for skill_name in CANONICAL_SKILLS:
         locs = targets[skill_name]
-        # Sentinel assertion: 4 harnesses, 5 destinations per skill
-        assert len(locs) == 5
+        # Sentinel assertion: 5 harnesses, 6 destinations per skill
+        assert len(locs) == 6
+        assert any(
+            loc.path.parts[-4:] == (".hermes", "skills", skill_name, "SKILL.md")
+            for loc in locs
+        )
         harnesses = {loc.harness for loc in locs}
         assert "Antigravity (agy)" in harnesses
         assert "Pi (pi)" in harnesses
@@ -131,7 +135,7 @@ def test_cli_skills_install_and_remove_in_temp_home(tmp_path: Path):
 
     targets_map = get_skill_targets(home=fake_home)
     expected_links = sum(len(locs) for locs in targets_map.values())
-    assert expected_links == 25  # 5 canonical skills * 5 destinations
+    assert expected_links == 30  # 5 canonical skills * 6 destinations
 
     with patch("herdr_master.cli.skills.get_skill_targets", return_value=targets_map):
         # Initial install
@@ -172,7 +176,7 @@ def test_toplevel_herdm_install_in_temp_home(tmp_path: Path):
 
     targets_map = get_skill_targets(home=fake_home)
     expected_links = sum(len(locs) for locs in targets_map.values())
-    assert expected_links == 25  # 5 canonical skills * 5 destinations
+    assert expected_links == 30  # 5 canonical skills * 6 destinations
 
     with patch("herdr_master.cli.skills.get_skill_targets", return_value=targets_map):
         # Top-level install command
@@ -191,7 +195,7 @@ def test_toplevel_herdm_install_in_temp_home(tmp_path: Path):
 
         # Explicitly check aihead destinations
         aihead_locs = targets_map["aihead"]
-        assert len(aihead_locs) == 5
+        assert len(aihead_locs) == 6
         for loc in aihead_locs:
             assert loc.path.is_symlink()
             assert loc.path.resolve() == get_skill_source("aihead").resolve()

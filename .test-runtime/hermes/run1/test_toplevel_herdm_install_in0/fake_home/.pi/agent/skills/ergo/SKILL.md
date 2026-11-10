@@ -1,0 +1,1 @@
+/home/pank/projects/herdr-master/skills/ergo/SKILL.md

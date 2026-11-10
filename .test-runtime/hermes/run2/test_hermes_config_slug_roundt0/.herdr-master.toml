@@ -1,0 +1,83 @@
+[general]
+default_session = "default"
+target_integration_branch = "develop"
+create_develop_if_missing = true
+disallow_hard_reset = true
+
+[worktree]
+base_directory = ".herdr-worktrees"
+naming_template = "herdm/{job_name}-{timestamp}"
+auto_clean_on_success = true
+
+[models]
+
+[tui]
+refresh_rate_ms = 250
+theme = "dark"
+stream_buffer_lines = 1000
+
+[projects]
+favorites = []
+
+[orchestration]
+harness = "agy"
+default_harness = "agy"
+worker_models = []
+
+[orchestration.harnesses.agy]
+worker_models = []
+
+[council.coordinator]
+kind = "pi"
+model = "openai-codex/gpt-6.1-sol"
+effort = "max"
+label = "coordinator"
+description = "Council Coordinator — orchestrates rounds and consensus"
+enabled = true
+order = 0
+
+[council.scout]
+kind = "agy"
+model = "gemini-3.8-flash-medium"
+effort = "medium"
+label = "scout"
+description = "Council Scout — surveys problem space and context"
+enabled = true
+order = 0
+
+[[council.members]]
+kind = "pi"
+model = "openai-codex/gpt-6.1-sol"
+effort = "max"
+label = "council-1"
+description = "Council Member 1 — plan drafter and reviewer"
+enabled = true
+order = 0
+
+[[council.members]]
+kind = "pi"
+model = "xai/grok-4.7"
+effort = "high"
+label = "council-2"
+description = "Council Member 2 — plan drafter and reviewer"
+enabled = true
+order = 1
+
+[ai_head]
+enabled = false
+soul = "Software Architect and Workflow Orchestrator obsessed with UX best practices, accessibility, clear interaction design, architectural alignment with the existing codebase, code reusability without speculative abstraction, plain-language plan communication, hierarchical parent notification protocol (child agents notify parent via herdr agent prompt upon completion), and intelligent workflow selection across Herdr-Master capabilities (/orchestration, /ergo, /council, /herdr-master) with dynamic model and harness discovery from project configuration (models.default_squad, orchestration, catalog)"
+split = true
+lesson_paths = [
+    "~/.herdr-master/lessons",
+]
+brief_before_action = true
+autonomy = "routine"
+close_foreign_tabs = false
+dangerously_skip_permissions = false
+
+[ai_head.binding]
+kind = "hermes"
+model = "openai-codex/gpt-6.1-terra"
+effort = "high"
+enabled = true
+order = 0

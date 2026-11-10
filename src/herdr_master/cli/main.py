@@ -480,7 +480,7 @@ def run_aihead(
     harness: Optional[str] = typer.Option(
         None,
         "--harness",
-        help="Harness override (agy, pi, claude, opencode).",
+        help="Interactive harness override (agy, pi, claude, opencode, hermes).",
     ),
     model: Optional[str] = typer.Option(
         None,
@@ -1141,7 +1141,7 @@ def install_cmd(
         True,
         "--force/--no-force",
         "-f",
-        help="Overwrite or update existing symlinks",
+        help="Overwrite existing non-Hermes files or links; Hermes unowned targets are always protected",
     ),
 ) -> None:
     """Install canonical skills across all supported harnesses.
@@ -1412,7 +1412,7 @@ def launch_standalone_aihead(
     harness: Optional[str] = typer.Option(
         None,
         "--harness",
-        help="Harness override (agy, pi, claude, opencode).",
+        help="Interactive harness override (agy, pi, claude, opencode, hermes).",
     ),
     model: Optional[str] = typer.Option(
         None,

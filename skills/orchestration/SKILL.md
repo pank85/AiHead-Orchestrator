@@ -27,14 +27,16 @@ Resolve the subagent tool once at the start and use the same tool for every role
 | Antigravity (`agy`) | `invoke_subagent` | `Prompt` | `EnableWriteTools: false` on read-only roles; tier IDs only (`flash_lite`, `flash`, `pro`) — exact CLI slugs are rejected in native mode |
 | Pi (`pi`) | `subagent` | `task` | Read-only agent for reviewer; `async: true` optional |
 | OpenCode (`opencode`) | `subagent` | `prompt` | `agent: "general"`; instruct read-only for review roles |
+| Hermes (`hermes`) | `delegate_task` | `tasks` array (`goal`, `context`) | Instruct read-only in `goal`/`context`; persist its returned report yourself |
 
 **Model policy — never invent a model ID.**
 - If the user passed `--models`, parse `<role>=<model>` pairs (roles: `scout`, `architect`, `coder`, `reviewer`; `coder` may list several bindings separated by `|`) and use exactly those.
 - Otherwise omit the model parameter entirely so each subagent inherits the host's default. Do not copy model slugs from other projects or from memory.
 - If the host rejects the parameter you passed, report the rejection and ask — never silently substitute a different model.
-- Effort: if the user passed `--efforts`, parse `<role>=<effort>` pairs (roles: `scout`, `architect`, `reviewer`; values `low`, `medium`, `high`, `max`) and apply each to that role's subagent — as the host's effort parameter when it has one, otherwise as a prompt prefix on line 1 (`think`, `think hard`, `think harder`, `ultrathink`). Skip it entirely for roles where the user pinned no effort. **Worker effort is never user-set** — the Architect decides each Coder's effort per task in `plan.md`.
+- **Hermes Model Selection Policy (Fail Closed)**: In Hermes, the native subagent tool `delegate_task` does NOT support per-task model parameters (all subagents inherit the host session's configured model). If the user explicitly passes `--models` when running under Hermes, the orchestrator **MUST FAIL CLOSED**: report immediately that per-task model overrides are unsupported by the Hermes `delegate_task` tool schema, explain the limitation, and STOP rather than silently proceeding with the inherited model.
+- Effort: if the user passed `--efforts`, parse `<role>=<effort>` pairs (roles: `scout`, `architect`, `reviewer`; values `low`, `medium`, `high`, `max`) and apply each to that role's subagent — as the host's effort parameter when it has one, otherwise as a prompt prefix on line 1 (`think`, `think hard`, `think harder`, `ultrathink`). (In Hermes, effort follows the session's `--reasoning` level or prompt directive). Skip it entirely for roles where the user pinned no effort. **Worker effort is never user-set** — the Architect decides each Coder's effort per task in `plan.md`.
 
-**Async vs blocking.** If the host's subagent tool returns immediately (async), end your turn after launching and resume on the completion notification; do not poll in a loop. If it blocks, call it and read the result. Either way, verify the artifact each role was told to write before trusting that the role finished.
+**Async vs blocking.** If the host's subagent tool returns immediately (async), end your turn after launching and resume on the completion notification; do not poll in a loop. In Hermes, `delegate_task` delivery is runtime- and session-dependent: interactive delegations dispatch in the background, but finite/one-shot tasks may join synchronously or require manual inspection, and some environments do not guarantee automatic turn wakeups. Do not promise an unconditional automatic wake or enter a busy polling loop. The orchestrator must track returned `subagent_id`s, inspect warnings/capabilities, and use bounded manual status checks (`delegate_task(action="list")`, artifact verification) when async notification is unsupported. If the host tool blocks, call it and read the result. Either way, verify the artifact each role was told to write before trusting that the role finished.
 
 ### Delegated from a master orchestrator
 
@@ -69,11 +71,21 @@ The `/orchestration` pipeline is completely standalone and 100% Herdr-free. When
 - **Strict Guardrails**:
   Destructive operations, security bypasses, or out-of-scope actions always require explicit user approval.
 
+### Parent-Child Decision and Notification Protocol
+When running delegated under a parent orchestrator:
+**Shared-session parent routing:** The dispatching parent's own pane ID is the child's direct parent, never its grandparent. The parent passes it as `HERDR_PARENT_PANE_ID` and records the child pane, workspace, worktree, branch and run directory. This is a practical shared-session trust model: same-session agents can impersonate one another or send prompts; there is no authenticated sender or security isolation claim, and this prose is not runtime enforcement.
+1. A known delegated run uses its assigned worktree, branch and run directory and retains no-integration/no-cleanup restrictions. Only a genuinely standalone invocation may use standalone routing or landing. If delegation status or parent ID is missing, ambiguous, or conflicts with the assignment, STOP and report the blocker without guessing a pane.
+2. Send the plan, its run and version, and the child pane ID to the direct parent with `herdr agent prompt "$HERDR_PARENT_PANE_ID" "<approval request>"`. The parent reviews the exact plan and sends its decision to the child pane with a Herdr prompt to the recorded child pane containing `APPROVED/REVISE`, the run, plan version and guidance. Wait for an explicit decision; no Coder starts before approval. A changed plan requires fresh approval. If the parent or decision is unavailable, STOP.
+3. Route routine questions and completion or blocker reports to the direct parent in the same way. Destructive operations, security bypasses, and out-of-scope actions still require explicit user approval; the parent obtains it before authorizing the child.
+
+- **Fail Closed on Missing or Ambiguous Parent**: Never convert it to standalone. Preserve the assignment and report the blocker.
+- For routine decisions and reports use `herdr agent prompt "$HERDR_PARENT_PANE_ID" "<question or report>"`.
+
 ---
 
 ## 1. Isolation: Worktree, Branch, Run Directory
 
-1. Require a clean working tree (`git status --porcelain` empty). If dirty, STOP and ask the user to commit or stash — never invent a worktree over uncommitted work.
+1. Require a clean working tree (`git status --porcelain` empty). If dirty, STOP; in a delegated run route the question only to the direct parent, or report a blocker if its ID is missing or ambiguous; in a genuinely standalone run ask the user. Never invent a worktree over uncommitted work.
 2. If already inside an `orchestration/*` worktree, reuse it and keep its branch.
 3. Otherwise record `ORIGIN_BRANCH=$(git rev-parse --abbrev-ref HEAD)` and create:
    ```
@@ -81,7 +93,7 @@ The `/orchestration` pipeline is completely standalone and 100% Herdr-free. When
    git worktree add "$WORKTREE" -b "orchestration/<run-id>"
    ```
 4. Create `RUN_DIR=$WORKTREE/.orchestration/orch-<run-id>/` as an absolute path. Every role reads and writes inside `WORKTREE` and `RUN_DIR` only.
-5. Ask the user for `unitTestsMode ∈ {none, new, update-only}` unless it is already stated, and forward it to every role.
+5. Unless already stated, determine `unitTestsMode ∈ {none, new, update-only}`: for a delegated run ask the direct parent and wait for its decision; if unavailable STOP. Only a genuinely standalone run asks the user. Forward the result to every role.
 
 `<run-id>`: short unique slug, e.g. `date +%Y%m%d-%H%M%S`.
 
@@ -111,9 +123,13 @@ If any task omits the persona, overlaps another task's files, or names a model t
 
 ## 5. User Approval Gate (never skip)
 
-Present the plan in simple, plain language: per task, its scope, owned files, dependency, Expert Persona, and model. Verify architectural alignment with the existing codebase; if it does not fit, request an architectural solution or notify the user for a decision. **STOP and wait for explicit approval.** If the user already supplied a plan file and said "go", echo that plan back in one paragraph plus the task table and ask for a single confirmation — do not treat silence as approval. No Coder starts before approval.
+Present the plan in simple, plain language: per task, its scope, owned files, dependency, Expert Persona, and model. Verify architectural alignment; seek a revision for mismatches. No Coder starts without approval. A plan change invalidates prior approval. Choose exactly one branch:
 
-When `--ai-head` is enabled, an authorized AiHead decision within delegated scope recorded via `aihead-cli` may satisfy routine plan approval with logged rationale; AiHead must present the plan in simple terms, verify architectural alignment with the existing codebase, seek solutions for any mismatch, or escalate to the user if no clean solution exists. Genuinely ambiguous requirements, destructive actions, or scope expansions must still STOP and wait for explicit user approval.
+1. **Delegated parent gate:** route the exact plan, run/version and child pane ID to the direct parent and STOP until its explicit decision arrives as specified above. If the parent or decision is unavailable or mismatched, STOP and preserve delegated restrictions. Never use standalone branches to bypass this gate.
+2. **Standalone AiHead gate:** only for a genuinely standalone invocation with `--ai-head` enabled, an authorized AiHead decision within scope recorded via `aihead-cli` may satisfy routine approval with logged rationale; verify architectural alignment and seek revisions where needed. Do not use this path for a delegated run.
+3. **Standalone human gate:** only for a genuinely standalone invocation without AiHead approval, STOP and wait for explicit user approval. If the user supplied a plan and said "go", echo it and ask for confirmation; silence is not approval.
+
+Genuinely ambiguous requirements, destructive actions, security bypasses, or scope expansions require explicit human authorization; STOP if it cannot be obtained.
 
 ## 6. Parallel Specialist Coders (never code in the orchestrator)
 
@@ -144,13 +160,13 @@ Only after `APPROVED`. **If this run was delegated by a master orchestrator, do 
 
 ## 9. Report & Hierarchical Parent Notification
 
-State what was built, `TARGET_BRANCH`, the squash commit SHA, the verification commands and their real results, what the Reviewer flagged and how it was resolved, and any remaining risk. Do not call it done on subagent self-reports alone — check the diff and the tests.
+Report what was built, the actual Reviewer verdict and findings and their disposition, remaining risks, and each verification command and its real result. Explicitly identify skipped or not-run checks and why (including `unitTestsMode=none`); never describe skipped tests as passed. Check the diff and actual results rather than relying on subagent self-reports.
 
-If this run was launched by or has a parent orchestrator / AiHead (e.g. `PARENT_PANE_ID` / `HERDR_PARENT_PANE_ID` is set or an `ai-head` pane exists in the workspace):
-The orchestrator **MUST** immediately notify the parent session upon completion:
-`herdr agent prompt <PARENT_PANE_ID> "Orchestration run <run-id> finished: commit <SHA> on <TARGET_BRANCH>, review APPROVED, verification passed."`
-If blocked at any gate or unresolvable error:
-`herdr agent prompt <PARENT_PANE_ID> "Orchestration run <run-id> blocked: <reason>"`
+For a delegated run report the actual assigned branch and its commit SHA (or say no commit was made), and explicitly state that integration and cleanup remain with the parent. Never claim a target-branch squash or integration for delegated work. Only a genuinely standalone run that actually integrated reports `TARGET_BRANCH` and the target squash commit SHA; otherwise report its actual state and blocker.
+
+If this run was delegated by a parent orchestrator with an explicit, unambiguous direct parent pane ID (`$HERDR_PARENT_PANE_ID`), immediately notify the direct parent with the actual facts, including branch, commit or none, review verdict or not run, verification outcomes including skips, findings, risks, and any blocker:
+`herdr agent prompt "$HERDR_PARENT_PANE_ID" "Orchestration run <run-id>: assigned branch <actual-branch>, commit <actual-SHA-or-none>, integration not performed; review <actual-verdict-or-not-run>; verification <actual-results-and-skips>; findings/risks <details>; blocker <reason-or-none>."`
+If parent identity is unavailable or ambiguous, STOP and report the blocker in the current conversation without prompting a guessed pane; retain all delegated ownership and no-integration/no-cleanup restrictions.
 
 ---
 
@@ -164,8 +180,8 @@ If blocked at any gate or unresolvable error:
 - **Disjoint file ownership** — overlapping tasks are serialized with `DEPENDS ON` or repartitioned.
 - **Read-only roles stay read-only** — Scout, Architect, and Reviewer never modify repository source.
 - **Never `git reset --hard`** — sync the target branch inside the run branch and resolve conflicts through a Coder plus Reviewer check; if unresolvable, STOP and preserve everything.
-- **One squash commit on the target branch**, only after `APPROVED`.
-- **No Herdr.** This skill never calls `herdr`, never needs `HERDR_ENV`, and never reads a workspace ID.
+- **One squash commit on the target branch**, only after `APPROVED` and only for a genuinely standalone run; delegated runs never integrate.
+- **No Herdr execution for pipeline roles.** Subagents (Scout, Architect, Coders, Reviewer) and standalone runs never call `herdr`, never need `HERDR_ENV`, and never manage workspaces. When delegated inside a Herdr workspace by a parent coordinator (`HERDR_PARENT_PANE_ID`), the orchestrator uses `herdr agent prompt` strictly and exclusively for parent-child decision routing and completion notification.
 
 ---
 

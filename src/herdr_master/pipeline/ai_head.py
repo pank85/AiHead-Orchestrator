@@ -1250,6 +1250,7 @@ async def ensure_herdr_ai_head(
     origin_cwd: str,
     *,
     force: bool = False,
+    caller_pane_id: Optional[str] = None,
 ) -> Dict[str, Any]:
     """Ensure persistent ai-head tab exists in workspace and interactive agent is running.
 
@@ -1274,6 +1275,12 @@ async def ensure_herdr_ai_head(
 
     if not workspace_id:
         raise ValueError("workspace_id must be provided to ensure_herdr_ai_head.")
+
+    effective_caller_pane = (
+        caller_pane_id
+        if caller_pane_id is not None
+        else os.environ.get("HERDR_PANE_ID")
+    )
 
     effective_cwd = (
         str(Path(os.path.expanduser(head_config.cwd)).resolve())
@@ -1345,17 +1352,53 @@ async def ensure_herdr_ai_head(
     if target_tab is not None and target_pane is not None:
         is_alive, agent_rec = _resolve_agent_liveness(target_pane, snapshot.agents)
         agent_kind = agent_rec.agent if agent_rec and agent_rec.agent else target_pane.agent
+        caller_is_ai_head = bool(
+            effective_caller_pane
+            and target_pane.pane_id
+            and str(effective_caller_pane) == str(target_pane.pane_id)
+        )
 
-        if is_alive:
-            # Check if agent is currently busy (e.g. working on a prior request)
+        if is_alive or caller_is_ai_head:
+            # Check if agent is currently busy (e.g. working on a prior request).
+            # When the caller IS AiHead itself (invoking a child launch from its own pane),
+            # Herdr reports its status as 'working' for the duration of the launch call.
+            # Never treat the caller AiHead as busy/unavailable, and never restart its own pane!
             agent_status_val = (agent_rec.agent_status or "").strip().lower() if agent_rec else ""
             pane_status_val = (target_pane.agent_status or "").strip().lower()
-            is_busy = agent_status_val in ("working", "busy") or pane_status_val in (
-                "working",
-                "busy",
+            is_busy = (
+                False
+                if caller_is_ai_head
+                else (
+                    agent_status_val in ("working", "busy")
+                    or pane_status_val in ("working", "busy")
+                )
             )
 
             running_state = _load_running_head_state(effective_cwd, workspace_id, target_pane.pane_id)
+
+            if caller_is_ai_head:
+                actual_kind = (
+                    (running_state.get("kind") if running_state else None) or agent_kind or kind_str
+                )
+                actual_model = (
+                    running_state.get("model")
+                    if (running_state and running_state.get("model"))
+                    else model_str
+                )
+                return {
+                    "workspace_id": workspace_id,
+                    "tab_id": target_tab.tab_id,
+                    "pane_id": target_pane.pane_id,
+                    "reused": True,
+                    "enabled": True,
+                    "label": "ai-head",
+                    "agent_name": (agent_rec.name if agent_rec and agent_rec.name else agent_name),
+                    "kind": actual_kind,
+                    "model": actual_model,
+                    "busy": False,
+                    "reconciled": True,
+                    "status": "ready",
+                }
 
             if is_busy:
                 # Safe lifecycle policy: do not kill/replace a busy working session!

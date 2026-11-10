@@ -307,6 +307,7 @@ class _Allocated:
     pane_id: Optional[str]
     tab_id: Optional[str]
     owns_workspace: bool
+    parent_pane_id: Optional[str] = None
 
 
 def _pane_id(payload: dict[str, Any]) -> Optional[str]:
@@ -328,6 +329,7 @@ async def _create_owned_workspace(
     workspace_label: str,
     cwd: str,
     focus: bool,
+    parent_pane_id: Optional[str] = None,
 ) -> _Allocated:
     created = await active.create_workspace(
         label=workspace_label,
@@ -342,6 +344,7 @@ async def _create_owned_workspace(
         pane_id=_pane_id(created),
         tab_id=_tab_id(created),
         owns_workspace=True,
+        parent_pane_id=parent_pane_id,
     )
 
 
@@ -356,6 +359,7 @@ async def _allocate_launch_target(
     cwd: str,
     fresh_workspace: bool = False,
     focus: bool = True,
+    parent_pane_id: Optional[str] = None,
 ) -> _Allocated:
     """Adopt an inside workspace, or provision an isolated outside session.
 
@@ -365,6 +369,13 @@ async def _allocate_launch_target(
     the current session and leaves the caller's workspace untouched. Failures
     propagate to the caller.
     """
+    eff_parent_pane = (
+        parent_pane_id
+        if parent_pane_id is not None
+        else (os.environ.get("HERDR_PARENT_PANE_ID") or getattr(ctx, "pane_id", None))
+    )
+    tab_env = {"HERDR_PARENT_PANE_ID": str(eff_parent_pane)} if eff_parent_pane else None
+
     if "open_pane" in getattr(client, "__dict__", {}):
         tab_res = await _safe_await(
             client.open_pane,
@@ -383,6 +394,7 @@ async def _allocate_launch_target(
             pane_id=pane_id,
             tab_id=tab_id,
             owns_workspace=False,
+            parent_pane_id=eff_parent_pane,
         )
 
     if fresh_workspace and ctx.is_inside_herdr:
@@ -394,16 +406,20 @@ async def _allocate_launch_target(
             workspace_label=workspace_label,
             cwd=cwd,
             focus=focus,
+            parent_pane_id=eff_parent_pane,
         )
 
     if ctx.is_inside_herdr:
         active = _adopt_client(client, ctx)
-        tab_res = await active.create_tab(
-            workspace_id=ctx.workspace_id,
-            label=tab_label,
-            focus=focus,
-            cwd=cwd,
-        )
+        create_kwargs: Dict[str, Any] = {
+            "workspace_id": ctx.workspace_id,
+            "label": tab_label,
+            "focus": focus,
+            "cwd": cwd,
+        }
+        if tab_env:
+            create_kwargs["env"] = tab_env
+        tab_res = await active.create_tab(**create_kwargs)
         return _Allocated(
             client=active,
             session_name=str(ctx.session_name),
@@ -412,6 +428,7 @@ async def _allocate_launch_target(
             pane_id=_pane_id(tab_res),
             tab_id=_tab_id(tab_res),
             owns_workspace=False,
+            parent_pane_id=eff_parent_pane,
         )
 
     session_name = _isolated_session_name(session, isolated_name)
@@ -427,14 +444,18 @@ async def _allocate_launch_target(
             workspace_label=workspace_label,
             cwd=cwd,
             focus=focus,
+            parent_pane_id=eff_parent_pane,
         )
     workspace_id = snap.workspaces[0].workspace_id
-    tab_res = await active.create_tab(
-        workspace_id=workspace_id,
-        label=tab_label,
-        focus=focus,
-        cwd=cwd,
-    )
+    create_kwargs = {
+        "workspace_id": workspace_id,
+        "label": tab_label,
+        "focus": focus,
+        "cwd": cwd,
+    }
+    if tab_env:
+        create_kwargs["env"] = tab_env
+    tab_res = await active.create_tab(**create_kwargs)
     return _Allocated(
         client=active,
         session_name=session_name,
@@ -443,6 +464,7 @@ async def _allocate_launch_target(
         pane_id=_pane_id(tab_res),
         tab_id=_tab_id(tab_res),
         owns_workspace=False,
+        parent_pane_id=eff_parent_pane,
     )
 
 
@@ -530,20 +552,38 @@ async def _resolve_and_wire_ai_head(
 
     if allocated.workspace_id and allocated.client:
         try:
-            head_info = await ensure_herdr_ai_head(
-                allocated.client,
-                allocated.workspace_id,
-                head_config,
-                target_cwd,
+            caller_pane = allocated.parent_pane_id or os.environ.get("HERDR_PANE_ID")
+            try:
+                head_info = await ensure_herdr_ai_head(
+                    allocated.client,
+                    allocated.workspace_id,
+                    head_config,
+                    target_cwd,
+                    caller_pane_id=caller_pane,
+                )
+            except TypeError:
+                head_info = await ensure_herdr_ai_head(
+                    allocated.client,
+                    allocated.workspace_id,
+                    head_config,
+                    target_cwd,
+                )
+            head_pane_id = head_info.get("pane_id")
+            caller_is_ai_head = bool(
+                caller_pane and head_pane_id and str(caller_pane) == str(head_pane_id)
             )
-            is_busy = bool(head_info.get("busy", False))
-            is_reconciled = bool(head_info.get("reconciled", True))
+            is_busy = False if caller_is_ai_head else bool(head_info.get("busy", False))
+            is_reconciled = True if caller_is_ai_head else bool(head_info.get("reconciled", True))
             actual_model = (
                 head_info.get("model")
                 if (is_busy or not is_reconciled)
                 else head_config.binding.model
             )
-            discovery_status = "busy" if is_busy else ("ready" if is_reconciled else "pending")
+            discovery_status = (
+                "ready"
+                if caller_is_ai_head
+                else ("busy" if is_busy else ("ready" if is_reconciled else "pending"))
+            )
 
             discovery = build_ai_head_discovery(
                 head_config,
@@ -553,7 +593,7 @@ async def _resolve_and_wire_ai_head(
                 socket_path=allocated.socket_path,
                 workspace_id=allocated.workspace_id,
                 tab_id=head_info.get("tab_id"),
-                pane_id=head_info.get("pane_id"),
+                pane_id=head_pane_id,
                 status=discovery_status,
                 reconciled=is_reconciled,
                 actual_model=actual_model,
@@ -599,6 +639,8 @@ def _handoff_context(
         "tab_id": allocated.tab_id,
         "owns_workspace": allocated.owns_workspace,
     }
+    if allocated.parent_pane_id is not None:
+        context["parent_pane_id"] = allocated.parent_pane_id
     if squad is not None:
         context["squad"] = _squad_payload(squad)
         context["allowed_coder_models"] = format_allowed_coder_models(
