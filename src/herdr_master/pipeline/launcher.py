@@ -232,6 +232,34 @@ def resolve_master_binding(harness=None, model=None, effort=None, *, config_path
     return resolve_coordinator_binding(harness, model, effort)
 
 
+def resolve_ergo_coordinator(
+    override: str | None = None, *, config_path=None
+) -> HarnessBinding | None:
+    """Resolve the Ergo coordinator pane binding, or None to keep the Scout host.
+
+    Only a new-pane launch (``herdm ergo``, ``aihead --ergo``) consults this.
+    An ``/ergo`` run inside an open harness session is already the coordinator.
+    """
+    if override is not None:
+        binding = HarnessBinding.from_slug(override, label="ergo-coordinator")
+    else:
+        configured = load_project_config(config_path).ergo
+        if configured is None or configured.coordinator is None:
+            return None
+        binding = configured.coordinator
+    kind, model, effort = resolve_coordinator_binding(
+        binding.kind, binding.model, binding.effort
+    )
+    return binding.model_copy(
+        update={
+            "kind": kind,
+            "model": model,
+            "effort": effort,
+            "label": "ergo-coordinator",
+        }
+    )
+
+
 def _build_agent_args(
     harness: str,
     model: str,
@@ -836,20 +864,21 @@ async def launch_ergo(
     fresh_workspace: bool = False,
     focus: bool = True,
     delegated: bool = False,
+    coordinator: HarnessBinding | None = None,
 ) -> Dict[str, Any]:
-    """Hand an Ergo job to the canonical skill via the Scout binding.
+    """Hand an Ergo job to the canonical skill.
 
-    The bootstrap host is named Ergo orchestrator, not Scout. Python does not
-    run later phases and does not close adopted tabs or unrelated workspaces.
+    The pane host is the explicit coordinator binding when one is given, and
+    the Scout binding otherwise. The bootstrap payload always carries the real
+    squad, so the Scout role itself never moves. Python does not run later
+    phases and does not close adopted tabs or unrelated workspaces.
     ``scout_pane_id`` remains as a deprecated alias of ``pane_id``.
     """
-    scout_effort = squad.scout.effort
-    descriptor = _host_launch(
-        squad.scout.kind.value,
-        squad.scout.model,
-        scout_effort,
-        "scout",
-    )
+    host = coordinator if coordinator is not None else squad.scout
+    host_effort = host.effort
+    # The catalog role vocabulary has no "coordinator"; this pane is a master host.
+    descriptor = _host_launch(host.kind.value, host.model, host_effort, "master")
+    descriptor["role"] = "coordinator"
     ctx = resolve_launch_context(session)
     target_cwd = str(Path(cwd or os.getcwd()).resolve())
     allocated = await _allocate_launch_target(
@@ -908,8 +937,10 @@ async def launch_ergo(
         "origin_cwd": target_cwd,
         "intent": intent,
         "harness": descriptor["kind"],
-        "model": squad.scout.model,
-        "effort": scout_effort.value if scout_effort else None,
+        "model": host.model,
+        "effort": host_effort.value if host_effort else None,
+        "coordinator": _binding_payload(host),
+        "coordinator_source": "explicit" if coordinator is not None else "scout",
         "ai_head": head_discovery if (head_discovery and head_discovery.enabled) else None,
     }
 

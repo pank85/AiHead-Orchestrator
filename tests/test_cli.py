@@ -637,3 +637,30 @@ def test_cli_config_command():
     assert "council" in data
     assert "ai_head" in data
 
+
+
+def test_ergo_coordinator_flag_forwards_binding_and_defaults_to_none(monkeypatch, tmp_path):
+    monkeypatch.chdir(tmp_path)
+    launch = AsyncMock(return_value=_launch_result())
+    with (
+        patch("herdr_master.cli.main.launch_ergo", launch),
+        patch("herdr_master.cli.main.os.execvp"),
+    ):
+        flagged = runner.invoke(
+            app,
+            [
+                "ergo",
+                "ship it",
+                "--coordinator",
+                "pi:openai/gpt-6.1-sol:high",
+                "--no-attach",
+            ],
+        )
+        plain = runner.invoke(app, ["ergo", "ship it", "--no-attach"])
+    assert flagged.exit_code == 0, flagged.output
+    assert plain.exit_code == 0, plain.output
+    binding = launch.await_args_list[0].kwargs["coordinator"]
+    assert binding.kind == HarnessKind.PI
+    assert binding.model == "openai/gpt-6.1-sol"
+    assert binding.effort == EffortLevel.HIGH
+    assert launch.await_args_list[1].kwargs["coordinator"] is None

@@ -408,3 +408,39 @@ custom = "preserve"
     result = runner.invoke(aihead_app, ["--setup", "--config", str(cfg)])
     assert result.exit_code == 0, result.output
     assert _load(cfg)["ai_head"]["binding"]["custom"] == "preserve"
+
+
+def test_setup_writes_ergo_coordinator_and_clears_when_empty(tmp_path, monkeypatch):
+    cfg = tmp_path / "config.toml"
+    cfg.write_text("", encoding="utf-8")
+
+    def ask(label, default=None, **kwargs):
+        if label == "Skill":
+            return "ergo"
+        if label.startswith("Ergo coordinator binding"):
+            return "pi:openai/gpt-6.1-sol:high"
+        return default
+
+    monkeypatch.setattr("herdr_master.cli.aihead_setup.Prompt.ask", ask)
+    monkeypatch.setattr("herdr_master.cli.aihead_setup.Confirm.ask", lambda *a, **kw: True)
+    result = runner.invoke(aihead_app, ["--setup", "--config", str(cfg)])
+    assert result.exit_code == 0, result.output
+    coordinator = _load(cfg)["ergo"]["coordinator"]
+    assert coordinator["kind"] == "pi"
+    assert coordinator["model"] == "openai/gpt-6.1-sol"
+    assert coordinator["effort"] == "high"
+
+    empty = tmp_path / "empty.toml"
+    empty.write_text("", encoding="utf-8")
+
+    def ask_empty(label, default=None, **kwargs):
+        if label == "Skill":
+            return "ergo"
+        if label.startswith("Ergo coordinator binding"):
+            return ""
+        return default
+
+    monkeypatch.setattr("herdr_master.cli.aihead_setup.Prompt.ask", ask_empty)
+    result = runner.invoke(aihead_app, ["--setup", "--config", str(empty)])
+    assert result.exit_code == 0, result.output
+    assert "ergo" not in _load(empty)

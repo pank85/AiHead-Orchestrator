@@ -49,6 +49,7 @@ from herdr_master.pipeline.launcher import (
     launch_master,
     launch_orchestration,
     resolve_coordinator_binding,
+    resolve_ergo_coordinator,
     resolve_launch_context,
     resolve_master_binding,
 )
@@ -324,6 +325,14 @@ def run_ergo(
         None, "--coder", "--coders", help="Alias for --workers."
     ),
     reviewer: Optional[str] = typer.Option(None, "--reviewer", help="Reviewer binding override."),
+    coordinator: Optional[str] = typer.Option(
+        None,
+        "--coordinator",
+        help=(
+            "Ergo coordinator binding override (harness:model[:effort]). "
+            "Applies only when a new pane is launched."
+        ),
+    ),
     run_squad: Optional[str] = typer.Option(None, "--run-squad", help="Run squad.toml."),
     ai_head: Optional[bool] = typer.Option(
         None,
@@ -343,6 +352,7 @@ def run_ergo(
             run_squad=Path(run_squad) if run_squad else None,
         )
         ctx = resolve_launch_context(session)
+        coordinator_binding = resolve_ergo_coordinator(coordinator)
     except _RESOLVE_ERRORS as err:
         _abort(str(err))
     client = HerdrClient(session=ctx.session_name, socket_path=ctx.socket_path)
@@ -356,6 +366,7 @@ def run_ergo(
             squad=resolved.squad,
             session=session,
             ai_head=ai_head,
+            coordinator=coordinator_binding,
         )
 
     console.print(f"[bold magenta]⚡ Launching Ergo orchestrator[/bold magenta] ('{intent}')...")
@@ -1518,7 +1529,9 @@ def _launch_skill(skill: str, intent: str, session: Optional[str], cwd: Optional
                                           workers=None, coder=None, reviewer=None, run_squad=None,
                                           project_path=config or cwd)
             operation = launch_ergo(
-                intent=intent, workspace_label=label, squad=resolved.squad, **common
+                intent=intent, workspace_label=label, squad=resolved.squad,
+                coordinator=resolve_ergo_coordinator(None, config_path=config or cwd),
+                **common,
             )
         elif skill == "council":
             operation = launch_council(intent=intent, workspace_label=label,

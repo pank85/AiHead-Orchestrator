@@ -22,6 +22,11 @@ You are the orchestrator. **Never implement code directly in the main conversati
 - **`--models` Inline Role & Worker Overrides**: Overrides any role (`scout`, `architect`, `reviewer`) or worker pool (`workers` / `coders`). Works in both default Herdr mode and `--native` mode.
 - **`--ai-head` / `--no-ai-head` AiHead Consultation**: Configures autonomous technical decision consultation via AiHead (see §3).
 
+## Coordinator identity (in-session vs delegated launch)
+
+- Running `/ergo` inside an already-open harness session: that session IS the Ergo coordinator. Never launch a coordinator pane and never call `aihead --ergo` / `herdm ergo` just to obtain a coordinator; the `[ergo] coordinator` binding does not apply.
+- A coordinator pane is created only for a new pane/session launch (`herdm ergo`, `aihead --ergo`); that launch uses `[ergo] coordinator` or `--coordinator`, and falls back to the Scout binding when unset.
+
 ---
 
 ## 0. Configuration Hierarchy & Squad Resolution via `herdm catalog`

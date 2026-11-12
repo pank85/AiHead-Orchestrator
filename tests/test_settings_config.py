@@ -999,3 +999,28 @@ def test_ai_head_no_thinking_field_and_stored_effort_on_binding():
     assert "effort" not in dumped
     assert "effort" in dumped["binding"]
     assert dumped["binding"]["effort"] == EffortLevel.HIGH
+
+
+def test_ergo_coordinator_roundtrip_and_absent_default(tmp_path):
+    assert HerdrMasterConfig().ergo is None
+
+    config_file = tmp_path / ".herdr-master.toml"
+    config_file.write_text(
+        '[ergo]\ncoordinator = "pi:openai/gpt-6.1-sol:high"\n', encoding="utf-8"
+    )
+    cfg = load_project_config(config_file)
+    assert cfg.ergo is not None
+    assert cfg.ergo.coordinator is not None
+    assert cfg.ergo.coordinator.to_slug() == "pi:openai/gpt-6.1-sol:high"
+    assert cfg.ergo.coordinator.label == "ergo-coordinator"
+
+    save_path = tmp_path / "saved.toml"
+    save_project_config(cfg, save_path)
+    reloaded = load_project_config(save_path)
+    assert reloaded.ergo is not None
+    assert reloaded.ergo.coordinator.to_slug() == "pi:openai/gpt-6.1-sol:high"
+
+    default_path = tmp_path / "default.toml"
+    save_project_config(HerdrMasterConfig(), default_path)
+    with open(default_path, "rb") as handle:
+        assert "ergo" not in tomllib.load(handle)
