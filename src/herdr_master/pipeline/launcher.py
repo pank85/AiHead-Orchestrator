@@ -602,7 +602,7 @@ async def _start_and_prompt(
             f"AiHead Parent Directive:\n"
             f"AiHead is active at pane {parent} as the authoritative technical decision-maker.\n"
             "1. DO NOT prompt the human user for routine decisions, working-tree handling, "
-            "unitTestsMode, or Plan Approval Gates.\n"
+            "unitTestsMode, or Plan Approval Gates, and do not open a user question tab.\n"
             f"2. For every question, decision, or plan approval, prompt AiHead directly: "
             f'herdr agent prompt {parent} "<question / plan>"\n'
             f"3. Notify AiHead immediately via herdr agent prompt {parent}: "
