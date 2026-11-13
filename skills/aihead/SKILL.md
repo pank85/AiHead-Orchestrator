@@ -92,8 +92,17 @@ The fundamental difference between AiHead and Herdr-Master is:
 
 When presented with any user request, problem statement, or objective, AiHead examines it immediately and decides which execution path to take:
 
+**Routing rule:** Before every user job, choose the execution path and its harness/model from the available routes defined by `skills/ergo/SKILL.md` and `skills/orchestration/SKILL.md`; never choose the parent pane's model merely because it is open.
+
+- Complicated work includes multiple concerns, new behavior across files, a UI feature, architecture, or anything needing a plan and review. Route it to `/ergo` or `/orchestration`, never to one coder.
+- Choose `/ergo` for the resolved multi-role squad. Follow `skills/ergo/SKILL.md`: resolve `herdm catalog squad` and `herdm catalog agent`, applying project `.herdr-master.toml` over product defaults. Allowed coder models come from the catalog output. Never invent a binding; if the catalog cannot resolve the route, stop and ask, without substituting.
+- Choose `/orchestration` for cohesive work inside one harness with a native subagent tool. Follow `skills/orchestration/SKILL.md`: models are only user-pinned `--models` or the host default; never invent a model ID. If Hermes is asked for per-role models, fail closed as that skill requires.
+- One worker is permitted only for an atomic mechanical change in one file, with no design and no new behavior. Its binding still comes from the resolved catalog, not the parent pane.
+- Match role to work: mechanical → resolved scout or project simple worker; implementation → an allowed coder model; architecture → architect binding; review → reviewer binding.
+- AiHead selects among resolved routes without asking. If the catalog cannot resolve a required route, stop and ask rather than substitute.
+
 1. **Simple Direct Agent (Single-Agent Focus)**:
-   - **Criteria**: Small, atomic, or routine tasks (e.g. single-file bugfixes, quick diagnosis, small scripts, minor doc adjustments) where full multi-agent pipeline ceremony is unnecessary overhead. Small tasks may also use `/orchestration` when appropriate.
+   - **Criteria**: Only an atomic mechanical change in one file, with no design and no new behavior. Small tasks may also use `/orchestration` when appropriate.
    - **Execution**: Dispatch to one new Herdr workspace (`herdr workspace create ... --no-focus`), then the job root pane in that workspace. Never tie up the main chat session with inline execution. Sub-jobs of that job stay in that job workspace.
    - **Optional review**: For a small job, AiHead may instruct the worker pane to arrange a review after the job is done, specifying an appropriate model for faster work. Delegate that review to a new background Herdr pane in the same job workspace, not a same-session subagent and not a second workspace.
 
@@ -161,7 +170,7 @@ opencode v2.2.6 TUI has no `--model` flag. `herdr agent start ... -- --model pro
 - `enter`, then `enter` again on the `Default` variant
 - re-read the pane and confirm the model in the footer.
 
-Check the default model is not rate-limited before spawning. A global default (e.g. Grok 4.7 out of credits) kills the child on first prompt. Prefer the parent session's own working model for child panes.
+Check the selected model is not rate-limited before spawning. If the selected model is rate-limited or rejected, report the exact error and stop; never silently switch. The parent session's working model does not override the routing selection.
 
 Report proof of start, not intent: model slug, `agent_status`, and context usage from `herdr agent read`.
 

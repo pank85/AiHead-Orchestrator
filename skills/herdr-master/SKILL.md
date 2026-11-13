@@ -26,6 +26,15 @@ Initial task, if supplied: `${@:-$ARGUMENTS}`
 
 ## 1. Harness Adapter & Catalog Resolution (Child Launch Defaults & Async Watchers)
 
+**Routing rule:** Before every user job, choose the execution path and its harness/model from the available routes defined by `skills/ergo/SKILL.md` and `skills/orchestration/SKILL.md`; never choose the parent pane's model merely because it is open.
+
+- Complicated work includes multiple concerns, new behavior across files, a UI feature, architecture, or anything needing a plan and review. Route it to `/ergo` or `/orchestration`, never to one coder.
+- Choose `/ergo` for the resolved multi-role squad. Follow `skills/ergo/SKILL.md`: resolve `herdm catalog squad` and `herdm catalog agent`, applying project `.herdr-master.toml` over product defaults. Allowed coder models come from the catalog output. Never invent a binding; if the catalog cannot resolve the route, stop and ask, without substituting.
+- Choose `/orchestration` for cohesive work inside one harness with a native subagent tool. Follow `skills/orchestration/SKILL.md`: models are only user-pinned `--models` or the host default; never invent a model ID. If Hermes is asked for per-role models, fail closed as that skill requires.
+- One worker is permitted only for an atomic mechanical change in one file, with no design and no new behavior. Its binding still comes from the resolved catalog, not the parent pane.
+- Match role to work: mechanical → resolved scout or project simple worker; implementation → an allowed coder model; architecture → architect binding; review → reviewer binding.
+- Herdr-master uses the same selection as AiHead. Ask only when two resolved routes are genuinely tied or the catalog cannot resolve the route; never substitute.
+
 Identify which harness you are running in (`agy`, `pi`, `claude`, `opencode`, or `hermes`). Do not consult hand-maintained model tables; query the catalog via `herdm catalog squad` and `herdm catalog agent`. A Hermes parent coordinates in this existing session; it does not imply a new Hermes process, a native default squad, or a different child binding:
 
 1. **Child Launch Routing**:
@@ -70,7 +79,7 @@ opencode v2.2.6 TUI has no `--model` flag. `herdr agent start ... -- --model pro
 - `enter`, then `enter` again on the `Default` variant
 - re-read the pane and confirm the model in the footer.
 
-Check the default model is not rate-limited before spawning. A global default (e.g. Grok 4.7 out of credits) kills the child on first prompt. Prefer the parent session's own working model for child panes.
+Check the selected model is not rate-limited before spawning. If the selected model is rate-limited or rejected, report the exact error and stop; never silently switch. The parent session's working model does not override the routing selection.
 
 Report proof of start, not intent: model slug, `agent_status`, and context usage from `herdr agent read`.
 
