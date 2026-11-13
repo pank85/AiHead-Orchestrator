@@ -827,6 +827,26 @@ class CouncilConfig(BaseModel):
         return self
 
 
+class ErgoConfig(BaseModel):
+    """Configuration for the Ergo coordinator pane opened for a new session."""
+
+    model_config = ConfigDict(extra="allow", populate_by_name=True)
+
+    coordinator: Optional[HarnessBinding] = None
+
+    @model_validator(mode="before")
+    @classmethod
+    def _coerce_fields(cls, data: Any) -> Any:
+        if not isinstance(data, dict):
+            return data
+        d = dict(data)
+        if isinstance(d.get("coordinator"), str):
+            d["coordinator"] = HarnessBinding.from_slug(
+                d["coordinator"], label="ergo-coordinator"
+            ).model_dump()
+        return d
+
+
 DEFAULT_AI_HEAD_SOUL: str = (
     "Software Architect and Workflow Orchestrator obsessed with UX best practices, "
     "accessibility, clear interaction design, architectural alignment with the existing codebase, "
@@ -1069,6 +1089,7 @@ class HerdrMasterConfig(BaseModel):
     council: CouncilConfig = Field(default_factory=CouncilConfig)
     ai_head: AiHeadConfig = Field(default_factory=AiHeadConfig)
     master_coordinator: Optional[HarnessBinding] = None
+    ergo: Optional[ErgoConfig] = None
 
 
 def find_project_config_path(

@@ -368,14 +368,14 @@ def test_delegated_report_preserves_actual_results():
 
 
 def test_herdr_master_forwards_orchestration_jobs():
-    """Assert /herdr-master can dispatch a job as a /orchestration pipeline in its own tab."""
+    """Assert /herdr-master can dispatch a job as a /orchestration pipeline in its own workspace."""
     body = load_skill_body("herdr-master")
 
     assert "Forwarding `/orchestration` to Child Sessions" in body
     assert 'run a job "with orchestration"' in body
     assert "prompt the child with `/orchestration <task>`" in body
     assert "skill_sources.orchestration" in body
-    assert "one new tab, one isolated worktree" in body
+    assert "one new job workspace, one isolated worktree" in body
     # Master keeps integration and the final review gate
     assert "**The master alone** runs the Master Final Review Gate" in body
 
@@ -526,6 +526,28 @@ def test_aihead_delegation_limits_same_session_subagents_to_path_selection():
     )
     assert "or async background subagent" not in body
     assert "not same-session subagents" in body
+
+
+def test_job_workspace_and_question_tab_contract():
+    """Each job gets one workspace; user questions stay in the coordinator workspace."""
+    for name in ("aihead", "herdr-master"):
+        body = load_skill_body(name)
+        assert "one new Herdr workspace" in body
+        assert "Sub-jobs of that job stay in that job workspace" in body
+        assert "herdr workspace create" in body
+        assert "User answer for <qid>" in body
+        assert "herdr tab close <tab-id>" in body
+        assert "must not close the tab" in body
+        assert "job workspace" in body and "never in" in body
+
+    master = load_skill_body("herdr-master")
+    assert "adopt that workspace directly" in master
+    assert "Do NOT call `herdr workspace create` again" in master
+    assert "open a question tab for the first job" in master
+
+    aihead = load_skill_body("aihead")
+    assert "launch its work in a new background Herdr pane" in aihead
+    assert "never creates a second coordinator workspace speculatively" in aihead
 
 
 def test_pane_lifecycle_and_unmerged_ownership_contract_all_skills():

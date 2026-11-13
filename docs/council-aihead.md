@@ -287,7 +287,7 @@ Every decision exchange is structured and correlated:
 ### Escalation Invariant
 - **Technical & Architectural Scope**: Routine choices within project scope are resolved autonomously (`status: "decided"`).
 - **Ambiguity & Destruction Guard**: Destructive actions (e.g. data loss, unreviewed branch landings, security bypasses) or genuine requirement ambiguities are never faked—they immediately escalate to the operator (`status: "needs_user"`).
-- **Plan Approval & Architectural Alignment Gate**: Whenever AiHead approves a plan, it presents it to the user in simple, plain language. It must always verify that the plan aligns seamlessly with the existing codebase architecture; if it does not fit, AiHead seeks an architectural solution, and if no solution exists, it escalates to the user to make the decision.
+- **Plan Approval & Architectural Alignment Gate**: Whenever AiHead approves a plan, it presents it to the user in simple, plain language in a new tab in the coordinator workspace. It must always verify that the plan aligns seamlessly with the existing codebase architecture; if it does not fit, AiHead seeks an architectural solution, and if no solution exists, it escalates to the user to make the decision.
 
 ### Operating Modes
 1. **TUI Mode (`mode = "herdr"`)**:
@@ -400,7 +400,7 @@ flowchart TD
   - Resolving contentious architectural debates without bias from a single model family.
 
 #### 4. `/herdr-master` — Master Orchestrator
-- **Topology**: 1 Master Coordinator managing $N$ child tabs and worktrees in the same Herdr workspace.
+- **Topology**: 1 Master Coordinator. Each job gets its own Herdr workspace; sub-jobs of that job stay in that workspace. User questions and updates open as tabs in the coordinator workspace.
 - **Execution Mechanism**: Communicates via the Herdr socket, spawning isolated tabs for each job, launching native async watchers to monitor completion without busy-waiting, enforcing the Master Final Review Gate, and serially squash-merging into `develop`.
 - **Key Characteristics**:
   - Can forward subtasks into `/ergo` or `/orchestration` tabs.

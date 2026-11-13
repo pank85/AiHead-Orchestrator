@@ -67,17 +67,20 @@ folder and starts a master there.
 
 ## What it does with a job
 
-1. **Verify** the repo, target branch, `HEAD`, index and existing worktrees. Ambiguity → it asks.
+1. **Verify** the repo, target branch, `HEAD`, index and existing worktrees. Ambiguity → a question tab in the coordinator workspace.
 2. **Isolate** — new branch and worktree based on `develop`, never reusing or overwriting one.
-3. **Dispatch** — new tab in the current workspace (`--no-focus`) with a self-contained prompt:
-   objective, constraints, owned files, target branch, acceptance criteria, verification.
+3. **Dispatch** — one new Herdr workspace per job (`herdr workspace create --no-focus`) with a
+   self-contained prompt: objective, constraints, owned files, target branch, acceptance criteria,
+   verification. Sub-jobs of that job stay in that job workspace. Questions and updates for the user
+   open a new tab in the coordinator workspace; when the user answers, the main session records it,
+   closes that tab, and forwards the answer.
 4. **Monitor reactively** — one bounded async watcher per child running `herdr agent wait`, no
    polling loops. It ends its turn and resumes when a child finishes or asks something.
 5. **Review gate** — checks the full diff, requirements completeness, pattern conformance,
    cross-job semantic conflicts, and logic/security defects. `NEEDS FIXES` goes back to the same
    child; the loop repeats until `APPROVED`.
 6. **Land serially** — `git merge --squash <child-branch>` into `develop`, one commit, tests run,
-   then the child tab, worktree and temporary branch are removed.
+   then the child tabs, job workspace, worktree and temporary branch are removed.
 7. **Report** — child SHA, `develop` squash SHA, tests, cleanup, remaining risk.
 
 ## Per-job pipelines

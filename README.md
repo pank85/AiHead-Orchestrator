@@ -32,7 +32,7 @@ Herdr-Master ships with **five canonical agent skills and slash commands** insta
 * **Interactive or Prompted**: Can be launched without an initial prompt to inspect the workspace and wait for jobs, or launched with a task directly.
 * **Autonomous Delegation & Sandboxing**:
   * Delegates each task into an isolated Git worktree branched from `develop`.
-  * Opens dedicated Herdr tabs resolving the product Scout (`agy:gemini-3.8-flash-medium`) for bootstrapping and product Reviewer (`pi:xai/grok-4.7`) for diff reviews.
+  * Opens one Herdr workspace per job. Sub-jobs stay in that workspace. The product Scout (`agy:gemini-3.8-flash-medium`) bootstraps and the product Reviewer (`pi:xai/grok-4.7`) reviews diffs. Questions and updates for the user open as tabs in the coordinator workspace.
   * Runs a mandatory **Master Final Review Gate** on cumulative diffs before squash-merging into `develop`.
   * Main working tree remains untouched and protected.
 

@@ -18,6 +18,7 @@ from herdr_master.pipeline.launcher import (
     ensure_agy_trusted,
     launch_ergo,
     launch_master,
+    resolve_ergo_coordinator,
     resolve_launch_context,
 )
 
@@ -722,3 +723,96 @@ async def test_launch_passes_herdr_parent_pane_id_and_caller_is_ai_head_not_busy
     assert payload["parent_pane_id"] == "w9:p1"
     assert payload["ai_head"]["status"] == "ready"
     assert "Do not consult AiHead" not in payload["ai_head"]["instructions"]
+
+
+PI_COORDINATOR_ARGS = [
+    "--kind",
+    "pi",
+    "--",
+    "--provider",
+    "openai",
+    "--model",
+    "gpt-6.1-sol",
+    "--thinking",
+    "high",
+]
+
+
+@pytest.mark.asyncio
+async def test_launch_ergo_coordinator_binding_hosts_pane():
+    client = _client()
+    ctx = _inside()
+    coordinator = HarnessBinding(
+        kind=HarnessKind.PI, model="openai/gpt-6.1-sol", effort=EffortLevel.HIGH
+    )
+    with (
+        patch("herdr_master.pipeline.launcher.resolve_herdr_context", return_value=ctx),
+        patch("herdr_master.pipeline.launcher.ensure_herdr_server", new_callable=AsyncMock),
+    ):
+        res = await launch_ergo(
+            client=client,
+            intent="ship the coordinator binding",
+            workspace_label="ergo-coordinator",
+            squad=Squad(),
+            cwd="/tmp/repo",
+            coordinator=coordinator,
+        )
+    assert client.start_agent.await_args.kwargs["kind"] == "pi"
+    assert client.start_agent.await_args.kwargs["args"] == _rpc_args(PI_COORDINATOR_ARGS)
+    assert res["harness"] == "pi"
+    assert res["model"] == "openai/gpt-6.1-sol"
+    assert res["effort"] == "high"
+    assert res["coordinator_source"] == "explicit"
+    assert res["coordinator"]["model"] == "openai/gpt-6.1-sol"
+    assert res["pane_id"] == res["orchestrator_pane_id"]
+    payload = _payload(client.prompt_agent.await_args.args[1])
+    assert payload["squad"]["scout"]["kind"] == "agy"
+    assert payload["squad"]["scout"]["model"] == "gemini-3.8-flash-medium"
+    assert payload["squad"]["scout"]["effort"] == "medium"
+
+
+@pytest.mark.asyncio
+async def test_launch_ergo_without_coordinator_keeps_scout_host():
+    client = _client()
+    ctx = _inside()
+    with (
+        patch("herdr_master.pipeline.launcher.resolve_herdr_context", return_value=ctx),
+        patch("herdr_master.pipeline.launcher.ensure_herdr_server", new_callable=AsyncMock),
+    ):
+        res = await launch_ergo(
+            client=client,
+            intent="ship on scout",
+            workspace_label="ergo-scout",
+            squad=Squad(),
+            cwd="/tmp/repo",
+        )
+    assert client.start_agent.await_args.kwargs["kind"] == "agy"
+    assert client.start_agent.await_args.kwargs["args"] == _rpc_args(SCOUT_ARGS)
+    assert res["coordinator_source"] == "scout"
+    assert res["model"] == "gemini-3.8-flash-medium"
+    assert res["coordinator"]["kind"] == "agy"
+
+
+def test_resolve_ergo_coordinator_reads_config_and_override(tmp_path):
+    config_file = tmp_path / ".herdr-master.toml"
+    config_file.write_text(
+        '[ergo]\ncoordinator = "pi:openai/gpt-6.1-sol:high"\n', encoding="utf-8"
+    )
+    configured = resolve_ergo_coordinator(config_path=config_file)
+    assert configured is not None
+    assert configured.kind == HarnessKind.PI
+    assert configured.model == "openai/gpt-6.1-sol"
+    assert configured.effort == EffortLevel.HIGH
+    assert configured.label == "ergo-coordinator"
+
+    override = resolve_ergo_coordinator(
+        "agy:gemini-3.8-flash-medium:medium", config_path=config_file
+    )
+    assert override is not None
+    assert override.kind == HarnessKind.AGY
+    assert override.model == "gemini-3.8-flash-medium"
+    assert override.effort == EffortLevel.MEDIUM
+
+    plain_file = tmp_path / "plain.toml"
+    plain_file.write_text('[general]\ndefault_session = "default"\n', encoding="utf-8")
+    assert resolve_ergo_coordinator(config_path=plain_file) is None

@@ -25,6 +25,7 @@ from herdr_master.core.catalog import (
 from herdr_master.core.config import (
     DEFAULT_ORCHESTRATION_MODELS,
     CouncilMember,
+    ErgoConfig,
     load_project_config,
     project_model_overrides,
     save_project_config,
@@ -378,6 +379,30 @@ def run_skill_setup(*, config: Optional[Path] = None) -> None:
                 previous = old_pool.get(key)
                 if isinstance(previous, dict):
                     cfg.models.worker_pool[key] = {**previous, **entry}
+            current_coordinator = cfg.ergo.coordinator if cfg.ergo else None
+            raw_coordinator = Prompt.ask(
+                "Ergo coordinator binding (harness:model[:effort], empty = same as Scout)",
+                default=current_coordinator.to_slug() if current_coordinator else "",
+            ).strip()
+            if not raw_coordinator:
+                cfg.ergo = None
+            else:
+                parsed = HarnessBinding.from_slug(
+                    raw_coordinator, label="ergo-coordinator"
+                )
+                kind, model, effort = resolve_coordinator_binding(
+                    parsed.kind, parsed.model, parsed.effort
+                )
+                # The catalog role vocabulary has no "coordinator"; use its host role.
+                describe_herdr_agent(
+                    kind.value, model, effort.value if effort else None, "master"
+                )
+                cfg.ergo = ErgoConfig(
+                    coordinator=HarnessBinding(
+                        kind=kind, model=model, effort=effort, label="ergo-coordinator"
+                    )
+                )
+                preview["ergo"] = {"coordinator": cfg.ergo.coordinator.to_slug()}
             preview["models"] = {
                 "roles": cfg.models.default_squad,
                 "worker_pool": cfg.models.worker_pool,
