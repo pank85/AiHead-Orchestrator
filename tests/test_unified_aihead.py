@@ -64,15 +64,19 @@ async def test_delegation_creates_background_workspace_and_forwards_parent(monke
     client.focus_workspace.assert_not_called()
 
 
-def test_ergo_flag_enables_delegated_launch(monkeypatch):
-    monkeypatch.setenv("HERDR_PANE_ID", "caller:p1")
-    with patch("herdr_master.cli.main.launch_ergo", new_callable=AsyncMock) as launch:
-        launch.return_value = {"workspace_id": "new", "pane_id": "new:p1"}
+def test_ergo_flag_launches_and_focuses_workspace(monkeypatch):
+    monkeypatch.setenv("HERDR_ENV", "1")
+    with (
+        patch("herdr_master.cli.main.launch_ergo", new_callable=AsyncMock) as launch,
+        patch("herdr_master.cli.main.os.execvp") as execvp,
+    ):
+        launch.return_value = {"workspace_id": "new", "pane_id": "new:p1", "session": "default"}
         result = runner.invoke(aihead_app, ["--ergo", "test"])
     assert result.exit_code == 0, result.output
-    assert launch.await_args.kwargs["delegated"] is True
+    assert launch.await_args.kwargs["delegated"] is False
     assert launch.await_args.kwargs["fresh_workspace"] is True
-    assert launch.await_args.kwargs["focus"] is False
+    assert launch.await_args.kwargs["focus"] is True
+    execvp.assert_not_called()
 
 
 @pytest.mark.asyncio
@@ -108,21 +112,67 @@ async def test_missing_parent_stops_without_creating_workspace(monkeypatch):
 
 
 @pytest.mark.parametrize("skill", ["council", "orchestration", "herdr-master"])
-def test_other_skills_use_fresh_background_workspace(skill):
+def test_other_skills_use_fresh_focused_workspace(skill, monkeypatch):
+    monkeypatch.setenv("HERDR_ENV", "1")
     function = "launch_master" if skill == "herdr-master" else f"launch_{skill}"
-    with patch(f"herdr_master.cli.main.{function}", new_callable=AsyncMock) as launch:
-        launch.return_value = {"workspace_id": "new", "pane_id": "new:p1"}
-        result = runner.invoke(aihead_app, [f"--{skill}", "test"])
+    args = [f"--{skill}"] if skill == "herdr-master" else [f"--{skill}", "test"]
+    with (
+        patch(f"herdr_master.cli.main.{function}", new_callable=AsyncMock) as launch,
+        patch("herdr_master.cli.main.os.execvp") as execvp,
+    ):
+        launch.return_value = {"workspace_id": "new", "pane_id": "new:p1", "session": "default"}
+        result = runner.invoke(aihead_app, args)
     assert result.exit_code == 0, result.output
-    assert launch.await_args.kwargs["delegated"] is True
+    assert launch.await_args.kwargs["delegated"] is False
     assert launch.await_args.kwargs["fresh_workspace"] is True
-    assert launch.await_args.kwargs["focus"] is False
+    assert launch.await_args.kwargs["focus"] is True
+    if skill == "herdr-master":
+        assert launch.await_args.kwargs["initial_task"] is None
+    execvp.assert_not_called()
 
 
-def test_orchestration_uses_native_defaults_when_config_is_empty():
+def test_skill_outside_herdr_starts_in_terminal(monkeypatch):
+    for var in ("HERDR_ENV", "HERDR_SOCKET_PATH", "HERDR_WORKSPACE_ID", "HERDR_PANE_ID"):
+        monkeypatch.delenv(var, raising=False)
+    with (
+        patch("shutil.which", return_value="/usr/bin/herdr"),
+        patch("herdr_master.cli.main.launch_master", new_callable=AsyncMock) as launch,
+        patch("herdr_master.cli.main.os.execvp") as execvp,
+    ):
+        launch.return_value = {
+            "session": "master-session",
+            "workspace_id": "new",
+            "pane_id": "new:p1",
+        }
+        result = runner.invoke(aihead_app, ["--herdr-master"])
+    assert result.exit_code == 0, result.output
+    assert launch.await_args.kwargs["fresh_workspace"] is True
+    assert launch.await_args.kwargs["focus"] is True
+    assert launch.await_args.kwargs["delegated"] is False
+    execvp.assert_called_once_with("herdr", ["herdr", "--session", "master-session"])
+
+
+@pytest.mark.parametrize(
+    "args",
+    [
+        ["--ergo", "test", "--no-attach"],
+        ["--herdr-master", "--no-attach"],
+        ["--setup", "--no-attach"],
+        ["--tui", "--no-attach"],
+        ["--ergo", "   "],
+    ],
+)
+def test_skill_flags_reject_no_attach_and_blank_objective(args):
+    result = runner.invoke(aihead_app, args)
+    assert result.exit_code != 0
+
+
+def test_orchestration_uses_native_defaults_when_config_is_empty(monkeypatch):
+    monkeypatch.setenv("HERDR_ENV", "1")
     with (
         patch("herdr_master.cli.main.load_project_config", return_value=HerdrMasterConfig()),
         patch("herdr_master.cli.main.launch_orchestration", new_callable=AsyncMock) as launch,
+        patch("herdr_master.cli.main.os.execvp"),
     ):
         launch.return_value = {"workspace_id": "new", "pane_id": "new:p1"}
         result = runner.invoke(aihead_app, ["--orchestration", "test"])

@@ -250,26 +250,34 @@ def test_coder_alias_and_disagreement(monkeypatch, tmp_path):
 def test_tui_delegates_to_aiheaddev():
     with patch("shutil.which", return_value="/usr/local/bin/aiheaddev"), patch("os.execvp") as mock_execvp:
         result = runner.invoke(app, ["tui", "--session", "test-sess"])
-        mock_execvp.assert_called_once_with("/usr/local/bin/aiheaddev", ["/usr/local/bin/aiheaddev", "--session", "test-sess"])
+        mock_execvp.assert_called_once_with(
+            "/usr/local/bin/aiheaddev",
+            ["/usr/local/bin/aiheaddev", "--tui", "--session", "test-sess"],
+        )
 
 
 def test_tui_not_installed_exits_with_help():
     with patch("shutil.which", return_value=None), patch("importlib.util.find_spec", return_value=None):
         result = runner.invoke(app, ["tui"])
         assert result.exit_code != 0
-        assert "AiHeadDev cockpit is not installed" in result.output
+        assert "AiHead-Cockpit is not installed" in result.output
 
 
 def test_plugin_commands_are_path_entrypoints():
     text = (ROOT / "herdr-plugin.toml").read_text(encoding="utf-8")
     assert "/home/pank" not in text
     data = tomllib.loads(text)
-    assert data["panes"][0]["command"] == ["herdm", "tui"]
-    new_workspace = next(item for item in data["actions"] if item["id"] == "new-workspace")
-    assert new_workspace["command"] == ["herdm", "workspace"]
+    assert len(data["panes"]) == 6
+    assert len(data["actions"]) == 6
+    assert data["panes"][0]["id"] == "head"
+    assert data["panes"][0]["command"] == ["herdm", "head"]
+    head_action = next(item for item in data["actions"] if item["id"] == "head")
+    assert "--entrypoint" in head_action["command"]
+    assert "head" in head_action["command"]
+    allowed = {"herdm", "aihead", "python3", "herdr"}
     for section in data["panes"] + data["actions"]:
         command = section["command"]
-        assert command[0] in {"herdm", "herdr"}
+        assert command[0] in allowed
         assert all(not str(part).startswith("/") for part in command)
 
 
@@ -318,9 +326,50 @@ def test_workspace_command_uses_typed_client_not_ergo(monkeypatch, tmp_path):
     argv = opened.call_args.args[0]
     assert argv[:4] == ["herdr", "plugin", "pane", "open"]
     assert "w-created" in argv
-    assert "devswha.herdr-master" in argv
+    assert "pank85.aihead-cockpit" in argv
+    assert "--entrypoint" in argv
+    assert argv[argv.index("--entrypoint") + 1] == "head"
+    assert argv[argv.index("--workspace") + 1] == "w-created"
     launch.assert_not_called()
     client.assert_called_once()
+
+
+def test_workspace_command_fails_when_pane_open_fails(monkeypatch, tmp_path):
+    monkeypatch.chdir(tmp_path)
+    created = {
+        "workspace": {"workspace_id": "w-fail"},
+        "root_pane": {"pane_id": "w-fail:p1"},
+    }
+    instance = AsyncMock()
+    instance.create_workspace.return_value = created
+    with (
+        patch("herdr_master.cli.main.HerdrClient", return_value=instance),
+        patch("herdr_master.cli.main.subprocess.run") as opened,
+    ):
+        opened.return_value = subprocess.CompletedProcess(args=[], returncode=1)
+        result = runner.invoke(
+            app,
+            ["workspace", "--label", "desk", "--cwd", str(tmp_path)],
+        )
+    assert result.exit_code != 0
+    assert "Failed to open the AiHead pane" in result.output
+
+
+def test_workspace_command_fails_when_create_returns_no_id(monkeypatch, tmp_path):
+    monkeypatch.chdir(tmp_path)
+    instance = AsyncMock()
+    instance.create_workspace.return_value = {}
+    with (
+        patch("herdr_master.cli.main.HerdrClient", return_value=instance),
+        patch("herdr_master.cli.main.subprocess.run") as opened,
+    ):
+        result = runner.invoke(
+            app,
+            ["workspace", "--label", "desk", "--cwd", str(tmp_path)],
+        )
+    assert result.exit_code != 0
+    assert "Workspace create returned no workspace_id" in result.output
+    opened.assert_not_called()
 
 
 def test_workspace_failures_do_not_open_or_launch(monkeypatch):

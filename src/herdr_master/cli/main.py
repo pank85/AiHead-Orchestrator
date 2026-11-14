@@ -106,7 +106,7 @@ app.add_typer(catalog_app, name="catalog")
 
 console = Console()
 
-PLUGIN_ID = "devswha.herdr-master"
+PLUGIN_ID = "pank85.aihead-cockpit"
 _HARNESS_HELP = (
     "Coordinator harness ("
     + ", ".join(supported_harnesses(mode="herdr"))
@@ -1148,7 +1148,7 @@ def tui(
     # `aihead` is the herdr-master console script. Do not treat it as AiHeadDev.
     executable = shutil.which("aiheaddev")
     if executable:
-        argv = [executable]
+        argv = [executable, "--tui"]
         if session:
             argv.extend(["--session", session])
         if demo:
@@ -1159,7 +1159,7 @@ def tui(
     try:
         import importlib.util
         if importlib.util.find_spec("aiheaddev") is not None:
-            cmd = [sys.executable, "-m", "aiheaddev.cli"]
+            cmd = [sys.executable, "-m", "aiheaddev.cli", "--tui"]
             if session:
                 cmd.extend(["--session", session])
             if demo:
@@ -1197,7 +1197,7 @@ def workspace_cmd(
     ),
     session: Optional[str] = typer.Option(None, "--session", help=_SESSION_HELP),
 ):
-    """Create a Herdr workspace and open the cockpit. Does not launch Ergo."""
+    """Create a Herdr workspace and open AiHead. Does not launch Ergo."""
     if cwd is None:
         target_cwd = os.getcwd()
     else:
@@ -1218,8 +1218,8 @@ def workspace_cmd(
     created = asyncio.run(_create())
     ws_id = _workspace_id(created)
     if not ws_id:
-        _abort("Workspace create returned no workspace_id. Refusing to open the cockpit.")
-    console.print(f"Opening Herdr-Master Cockpit tab in workspace {ws_id}...")
+        _abort("Workspace create returned no workspace_id. Refusing to open AiHead.")
+    console.print(f"Opening AiHead tab in workspace {ws_id}...")
     completed = subprocess.run(
         [
             "herdr",
@@ -1229,7 +1229,7 @@ def workspace_cmd(
             "--plugin",
             PLUGIN_ID,
             "--entrypoint",
-            "cockpit",
+            "head",
             "--workspace",
             ws_id,
             "--placement",
@@ -1239,7 +1239,7 @@ def workspace_cmd(
         check=False,
     )
     if completed.returncode != 0:
-        _abort("Failed to open the Herdr-Master cockpit pane.")
+        _abort("Failed to open the AiHead pane.")
 
 
 @app.command("install")
@@ -1514,27 +1514,29 @@ def _print_standalone_launch_result(res: Any, fallback_session: str) -> str:
     return str(target_session)
 
 
-def _launch_skill(skill: str, intent: str, session: Optional[str], cwd: Optional[Path],
+def _launch_skill(skill: str, intent: Optional[str], session: Optional[str], cwd: Optional[Path],
                   config: Optional[Path], harness: Optional[str], model: Optional[str],
                   effort: Optional[str]) -> None:
-    """Launch a delegated skill in its own background workspace."""
+    """Start a skill in a new Herdr workspace and switch to it or attach."""
     try:
         ctx = resolve_launch_context(session)
+        if not ctx.is_inside_herdr:
+            _require_herdr_executable("start or attach to the Herdr session")
         client = HerdrClient(session=ctx.session_name, socket_path=ctx.socket_path)
-        label = f"{skill}-{datetime.now().strftime('%Y%m%d-%H%M')}"
+        label = f"{skill}-{datetime.now().strftime('%Y%m%d-%H%M%S')}"
         common = dict(client=client, cwd=str(cwd.resolve()) if cwd else None,
-                      session=session, fresh_workspace=True, focus=False, delegated=True)
+                      session=session, fresh_workspace=True, focus=True, delegated=False)
         if skill == "ergo":
             resolved = _resolve_ergo_once(models=None, scout=None, architect=None,
                                           workers=None, coder=None, reviewer=None, run_squad=None,
                                           project_path=config or cwd)
             operation = launch_ergo(
-                intent=intent, workspace_label=label, squad=resolved.squad,
+                intent=intent or "", workspace_label=label, squad=resolved.squad,
                 coordinator=resolve_ergo_coordinator(None, config_path=config or cwd),
                 **common,
             )
         elif skill == "council":
-            operation = launch_council(intent=intent, workspace_label=label,
+            operation = launch_council(intent=intent or "", workspace_label=label,
                                        council=load_project_config(config or cwd).council, **common)
         elif skill == "orchestration":
             orch = load_project_config(config or cwd).orchestration
@@ -1543,7 +1545,7 @@ def _launch_skill(skill: str, intent: str, session: Optional[str], cwd: Optional
                 orch.sync_harness_to_active(harness)
             defaults = DEFAULT_ORCHESTRATION_MODELS.get(orch.harness.value, {})
             operation = launch_orchestration(
-                intent=intent, workspace_label=label, harness=harness or orch.harness,
+                intent=intent or "", workspace_label=label, harness=harness or orch.harness,
                 scout_model=orch.scout_model or defaults.get("scout", ""),
                 architect_model=orch.architect_model or defaults.get("architect", ""),
                 coder_model=" | ".join(orch.worker_models) or defaults.get("coder", ""),
@@ -1555,10 +1557,13 @@ def _launch_skill(skill: str, intent: str, session: Optional[str], cwd: Optional
             operation = launch_master(name=label, initial_task=intent, config_path=config,
                                       harness=harness, model=model, effort=effort, **common)
         result = asyncio.run(operation)
+        target_session = str((result or {}).get("session") or ctx.session_name)
         typer.echo(
             f"Started {skill}: workspace {result.get('workspace_id')}, "
             f"pane {result.get('pane_id')}"
         )
+        if not ctx.is_inside_herdr:
+            os.execvp("herdr", ["herdr", "--session", target_session])
     except (*_RESOLVE_ERRORS, RuntimeError) as err:
         _abort(str(err))
 
@@ -1566,15 +1571,22 @@ def _launch_skill(skill: str, intent: str, session: Optional[str], cwd: Optional
 @aihead_app.callback(invoke_without_command=True)
 def launch_standalone_aihead(
     ctx: typer.Context,
-    setup: bool = typer.Option(False, "--setup", help="Configure a skill interactively."),
-    tui_flag: bool = typer.Option(False, "--tui", help="Launch the AiHeadDev cockpit."),
-    ergo: Optional[str] = typer.Option(None, "--ergo", help="Delegate an Ergo intent."),
-    council: Optional[str] = typer.Option(None, "--council", help="Delegate a Council intent."),
-    orchestration: Optional[str] = typer.Option(
-        None, "--orchestration", help="Delegate an orchestration intent."
+    setup: bool = typer.Option(False, "--setup", help="Open the settings TUI."),
+    tui_flag: bool = typer.Option(False, "--tui", help="Launch the AiHead-Cockpit TUI."),
+    menu: bool = typer.Option(
+        False, "--menu", help="Open the AiHead menu in a Herdr command pane."
     ),
-    herdr_master: Optional[str] = typer.Option(
-        None, "--herdr-master", help="Delegate multiple jobs."
+    ergo: Optional[str] = typer.Option(
+        None, "--ergo", help="Start Ergo in a new Herdr workspace."
+    ),
+    council: Optional[str] = typer.Option(
+        None, "--council", help="Start Council in a new Herdr workspace."
+    ),
+    orchestration: Optional[str] = typer.Option(
+        None, "--orchestration", help="Start Orchestration in a new Herdr workspace."
+    ),
+    herdr_master: bool = typer.Option(
+        False, "--herdr-master", help="Start Herdr Master in a new Herdr workspace."
     ),
     harness: Optional[str] = typer.Option(
         None,
@@ -1645,34 +1657,70 @@ def launch_standalone_aihead(
     ),
 ) -> None:
     """Launch an interactive AiHead session in a Herdr workspace."""
-    skills = [(name, value) for name, value in (
-        ("ergo", ergo), ("council", council), ("orchestration", orchestration),
-        ("herdr-master", herdr_master),
-    ) if value is not None]
-    if len(skills) + int(tui_flag) + int(setup) > 1 or (
-        task is not None and (skills or tui_flag or setup)
+    skills: list[tuple[str, Optional[str]]] = [
+        (name, value)
+        for name, value in (
+            ("ergo", ergo),
+            ("council", council),
+            ("orchestration", orchestration),
+        )
+        if value is not None
+    ]
+    if herdr_master:
+        skills.append(("herdr-master", None))
+    if len(skills) + int(tui_flag) + int(setup) + int(menu) > 1 or (
+        task is not None and (skills or tui_flag or setup or menu)
     ):
         _abort("Choose only one launch mode.")
     if setup:
+        if not attach:
+            _abort("--no-attach is not supported with --setup.")
         if harness is not None or model is not None or effort is not None:
             _abort("Configure bindings in the wizard, not with launch overrides.")
-        target = config
+        target = config.expanduser() if config is not None else None
         if target is None and cwd is not None:
             target = find_project_config_path(cwd) or cwd / ".herdr-master.toml"
         run_skill_setup(config=target)
         return
     if tui_flag:
+        if not attach:
+            _abort("--no-attach is not supported with --tui.")
         tui(session=session, demo=False)
         return
+    if menu:
+        if not attach:
+            _abort("--no-attach is not supported with --menu.")
+        if session is not None:
+            _abort("--session is not supported with --menu.")
+        from herdr_master.menu import MenuError, run_menu
+
+        try:
+            run_menu()
+        except MenuError as err:
+            _abort(str(err))
+        return
     if skills:
+        if not attach:
+            _abort("--no-attach is not supported with skill launch flags.")
+        skill_name, skill_intent = skills[0]
+        if skill_name in ("ergo", "council", "orchestration") and not (skill_intent or "").strip():
+            _abort(f"--{skill_name} requires a non-empty objective.")
         if config is not None and not config.expanduser().exists():
             _abort(f"Configuration file not found: {config}")
-        if skills[0][0] != "herdr-master" and (model is not None or effort is not None):
+        if skill_name != "herdr-master" and (model is not None or effort is not None):
             _abort("--model and --effort apply to AiHead or Herdr Master only.")
-        if skills[0][0] not in ("herdr-master", "orchestration") and harness is not None:
+        if skill_name not in ("herdr-master", "orchestration") and harness is not None:
             _abort("--harness is not supported for this skill; configure its bindings instead.")
-        _launch_skill(skills[0][0], skills[0][1], session, cwd,
-                      config.expanduser() if config else None, harness, model, effort)
+        _launch_skill(
+            skill_name,
+            skill_intent,
+            session,
+            cwd,
+            config.expanduser() if config else None,
+            harness,
+            model,
+            effort,
+        )
         return
     if all(ctx.get_parameter_source(name).name == "DEFAULT" for name in ctx.params):
         typer.echo(ctx.get_help())

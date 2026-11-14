@@ -189,24 +189,28 @@ aihead --help
 
 `herdm` is deprecated; its existing subcommands remain available for compatibility.
 
-Quick start: `aihead` shows help without launching. Use `aihead --task "..."` for
-interactive AiHead, `aihead --tui` for the cockpit, or delegate in the background:
-Delegation requires the caller's `HERDR_PANE_ID` or a unique existing `ai-head` pane;
-otherwise it stops rather than launching an unparented agent.
+Quick start: `aihead --tui` starts the cockpit, `aihead --setup` opens the
+interactive settings TUI, and `aihead --task "..."` starts interactive AiHead
+without needing the cockpit.
 
-Run `aihead --setup` to choose `aihead`, `ergo`, `orchestration`, `council`,
-`herdr-master`, or `all` and configure that skill. Use `--config PATH` for a
-specific TOML file. The wizard previews changes and saves only after confirmation;
-cancelling or invalid input leaves the file unchanged. Ergo bindings can use
-different harnesses; orchestration uses one selected harness for all its models.
-The optional `[master_coordinator]` binding supplies the master launcher default;
-explicit launcher overrides take precedence.
+Run `aihead --setup` (with optional `--config <absolute .herdr-master.toml>`)
+to open the single-screen settings TUI. The settings screen covers `aihead`,
+`ergo`, `orchestration`, `council`, `herdr-master`, and the `worker-pool`
+(worker pool). Cancelling leaves the configuration file unchanged. Ergo bindings
+can use different harnesses; orchestration uses one selected harness for all
+its models; `[master_coordinator]` supplies the master launcher default.
+
+The four skill launch flags start that skill in a new Herdr workspace and switch
+to it when Herdr can switch (or attach/start it in a terminal when switching is
+unavailable, without `--no-attach`):
 
 ```bash
+aihead --setup --config /path/to/.herdr-master.toml
+aihead --tui
+aihead --herdr-master
 aihead --ergo "Implement Redis rate limiting middleware"
-aihead --council "Architect the telemetry pipeline"
 aihead --orchestration "Implement a rate limiter"
-aihead --herdr-master "Audit the microservices roadmap"
+aihead --council "Architect the telemetry pipeline"
 ```
 
 ### 1. Workspace Initialization & Status
@@ -248,11 +252,11 @@ aihead --council "Architect event-driven telemetry pipeline"
 
 ### 5. Launch Root Herdr Master (Multiple Jobs)
 ```bash
-# Launch master coordinator to supervise multiple tasks
-herdm master start --name backend-lead
+# Launch Herdr Master in a new Herdr workspace
+aihead --herdr-master
 
-# Launch with an initial task
-aihead --herdr-master "Audit microservices roadmap"
+# Or via deprecated compatibility CLI
+herdm master start --name backend-lead
 ```
 
 ### 6. Interactive AiHead & Headless Decisions
