@@ -1,27 +1,90 @@
-id = "devswha.herdr-master"
-name = "herdr-master"
+id = "pank85.aihead-cockpit"
+name = "AiHead"
 version = "0.1.0"
-min_herdr_version = "0.9.0"
-description = "Universal multi-master, multi-worker cross-harness AI agent orchestrator & cockpit TUI"
+min_herdr_version = "0.9.5"
+description = "AiHead orchestration actions for Herdr workspaces"
 platforms = ["linux", "macos"]
 
 [[panes]]
-id = "cockpit"
-title = "Herdr-Master Cockpit"
+id = "head"
+title = "AiHead"
 placement = "tab"
-command = ["herdm", "tui"]
+command = ["herdm", "head"]
+platforms = ["linux", "macos"]
+
+[[panes]]
+id = "master"
+title = "New Master"
+placement = "tab"
+command = ["aihead", "--herdr-master"]
+platforms = ["linux", "macos"]
+
+[[panes]]
+id = "ergo"
+title = "New Ergo"
+placement = "tab"
+command = ["python3", "src/herdr_master/menu.py", "ergo"]
+platforms = ["linux", "macos"]
+
+[[panes]]
+id = "orchestration"
+title = "Orchestrate"
+placement = "tab"
+command = ["python3", "src/herdr_master/menu.py", "orchestration"]
+platforms = ["linux", "macos"]
+
+[[panes]]
+id = "council"
+title = "AI Council"
+placement = "tab"
+command = ["python3", "src/herdr_master/menu.py", "council"]
+platforms = ["linux", "macos"]
+
+[[panes]]
+id = "settings"
+title = "Settings"
+placement = "tab"
+command = ["python3", "src/herdr_master/menu.py", "settings"]
 platforms = ["linux", "macos"]
 
 [[actions]]
-id = "cockpit"
-title = "Open Herdr-Master Cockpit"
+id = "head"
+title = "AiHead"
 contexts = ["workspace"]
-command = ["herdr", "plugin", "pane", "open", "--plugin", "devswha.herdr-master", "--entrypoint", "cockpit", "--placement", "tab", "--focus"]
+command = ["herdr", "plugin", "pane", "open", "--plugin", "pank85.aihead-cockpit", "--entrypoint", "head", "--placement", "tab", "--focus"]
 platforms = ["linux", "macos"]
 
 [[actions]]
-id = "new-workspace"
-title = "New Herdr-Master Workspace"
+id = "master"
+title = "New Master"
 contexts = ["workspace"]
-command = ["herdm", "workspace"]
+command = ["herdr", "plugin", "pane", "open", "--plugin", "pank85.aihead-cockpit", "--entrypoint", "master", "--placement", "tab", "--focus"]
+platforms = ["linux", "macos"]
+
+[[actions]]
+id = "ergo"
+title = "New Ergo"
+contexts = ["workspace"]
+command = ["herdr", "plugin", "pane", "open", "--plugin", "pank85.aihead-cockpit", "--entrypoint", "ergo", "--placement", "tab", "--focus"]
+platforms = ["linux", "macos"]
+
+[[actions]]
+id = "orchestration"
+title = "Orchestrate"
+contexts = ["workspace"]
+command = ["herdr", "plugin", "pane", "open", "--plugin", "pank85.aihead-cockpit", "--entrypoint", "orchestration", "--placement", "tab", "--focus"]
+platforms = ["linux", "macos"]
+
+[[actions]]
+id = "council"
+title = "AI Council"
+contexts = ["workspace"]
+command = ["herdr", "plugin", "pane", "open", "--plugin", "pank85.aihead-cockpit", "--entrypoint", "council", "--placement", "tab", "--focus"]
+platforms = ["linux", "macos"]
+
+[[actions]]
+id = "settings"
+title = "Settings"
+contexts = ["workspace"]
+command = ["python3", "src/herdr_master/menu.py", "settings-open"]
 platforms = ["linux", "macos"]

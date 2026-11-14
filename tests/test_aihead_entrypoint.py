@@ -13,12 +13,14 @@ from pathlib import Path
 from types import SimpleNamespace
 from unittest.mock import AsyncMock, patch
 
+import pytest
 from typer.testing import CliRunner
 
 from herdr_master.cli.main import aihead_app, app
 from herdr_master.core.context import HerdrContext
 from herdr_master.core.models import EffortLevel, HarnessKind
 from herdr_master.herdr.socket import HerdrConnectionError, HerdrRPCError
+from herdr_master.menu import MenuError
 
 runner = CliRunner()
 
@@ -96,6 +98,7 @@ def test_aihead_app_help_is_a_direct_launch_command():
     for option in (
         "--task",
         "-t",
+        "--menu",
         "--harness",
         "--model",
         "--effort",
@@ -697,3 +700,71 @@ def test_standalone_forwards_permission_precedence_with_effort(tmp_path: Path):
         assert kwargs["effort"] is expected_effort
         headless.assert_not_called()
         execvp.assert_not_called()
+
+
+def test_menu_flag_dispatches_lazily_and_calls_run_menu_once():
+    with (
+        patch("herdr_master.menu.run_menu") as run_mock,
+        patch("herdr_master.cli.main.launch_ai_head", new_callable=AsyncMock) as launch,
+        patch("herdr_master.cli.main.ensure_herdr_server", new_callable=AsyncMock) as server,
+        patch("herdr_master.cli.main.tui") as tui_mock,
+        patch("herdr_master.cli.main.resolve_launch_context") as resolve_ctx,
+        patch("herdr_master.pipeline.ai_head.execute_cli_decision_sync") as headless,
+    ):
+        result = runner.invoke(aihead_app, ["--menu"])
+    assert result.exit_code == 0, _output(result)
+    run_mock.assert_called_once_with()
+    launch.assert_not_called()
+    server.assert_not_called()
+    tui_mock.assert_not_called()
+    resolve_ctx.assert_not_called()
+    headless.assert_not_called()
+
+
+def test_menu_flag_menu_error_aborts_cleanly():
+    with (
+        patch(
+            "herdr_master.menu.run_menu",
+            side_effect=MenuError("no usable focused project"),
+        ) as run_mock,
+        patch("herdr_master.cli.main.launch_ai_head", new_callable=AsyncMock) as launch,
+        patch("herdr_master.cli.main.ensure_herdr_server", new_callable=AsyncMock) as server,
+        patch("herdr_master.cli.main.tui") as tui_mock,
+        patch("herdr_master.cli.main.resolve_launch_context") as resolve_ctx,
+        patch("herdr_master.pipeline.ai_head.execute_cli_decision_sync") as headless,
+    ):
+        result = runner.invoke(aihead_app, ["--menu"])
+    assert result.exit_code == 1
+    assert "no usable focused project" in _output(result)
+    run_mock.assert_called_once_with()
+    launch.assert_not_called()
+    server.assert_not_called()
+    tui_mock.assert_not_called()
+    resolve_ctx.assert_not_called()
+    headless.assert_not_called()
+
+
+@pytest.mark.parametrize(
+    ("flags", "expected_err"),
+    [
+        (["--menu", "--setup"], "Choose only one launch mode"),
+        (["--menu", "--tui"], "Choose only one launch mode"),
+        (["--menu", "--herdr-master"], "Choose only one launch mode"),
+        (["--menu", "--ergo", "test"], "Choose only one launch mode"),
+        (["--menu", "--council", "test"], "Choose only one launch mode"),
+        (["--menu", "--orchestration", "test"], "Choose only one launch mode"),
+        (["--menu", "--task", "test"], "Choose only one launch mode"),
+        (["--menu", "--session", "alpha"], "--session is not supported with --menu"),
+        (["--menu", "--no-attach"], "--no-attach is not supported with --menu"),
+    ],
+)
+def test_menu_flag_conflicts_are_rejected(flags: list[str], expected_err: str):
+    with (
+        patch("herdr_master.menu.run_menu") as run_mock,
+        patch("herdr_master.cli.main.launch_ai_head", new_callable=AsyncMock) as launch,
+    ):
+        result = runner.invoke(aihead_app, flags)
+    assert result.exit_code != 0
+    assert expected_err in _output(result)
+    run_mock.assert_not_called()
+    launch.assert_not_called()

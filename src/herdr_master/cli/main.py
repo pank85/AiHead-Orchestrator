@@ -106,7 +106,7 @@ app.add_typer(catalog_app, name="catalog")
 
 console = Console()
 
-PLUGIN_ID = "devswha.herdr-master"
+PLUGIN_ID = "pank85.aihead-cockpit"
 _HARNESS_HELP = (
     "Coordinator harness ("
     + ", ".join(supported_harnesses(mode="herdr"))
@@ -1197,7 +1197,7 @@ def workspace_cmd(
     ),
     session: Optional[str] = typer.Option(None, "--session", help=_SESSION_HELP),
 ):
-    """Create a Herdr workspace and open the cockpit. Does not launch Ergo."""
+    """Create a Herdr workspace and open AiHead. Does not launch Ergo."""
     if cwd is None:
         target_cwd = os.getcwd()
     else:
@@ -1218,8 +1218,8 @@ def workspace_cmd(
     created = asyncio.run(_create())
     ws_id = _workspace_id(created)
     if not ws_id:
-        _abort("Workspace create returned no workspace_id. Refusing to open the cockpit.")
-    console.print(f"Opening Herdr-Master Cockpit tab in workspace {ws_id}...")
+        _abort("Workspace create returned no workspace_id. Refusing to open AiHead.")
+    console.print(f"Opening AiHead tab in workspace {ws_id}...")
     completed = subprocess.run(
         [
             "herdr",
@@ -1229,7 +1229,7 @@ def workspace_cmd(
             "--plugin",
             PLUGIN_ID,
             "--entrypoint",
-            "cockpit",
+            "head",
             "--workspace",
             ws_id,
             "--placement",
@@ -1239,7 +1239,7 @@ def workspace_cmd(
         check=False,
     )
     if completed.returncode != 0:
-        _abort("Failed to open the Herdr-Master cockpit pane.")
+        _abort("Failed to open the AiHead pane.")
 
 
 @app.command("install")
@@ -1573,6 +1573,9 @@ def launch_standalone_aihead(
     ctx: typer.Context,
     setup: bool = typer.Option(False, "--setup", help="Open the settings TUI."),
     tui_flag: bool = typer.Option(False, "--tui", help="Launch the AiHead-Cockpit TUI."),
+    menu: bool = typer.Option(
+        False, "--menu", help="Open the AiHead menu in a Herdr command pane."
+    ),
     ergo: Optional[str] = typer.Option(
         None, "--ergo", help="Start Ergo in a new Herdr workspace."
     ),
@@ -1665,8 +1668,8 @@ def launch_standalone_aihead(
     ]
     if herdr_master:
         skills.append(("herdr-master", None))
-    if len(skills) + int(tui_flag) + int(setup) > 1 or (
-        task is not None and (skills or tui_flag or setup)
+    if len(skills) + int(tui_flag) + int(setup) + int(menu) > 1 or (
+        task is not None and (skills or tui_flag or setup or menu)
     ):
         _abort("Choose only one launch mode.")
     if setup:
@@ -1683,6 +1686,18 @@ def launch_standalone_aihead(
         if not attach:
             _abort("--no-attach is not supported with --tui.")
         tui(session=session, demo=False)
+        return
+    if menu:
+        if not attach:
+            _abort("--no-attach is not supported with --menu.")
+        if session is not None:
+            _abort("--session is not supported with --menu.")
+        from herdr_master.menu import MenuError, run_menu
+
+        try:
+            run_menu()
+        except MenuError as err:
+            _abort(str(err))
         return
     if skills:
         if not attach:
