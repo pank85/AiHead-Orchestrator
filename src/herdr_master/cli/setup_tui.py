@@ -21,9 +21,18 @@ from rich.panel import Panel
 from rich.text import Text
 
 from herdr_master.cli.setup_catalog import ChoiceOption, ModelCatalog, discover_model_catalog
+from herdr_master.core.available_models import (
+    enabled_model_ids,
+    filter_model_ids,
+    is_all_enabled,
+    materialize_toggle,
+    materialize_toggle_all,
+)
 from herdr_master.core.catalog import (
+    _FLASH_BASE,
     CatalogError,
     HarnessKind,
+    _allowed_efforts,
     describe_herdr_agent,
     ensure_herdr_routable,
     get_harness,
@@ -51,7 +60,7 @@ SECTIONS: Tuple[Tuple[str, str], ...] = (
     ("orchestration", "orchestration"),
     ("council", "council"),
     ("herdr-master", "herdr-master"),
-    ("worker-pool", "worker-pool"),
+    ("models", "Available"),
 )
 
 
@@ -100,6 +109,25 @@ def _effort_str(binding: HarnessBinding) -> Optional[str]:
     return binding.effort.value if binding.effort else None
 
 
+_ENCODED_EFFORT_SUFFIXES = ("-low", "-medium", "-high", "-max", "-xhigh")
+
+
+def _herdr_effort_separate(kind: str, model: str) -> bool:
+    """Whether Herdr mode has a separate Effort selector for this binding.
+
+    ``agy`` slugs such as ``gemini-3.8-flash-high`` or ``claude-opus-5-5-medium``
+    already encode the tier. An empty allowed-effort list means the same thing:
+    there is nothing to pick, so the row would only restate the slug.
+    """
+    if kind != "agy":
+        return True
+    allowed = _allowed_efforts(kind, model or "", mode="herdr")
+    if not allowed:
+        return False
+    slug = (model or "").strip().lower()
+    return not slug.endswith(_ENCODED_EFFORT_SUFFIXES)
+
+
 class SetupTuiApp:
     """One-screen interactive setup state machine, renderer, and headless driver."""
 
@@ -128,6 +156,13 @@ class SetupTuiApp:
         self.field_cursors: Dict[str, int] = {sec_id: 0 for sec_id, _ in SECTIONS}
         self.field_scroll: Dict[str, int] = {sec_id: 0 for sec_id, _ in SECTIONS}
         self.picker: Optional[PickerState] = None
+        # View-only Available filters. Mode and harness are not written to TOML.
+        self.available_view_mode: str = "herdr"
+        self.available_view_harness: Optional[str] = None
+        # Parallel to available.toggle.<index> so model ids never enter dotted keys.
+        self._available_toggle_ids: List[str] = []
+        self._available_toggle_mode: str = "herdr"
+        self._available_toggle_harness: str = ""
 
         self.dirty: bool = False
         self.done: bool = False
@@ -191,6 +226,30 @@ class SetupTuiApp:
             self.master_coordinator = HarnessBinding(
                 kind=kind, model=model, effort=effort, label="master-coordinator"
             )
+        self._clear_redundant_herdr_efforts()
+
+    def _clear_redundant_herdr_efforts(self) -> None:
+        """Drop effort that an agy Herdr slug already encodes.
+
+        Worker-pool effort stays unset so the Architect can choose it per task.
+        Persistence remains ``[models.worker_pool]``.
+        """
+        bindings = [
+            self.cfg.ai_head.binding,
+            self.squad.scout,
+            self.squad.architect,
+            self.squad.reviewer,
+            self.ergo_coordinator,
+            self.master_coordinator,
+            self.cfg.council.coordinator,
+            self.cfg.council.scout,
+            *self.cfg.council.members,
+        ]
+        for binding in bindings:
+            if not _herdr_effort_separate(binding.kind.value, binding.model):
+                binding.effort = None
+        for worker in self.squad.worker_pool:
+            worker.effort = None
 
     @property
     def current_section(self) -> str:
@@ -212,7 +271,9 @@ class SetupTuiApp:
         if models and all(opt.value != binding.model for opt in models):
             binding.model = str(models[0].value)
 
-        if not allow_effort:
+        if allow_effort and binding.kind.value == "agy" and binding.model == _FLASH_BASE:
+            allow_none_effort = False
+        if not allow_effort or not _herdr_effort_separate(binding.kind.value, binding.model):
             binding.effort = None
             return
 
@@ -260,6 +321,204 @@ class SetupTuiApp:
                 w if w in valid_values else coder_default for w in orch.worker_models
             ]
 
+    def _filtered_model_options(
+        self,
+        kind: str,
+        *,
+        mode: str,
+        current: Optional[str] = None,
+    ) -> Tuple[List[ChoiceOption], str]:
+        """Intersect a catalog model picker with the allowlist.
+
+        Unrestricted scopes return the catalog list unchanged. A restricted
+        scope keeps discovered order, then appends ``current`` when missing.
+        An empty intersection sets the Available hint even if ``current`` remains.
+        """
+        options = self.catalog.models(kind, mode=mode, current=current)
+        discovered = [str(opt.value) for opt in options]
+        filtered = filter_model_ids(
+            self.cfg.models.available,
+            mode,
+            kind,
+            discovered,
+            current=current,
+        )
+        if filtered is discovered:
+            return options, ""
+        by_value = {str(opt.value): opt for opt in options}
+        rebuilt = [
+            by_value[model_id]
+            if model_id in by_value
+            else ChoiceOption(value=model_id, label=model_id, detail="current")
+            for model_id in filtered
+        ]
+        allowlist = enabled_model_ids(self.cfg.models.available, mode, kind)
+        intersection_empty = allowlist is not None and not any(
+            model_id in set(allowlist) for model_id in discovered
+        )
+        if intersection_empty:
+            return rebuilt, "no models enabled in Available"
+        return rebuilt, ""
+
+    def _available_enabled_summary(self) -> str:
+        """Sidebar text: unrestricted, or a short count of saved enabled ids."""
+        available = self.cfg.models.available
+        if available is None:
+            return "unrestricted"
+        total = 0
+        restricted = 0
+        for mode in ("herdr", "native"):
+            mode_map = getattr(available, mode, None) or {}
+            for ids in mode_map.values():
+                restricted += 1
+                total += len(ids)
+        if restricted == 0:
+            return "unrestricted"
+        return f"{total} enabled"
+
+    def _available_rows(self) -> List[FieldRow]:
+        """Rebuild Available rows. Bool keys are indexes, never model ids."""
+        mode = self.available_view_mode
+        if mode not in ("herdr", "native"):
+            mode = "herdr"
+        self.available_view_mode = mode
+        harnesses = self.catalog.harnesses(mode=mode)
+        harness_values = [str(opt.value) for opt in harnesses]
+        harness = self.available_view_harness or ""
+        if harness not in harness_values:
+            harness = ""
+        if not harness and harness_values:
+            harness = harness_values[0]
+        self.available_view_harness = harness or None
+        models = self.catalog.models(harness, mode=mode, current=None) if harness else []
+        ids = [str(opt.value) for opt in models]
+        self._available_toggle_ids = ids
+        self._available_toggle_mode = mode
+        self._available_toggle_harness = harness
+        enabled = (
+            enabled_model_ids(self.cfg.models.available, mode, harness) if harness else None
+        )
+        enabled_set = None if enabled is None else set(enabled)
+        all_enabled = (
+            is_all_enabled(self.cfg.models.available, mode, harness, ids)
+            if harness
+            else True
+        )
+        rows = [
+            FieldRow(
+                key="available.view.mode",
+                group="Allowlist View",
+                label="Mode",
+                kind="choice",
+                value_text=mode,
+                options=[
+                    ChoiceOption("herdr", "herdr", "Herdr agent bindings"),
+                    ChoiceOption("native", "native", "native orchestration ids"),
+                ],
+                current_value=mode,
+                hint="View herdr or native models (not saved)",
+            ),
+            FieldRow(
+                key="available.view.harness",
+                group="Allowlist View",
+                label="Harness",
+                kind="choice",
+                value_text=harness or "(none)",
+                options=harnesses,
+                current_value=harness,
+                hint="View one harness allowlist (not saved)",
+            ),
+            FieldRow(
+                key="available.all",
+                group="Models",
+                label="All",
+                kind="bool",
+                value_text="true" if all_enabled else "false",
+                options=[ChoiceOption(True, "true"), ChoiceOption(False, "false")],
+                current_value=all_enabled,
+                hint="Enable or disable all models for this harness",
+            ),
+        ]
+        for index, opt in enumerate(models):
+            model_id = ids[index]
+            checked = enabled_set is None or model_id in enabled_set
+            rows.append(
+                FieldRow(
+                    key=f"available.toggle.{index}",
+                    group="Models",
+                    label=opt.label,
+                    kind="bool",
+                    value_text="true" if checked else "false",
+                    options=[ChoiceOption(True, "true"), ChoiceOption(False, "false")],
+                    current_value=checked,
+                    hint="Toggle this model in the allowlist",
+                )
+            )
+        return rows
+
+    def _apply_available_field(self, parts: List[str], value: Any) -> bool:
+        """Apply an Available field. False means view-only or rejected (not dirty)."""
+        if (len(parts) == 2 and parts[1] == "all") or (
+            len(parts) == 3 and parts[1] == "toggle" and parts[2] == "all"
+        ):
+            harness = self._available_toggle_harness
+            if not harness:
+                self._set_status("No harness selected for Available.", error=True)
+                return False
+            self.cfg.models.available = materialize_toggle_all(
+                self.cfg.models.available,
+                self._available_toggle_mode,
+                harness,
+                bool(value),
+                list(self._available_toggle_ids),
+            )
+            return True
+        if len(parts) < 3:
+            self._set_status(f"Unknown available field {'.'.join(parts)}", error=True)
+            return False
+        if parts[1] == "view":
+            if parts[2] == "mode":
+                self.available_view_mode = str(value)
+                harnesses = self.catalog.harnesses(mode=self.available_view_mode)
+                valid = {str(opt.value) for opt in harnesses}
+                if self.available_view_harness not in valid:
+                    self.available_view_harness = (
+                        str(harnesses[0].value) if harnesses else None
+                    )
+            elif parts[2] == "harness":
+                self.available_view_harness = str(value)
+            else:
+                self._set_status(f"Unknown available view {parts[2]}", error=True)
+                return False
+            shown = self.available_view_harness or "-"
+            self._set_status(f"Viewing {self.available_view_mode} {shown}")
+            return False
+        if parts[1] != "toggle":
+            self._set_status(f"Unknown available field {'.'.join(parts)}", error=True)
+            return False
+        try:
+            index = int(parts[2])
+        except ValueError:
+            self._set_status("Available toggle key must be an index.", error=True)
+            return False
+        if index < 0 or index >= len(self._available_toggle_ids):
+            self._set_status("Available model list changed; toggle again.", error=True)
+            return False
+        harness = self._available_toggle_harness
+        if not harness:
+            self._set_status("No harness selected for Available.", error=True)
+            return False
+        model_id = self._available_toggle_ids[index]
+        self.cfg.models.available = materialize_toggle(
+            self.cfg.models.available,
+            self._available_toggle_mode,
+            harness,
+            model_id,
+            bool(value),
+            list(self._available_toggle_ids),
+        )
+        return True
+
     def _binding_rows(
         self,
         prefix: str,
@@ -273,7 +532,9 @@ class SetupTuiApp:
     ) -> List[FieldRow]:
         kind = binding.kind.value
         harnesses = self.catalog.harnesses(mode="herdr")
-        models = self.catalog.models(kind, mode="herdr", current=binding.model)
+        models, empty_hint = self._filtered_model_options(
+            kind, mode="herdr", current=binding.model
+        )
         eff_options = self.catalog.efforts(
             kind, binding.model, mode="herdr", allow_none=allow_none_effort
         )
@@ -298,11 +559,12 @@ class SetupTuiApp:
                 value_text=binding.model,
                 options=models,
                 current_value=binding.model,
-                hint=f"Select {kind} model from live catalog/models",
+                hint=empty_hint or f"Select {kind} model from live catalog/models",
                 deletable_id=deletable_id,
             ),
         ]
-        if allow_effort:
+        show_effort = allow_effort and _herdr_effort_separate(kind, binding.model)
+        if show_effort:
             cur_eff = _effort_str(binding)
             rows.append(
                 FieldRow(
@@ -409,6 +671,16 @@ class SetupTuiApp:
                         current_value=ah.dangerously_skip_permissions,
                         hint="Pass permission-skip flag to harness",
                     ),
+                    FieldRow(
+                        key="aihead.automode",
+                        group="AiHead Options",
+                        label="Automode",
+                        kind="bool",
+                        value_text="true" if ah.automode else "false",
+                        options=[ChoiceOption(True, "true"), ChoiceOption(False, "false")],
+                        current_value=ah.automode,
+                        hint="Compose Ergo/Orchestration squads from Available models",
+                    ),
                 ]
             )
             return rows
@@ -440,7 +712,7 @@ class SetupTuiApp:
                 )
             for role in ("scout", "architect", "reviewer"):
                 binding = getattr(self.squad, role)
-                needs_effort = binding.kind.value == "agy" and binding.model == "gemini-3.8-flash"
+                needs_effort = binding.kind.value == "agy" and binding.model == _FLASH_BASE
                 rows.extend(
                     self._binding_rows(
                         f"ergo.{role}",
@@ -449,6 +721,7 @@ class SetupTuiApp:
                         allow_none_effort=not needs_effort,
                     )
                 )
+            rows.extend(self._worker_pool_rows())
             return rows
 
         if section == "orchestration":
@@ -471,7 +744,9 @@ class SetupTuiApp:
             for role in ("scout", "architect", "reviewer"):
                 cur_model = getattr(orch, f"{role}_model") or defaults.get(role, "")
                 cur_eff = getattr(orch, f"{role}_effort")
-                model_opts = self.catalog.models(host, mode="native", current=cur_model)
+                model_opts, empty_hint = self._filtered_model_options(
+                    host, mode="native", current=cur_model
+                )
                 eff_opts = self.catalog.efforts(
                     host, cur_model, mode="native", allow_none=True
                 )
@@ -484,7 +759,7 @@ class SetupTuiApp:
                         value_text=cur_model or "(unset)",
                         options=model_opts,
                         current_value=cur_model,
-                        hint=f"Select {host} native model for {role}",
+                        hint=empty_hint or f"Select {host} native model for {role}",
                     )
                 )
                 rows.append(
@@ -502,7 +777,9 @@ class SetupTuiApp:
 
             worker_list = orch.worker_models or [defaults.get("coder", "")]
             for idx, w_model in enumerate(worker_list):
-                model_opts = self.catalog.models(host, mode="native", current=w_model)
+                model_opts, empty_hint = self._filtered_model_options(
+                    host, mode="native", current=w_model
+                )
                 rows.append(
                     FieldRow(
                         key=f"orch.worker.{idx}",
@@ -512,7 +789,8 @@ class SetupTuiApp:
                         value_text=w_model or "(unset)",
                         options=model_opts,
                         current_value=w_model,
-                        hint="Select worker model (press A to add, D to remove)",
+                        hint=empty_hint
+                        or "Select worker model (press A to add, D to remove)",
                         deletable_id=("orch_worker", idx),
                     )
                 )
@@ -623,8 +901,13 @@ class SetupTuiApp:
             )
             return rows
 
-        # section == "worker-pool"
-        rows = []
+        if section == "models":
+            return self._available_rows()
+
+        return []
+
+    def _worker_pool_rows(self) -> List[FieldRow]:
+        rows: List[FieldRow] = []
         for idx, worker in enumerate(self.squad.worker_pool):
             label = worker.label or f"worker-{idx + 1}"
             tag = ("pool_worker", idx)
@@ -701,10 +984,9 @@ class SetupTuiApp:
             )
         elif attr == "model":
             binding.model = str(value)
-            if allow_effort:
-                self._reconcile_binding(
-                    binding, allow_effort=True, allow_none_effort=allow_none_effort
-                )
+            self._reconcile_binding(
+                binding, allow_effort=allow_effort, allow_none_effort=allow_none_effort
+            )
         elif attr == "effort":
             binding.effort = _effort_enum(value)
 
@@ -731,12 +1013,7 @@ class SetupTuiApp:
             else:
                 role, attr = parts[1], parts[2]
                 binding = getattr(self.squad, role)
-                needs_effort = (
-                    binding.kind.value == "agy" and binding.model == "gemini-3.8-flash"
-                )
-                self._apply_binding_change(
-                    binding, attr, value, allow_none_effort=not needs_effort
-                )
+                self._apply_binding_change(binding, attr, value)
 
         elif root == "orch":
             orch = self.cfg.orchestration
@@ -786,6 +1063,10 @@ class SetupTuiApp:
             else:
                 self.master_custom_coordinator = True
                 self._apply_binding_change(self.master_coordinator, parts[1], value)
+
+        elif root == "available":
+            if not self._apply_available_field(parts, value):
+                return
 
         elif root == "pool":
             idx, attr = int(parts[1]), parts[2]
@@ -964,6 +1245,7 @@ class SetupTuiApp:
         """Validate every skill and return a fresh validated (cfg, squad) pair."""
         from herdr_master.pipeline.launcher import resolve_coordinator_binding
 
+        self._clear_redundant_herdr_efforts()
         cfg = self.cfg.model_copy(deep=True)
         squad = self.squad.model_copy(deep=True)
         for worker in squad.worker_pool:
@@ -1246,7 +1528,7 @@ class SetupTuiApp:
                 self._run_action("orch.worker_add")
             elif self.current_section == "council":
                 self._run_action("council.member_add")
-            elif self.current_section == "worker-pool":
+            elif self.current_section == "ergo":
                 self._run_action("pool.add")
         elif key in ("d", "D", "DELETE", "BACKSPACE") and row is not None:
             if row.deletable_id is not None:
@@ -1265,7 +1547,12 @@ class SetupTuiApp:
             b = self.cfg.ai_head.binding
             text = f"{b.kind.value}:{b.model}"
         elif section == "ergo":
-            text = f"s={self.squad.scout.kind.value} a={self.squad.architect.kind.value}"
+            enabled_w = sum(1 for w in self.squad.worker_pool if w.enabled)
+            text = (
+                f"s={self.squad.scout.kind.value} "
+                f"a={self.squad.architect.kind.value} "
+                f"w={enabled_w}/{len(self.squad.worker_pool)}"
+            )
         elif section == "orchestration":
             text = f"{self.cfg.orchestration.harness.value} (native)"
         elif section == "council":
@@ -1276,9 +1563,10 @@ class SetupTuiApp:
                 text = "default (scout)"
             else:
                 text = f"{self.master_coordinator.kind.value}:{self.master_coordinator.model}"
+        elif section == "models":
+            text = self._available_enabled_summary()
         else:
-            enabled_w = sum(1 for w in self.squad.worker_pool if w.enabled)
-            text = f"{enabled_w}/{len(self.squad.worker_pool)} workers"
+            text = ""
         return text if len(text) <= 20 else text[:19] + "…"
 
     def _render_sidebar(self) -> Panel:

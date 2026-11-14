@@ -664,6 +664,7 @@ async def _resolve_and_wire_ai_head(
                     head_config,
                     target_cwd,
                     caller_pane_id=caller_pane,
+                    available=project_cfg.models.available,
                 )
             except TypeError:
                 head_info = await ensure_herdr_ai_head(
@@ -671,6 +672,7 @@ async def _resolve_and_wire_ai_head(
                     allocated.workspace_id,
                     head_config,
                     target_cwd,
+                    available=project_cfg.models.available,
                 )
             head_pane_id = head_info.get("pane_id")
             caller_is_ai_head = bool(
@@ -1259,6 +1261,7 @@ async def launch_ai_head(
     name: str = "ai-head",
     focus: bool = True,
     dangerously_skip_permissions: Optional[bool] = None,
+    automode: Optional[bool] = None,
 ) -> Dict[str, Any]:
     """Launch an interactive AiHead terminal session.
 
@@ -1282,11 +1285,13 @@ async def launch_ai_head(
     initial_cwd = str(Path(cwd or os.getcwd()).resolve())
 
     head_config = None
+    project_cfg = None
     try:
         project_cfg = load_project_config(config_path or initial_cwd)
         head_config = project_cfg.ai_head
     except Exception:
         head_config = None
+        project_cfg = None
 
     effective_cwd = cwd or (head_config.cwd if head_config and head_config.cwd else None)
     target_cwd = str(Path(effective_cwd or initial_cwd).resolve())
@@ -1320,6 +1325,13 @@ async def launch_ai_head(
         if split is not None
         else (head_config.split if head_config is not None else True)
     )
+    if automode is not None:
+        effective_automode = automode
+    elif head_config is not None:
+        effective_automode = head_config.automode
+    else:
+        effective_automode = False
+    available_models = project_cfg.models.available if project_cfg is not None else None
 
     kind, model_slug, effort_level = resolve_coordinator_binding(eff_harness, eff_model, eff_effort)
     descriptor = _host_launch(
@@ -1484,6 +1496,8 @@ async def launch_ai_head(
         head_config=head_config,
         initial_task=initial_task,
         origin_cwd=target_cwd,
+        automode=effective_automode,
+        available=available_models,
     )
     prompt = _with_prompt_prefix(prompt_text, descriptor)
 

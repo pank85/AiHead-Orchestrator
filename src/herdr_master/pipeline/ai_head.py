@@ -28,6 +28,7 @@ from typing import Any, Callable, Dict, List, Literal, Optional, Union
 
 from pydantic import BaseModel, ConfigDict, Field
 
+from herdr_master.core.available_models import AvailableModels, format_available_models_block
 from herdr_master.core.catalog import build_agent_args
 from herdr_master.core.config import DEFAULT_AI_HEAD_SOUL, AiHeadConfig
 from herdr_master.core.models import EffortLevel, HarnessKind
@@ -532,7 +533,33 @@ def _format_ai_head_lessons_and_options(
     return options_block
 
 
-def build_ai_head_system_prompt(head_config: Optional[AiHeadConfig] = None) -> str:
+def _format_automode_block(
+    automode: bool = False,
+    available: Optional[AvailableModels] = None,
+) -> str:
+    """Render the AUTOMODE sibling. Does not select models from the task text."""
+    state = "true" if automode else "false"
+    return (
+        "AUTOMODE:\n"
+        f"automode = {state}\n"
+        "When automode is false, dispatch /ergo and /orchestration with the saved squad "
+        "unless the user asks for a different composition.\n"
+        "When automode is true, read the task and compose Scout, Architect, Coders, and "
+        "Reviewer only from AVAILABLE MODELS. Prefer the saved squad when it already fits. "
+        "Pass Ergo overrides as whitespace-separated role:binding entries (workers "
+        "comma-separated, no spaces, no effort). Pass Orchestration as one native harness "
+        "plus --models scout=<id>,architect=<id>,coder=<id>,reviewer=<id>. Never invent a "
+        "model ID.\n"
+        "AVAILABLE MODELS:\n"
+        f"{format_available_models_block(available)}"
+    )
+
+
+def build_ai_head_system_prompt(
+    head_config: Optional[AiHeadConfig] = None,
+    automode: bool = False,
+    available: Optional[AvailableModels] = None,
+) -> str:
     """Construct system persona prompt incorporating soul and workflow awareness."""
     soul = (
         head_config.soul.strip()
@@ -540,6 +567,7 @@ def build_ai_head_system_prompt(head_config: Optional[AiHeadConfig] = None) -> s
         else DEFAULT_AI_HEAD_SOUL
     )
     policy_block = _format_ai_head_lessons_and_options(head_config)
+    automode_block = _format_automode_block(automode, available)
     return (
         f"You are AiHead, an authoritative AI technical and product decision-maker "
         f"and workflow orchestrator.\n"
@@ -612,6 +640,7 @@ def build_ai_head_system_prompt(head_config: Optional[AiHeadConfig] = None) -> s
         f"  from rapid execution within a single harness without Herdr overhead ->\n"
         f"  Select/Propose /orchestration.\n\n"
         f"{policy_block}\n\n"
+        f"{automode_block}\n\n"
         f"OPERATING INSTRUCTIONS:\n"
         f"The following numbered instructions are governed by the active "
         f"autonomy preference configured above.\n\n"
@@ -677,6 +706,8 @@ def build_interactive_ai_head_prompt(
     head_config: Optional[AiHeadConfig] = None,
     initial_task: Optional[str] = None,
     origin_cwd: Optional[str] = None,
+    automode: bool = False,
+    available: Optional[AvailableModels] = None,
 ) -> str:
     """Construct prompt for an interactive terminal AiHead session.
 
@@ -847,6 +878,8 @@ def build_interactive_ai_head_prompt(
     policy_block = _format_ai_head_lessons_and_options(head_config)
     lines.append("")
     lines.append(policy_block)
+    lines.append("")
+    lines.append(_format_automode_block(automode, available))
 
     if initial_task and initial_task.strip():
         lines.append("")
@@ -1272,6 +1305,7 @@ async def ensure_herdr_ai_head(
     *,
     force: bool = False,
     caller_pane_id: Optional[str] = None,
+    available: Optional[AvailableModels] = None,
 ) -> Dict[str, Any]:
     """Ensure persistent ai-head tab exists in workspace and interactive agent is running.
 
@@ -1474,7 +1508,10 @@ async def ensure_herdr_ai_head(
                         timeout_ms=30000,
                     )
                     persona_prompt = build_interactive_ai_head_prompt(
-                        head_config=head_config, origin_cwd=effective_cwd
+                        head_config=head_config,
+                        origin_cwd=effective_cwd,
+                        automode=head_config.automode,
+                        available=available,
                     )
                     await client.prompt_agent(target_pane.pane_id, persona_prompt)
                     _save_running_head_state(
@@ -1517,7 +1554,10 @@ async def ensure_herdr_ai_head(
                     timeout_ms=30000,
                 )
                 persona_prompt = build_interactive_ai_head_prompt(
-                    head_config=head_config, origin_cwd=effective_cwd
+                    head_config=head_config,
+                    origin_cwd=effective_cwd,
+                    automode=head_config.automode,
+                    available=available,
                 )
                 await client.prompt_agent(target_pane.pane_id, persona_prompt)
                 _save_running_head_state(effective_cwd, workspace_id, target_pane.pane_id, state_payload)
@@ -1584,7 +1624,10 @@ async def ensure_herdr_ai_head(
     )
 
     persona_prompt = build_interactive_ai_head_prompt(
-        head_config=head_config, origin_cwd=effective_cwd
+        head_config=head_config,
+        origin_cwd=effective_cwd,
+        automode=head_config.automode,
+        available=available,
     )
     await client.prompt_agent(pane_id, persona_prompt)
     _save_running_head_state(origin_cwd, workspace_id, pane_id, state_payload)

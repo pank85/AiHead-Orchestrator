@@ -588,8 +588,11 @@ def test_pane_lifecycle_and_unmerged_ownership_contract_all_skills():
         # Children registry: one small file, parent-owned, with stable fields
         assert "RUN_DIR/children.tsv" in body, skill
         assert "Only the parent writes it" in body, skill
-        assert "remove only after that child is closed" in body, skill
-        assert "stale entries are the parent's responsibility" in body, skill
+        assert (
+            "Remove a row only after that child is closed and its work is integrated"
+            in body
+        ), skill
+        assert "Open and close update the list" in body, skill
         for field in registry_fields:
             assert f"`{field}`" in body, (skill, field)
 
@@ -616,15 +619,15 @@ def test_pane_lifecycle_and_unmerged_ownership_contract_all_skills():
     for skill in ("aihead", "herdr-master", "ergo", "council"):
         body = load_skill_body(skill)
         assert "registered in the same file like any child" in body, skill
-        assert "About every 10 minutes" in body, skill
+        assert "Every 10 minutes" in body, skill
         assert "herdr agent get" in body and "herdr agent read" in body, skill
-        assert "has not stalled after finishing without reporting" in body, skill
+        assert "finished-without-report" in body, skill
         assert "background monitor is the polling mechanism" in body, skill
 
     # Orchestration is pane-free: its delegating parent registers and monitors it
     orchestration = load_skill_body("orchestration")
-    assert "delegating parent registers this run and the monitor" in orchestration
-    assert "never start Herdr tooling or a monitor pane here" in orchestration
+    assert "checks it every 10 minutes" in orchestration
+    assert "Do not start a Herdr monitor pane here" in orchestration
 
     # Each orchestrator closes its own children and lets its parent close it
     assert "Ergo orchestrator closes its worker panes" in load_skill_body("aihead")

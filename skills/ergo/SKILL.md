@@ -37,6 +37,8 @@ When resolving squad role models and worker pool bindings, follow this strict pr
 3. **Project Configuration (`.herdr-master.toml`)**: If `.herdr-master.toml` exists in the project root, its configured model overrides take priority over product defaults.
 4. **Product Default Squad**: If none of the above are provided, use the authoritative product default squad from the catalog.
 
+An AiHead automode run supplies the composition as `--models` or a run squad snapshot, which already outrank the project squad.
+
 ### Authoritative Squad Resolution (No Hand-Maintained Fallback Tables)
 Do NOT maintain or consult hardcoded default model tables. The single authority for squad configuration, roles, and allowed coder models is `herdm catalog`:
 
@@ -130,6 +132,7 @@ The Ergo pipeline supports automated, intelligent technical decision consultatio
   - `--ai-head`: Explicitly enable AiHead consultation.
   - `--no-ai-head`: Explicitly disable AiHead consultation.
   - Omitted: Discovered from project configuration (`.herdr-master.toml`) or launcher bootstrap context descriptor.
+- Automode uses the saved available-model allowlist and must not invent ids.
 - **TUI Mode**:
   - Consults AiHead via its persistent Herdr tab (labelled `ai-head`) in the active workspace.
   - Automated requests are serialized with unique correlation IDs; never inject requests blindly into an active user conversation.

@@ -21,7 +21,10 @@ from herdr_master.cli.setup_catalog import (
     _parse_pi_models,
     discover_model_catalog,
 )
-from herdr_master.cli.setup_tui import SECTIONS, SetupTuiApp
+from herdr_master.cli.setup_tui import SECTIONS, SetupTuiApp, _herdr_effort_separate
+from herdr_master.core.available_models import AvailableModels
+from herdr_master.core.config import HerdrMasterConfig
+from herdr_master.core.models import EffortLevel, HarnessBinding, HarnessKind
 
 runner = CliRunner()
 
@@ -165,7 +168,7 @@ def test_tui_single_screen_renders_all_skills_and_options(tmp_path: Path):
     cfg = tmp_path / ".herdr-master.toml"
     tui = SetupTuiApp(config_path=cfg, catalog=_offline_catalog())
 
-    # Initial screen lists all 6 sections on one screen.
+    # Initial screen lists every SECTIONS label on one screen.
     initial = tui.render(width=110, height=32)
     for _, sec_label in SECTIONS:
         assert sec_label in initial
@@ -176,11 +179,15 @@ def test_tui_single_screen_renders_all_skills_and_options(tmp_path: Path):
     for label in ("Harness", "Model", "Effort", "Enabled", "Mode", "Split Pane", "Autonomy"):
         assert label in aihead_screen
 
-    # 2. ergo options
+    # 2. ergo options, including the worker pool that used to be its own section
     tui.handle_key("2")
-    ergo_screen = tui.render(width=110, height=32)
-    for label in ("Coordinator", "Scout", "Architect", "Reviewer"):
+    ergo_screen = tui.render(width=110, height=48)
+    for label in ("Coordinator", "Scout", "Architect", "Reviewer", "Worker Pool"):
         assert label in ergo_screen
+    ergo_rows = [row.key for row in tui._current_rows()]
+    assert ergo_rows.index("ergo.reviewer.model") < ergo_rows.index("pool.0.kind")
+    assert "pool.0.effort" not in ergo_rows
+    assert "worker-pool" not in [sec_id for sec_id, _ in SECTIONS]
 
     # 3. orchestration options
     tui.handle_key("3")
@@ -197,14 +204,21 @@ def test_tui_single_screen_renders_all_skills_and_options(tmp_path: Path):
     # 5. herdr-master options
     tui.handle_key("5")
     master_screen = tui.render(width=110, height=32)
-    for label in ("Override Mode", "Harness", "Model", "Effort"):
+    for label in ("Override Mode", "Harness", "Model"):
         assert label in master_screen
+    assert "Effort" not in master_screen
 
-    # 6. worker-pool options
-    tui.handle_key("6")
-    pool_screen = tui.render(width=110, height=32)
+    # Worker pool rows live in Ergo; section 6 is Available.
+    tui.handle_key("2")
+    pool_rows = tui._current_rows()
+    pool_labels = [row.label for row in pool_rows]
     for label in ("worker-1 Harness", "worker-1 Model", "worker-1 Enabled", "+ Add Worker"):
-        assert label in pool_screen
+        assert label in pool_labels
+    kind_idx = next(i for i, row in enumerate(pool_rows) if row.key == "pool.0.kind")
+    tui.field_cursors["ergo"] = kind_idx
+    assert "worker-1 Harness" in tui.render(width=110, height=32)
+    tui.field_cursors["ergo"] = next(i for i, row in enumerate(pool_rows) if row.key == "pool.add")
+    assert "+ Add Worker" in tui.render(width=110, height=32)
 
 
 def test_tui_driven_without_terminal_reaches_save_functions_via_herdm_aihead_setup(
@@ -216,8 +230,9 @@ def test_tui_driven_without_terminal_reaches_save_functions_via_herdm_aihead_set
     # Drive TUI headlessly:
     # Section 1 (aihead): pick harness 'pi', pick model 'xai/grok-4.7', pick effort 'high',
     # toggle Enabled -> true.
-    # Section 2 (ergo): pick Scout harness 'agy', model 'gemini-3.8-flash-low' (effort snaps 'low').
-    # Section 6 (worker-pool): add a worker, then press 's' to save once.
+    # Section 2 (ergo): pick Scout harness 'agy', model 'gemini-3.8-flash-low'.
+    # The slug already encodes effort, so the binding stores effort=None.
+    # Add a worker from Ergo, then press 's' to save once.
     keys = [
         "1",
         "ENTER", *"pi", "ENTER",
@@ -228,8 +243,7 @@ def test_tui_driven_without_terminal_reaches_save_functions_via_herdm_aihead_set
         "DOWN",  # skip Coordinator mode -> Scout Harness
         "ENTER", *"agy", "ENTER",
         "DOWN", "ENTER", *"gemini-3.8-flash-low", "ENTER",
-        "6",
-        "a",  # add worker
+        "a",  # add worker inside Ergo
         "s",  # save once
     ]
 
@@ -264,7 +278,7 @@ def test_tui_driven_without_terminal_reaches_save_functions_via_herdm_aihead_set
     assert data["ai_head"]["binding"]["model"] == "xai/grok-4.7"
     assert data["ai_head"]["binding"]["effort"] == "high"
     assert data["ai_head"]["enabled"] is True
-    assert data["models"]["default_squad"]["scout"] == "agy:gemini-3.8-flash-low:low"
+    assert data["models"]["default_squad"]["scout"] == "agy:gemini-3.8-flash-low"
     assert len(data["models"]["worker_pool"]) == 3
 
 
@@ -400,15 +414,12 @@ def test_tui_validation_error_blocks_save_and_keeps_tui_open(tmp_path: Path):
     cfg.write_text(original, encoding="utf-8")
 
     tui = SetupTuiApp(config_path=cfg, catalog=_offline_catalog())
-    # Disable both workers in worker-pool and attempt to save -> validation error!
-    tui.drive(
-        [
-            "6",
-            "DOWN", "DOWN", "SPACE",  # worker-1 Enabled -> false
-            "DOWN", "DOWN", "DOWN", "SPACE",  # worker-2 Enabled -> false
-            "s",
-        ]
-    )
+    # Disable both workers in the Ergo worker pool and attempt to save.
+    tui.handle_key("2")
+    rows = tui._current_rows()
+    first = next(i for i, row in enumerate(rows) if row.key == "pool.0.enabled")
+    second = next(i for i, row in enumerate(rows) if row.key == "pool.1.enabled")
+    tui.drive(["DOWN"] * first + ["SPACE"] + ["DOWN"] * (second - first) + ["SPACE", "s"])
     assert tui.saved is False
     assert tui.done is False
     assert tui.status_is_error is True
@@ -507,9 +518,424 @@ def test_ergo_custom_coordinator_writes_and_clears(tmp_path: Path):
     assert "ergo" not in _load(cfg)
 
 
+def test_available_section_toggles_one_harness_and_leaves_others_unrestricted(
+    tmp_path: Path,
+):
+    cfg = tmp_path / ".herdr-master.toml"
+    catalog = _offline_catalog()
+    tui = SetupTuiApp(config_path=cfg, catalog=catalog)
+    assert "1-6" in tui.status_message
+    assert "1-7" not in tui.status_message
+
+    discovered = [opt.value for opt in catalog.models("agy", mode="herdr", current=None)]
+    assert len(discovered) >= 2
+    toggled = discovered[0]
+
+    # Visit native and a second harness, then return. View choices must not save.
+    tui.drive(["6", "RIGHT", "LEFT", "DOWN", "RIGHT", "LEFT"])
+    assert tui.current_section == "models"
+    assert tui.dirty is False
+    assert tui.cfg.models.available is None
+    assert tui.available_view_mode == "herdr"
+    assert tui.available_view_harness == "agy"
+    assert tui._section_summary("models") == "unrestricted"
+
+    rows = tui._current_rows()
+    assert [row.key for row in rows[:2]] == [
+        "available.view.mode",
+        "available.view.harness",
+    ]
+    assert rows[2].key == "available.all"
+    assert rows[2].label == "All"
+    assert rows[2].current_value is True
+
+    model_toggles = [row for row in rows if row.key.startswith("available.toggle.")]
+    assert [row.key for row in model_toggles] == [
+        f"available.toggle.{index}" for index in range(len(discovered))
+    ]
+    assert all(row.label == discovered[index] for index, row in enumerate(model_toggles))
+    assert toggled not in "".join(row.key for row in rows)
+
+    tui.drive(["DOWN", "DOWN", "SPACE", "s"])
+    assert tui.saved is True
+    rerendered = tui._current_rows()
+    assert rerendered[2].current_value is False
+    assert rerendered[2].value_text == "false"
+    saved = tui.cfg.models.available
+    assert saved is not None
+    assert saved.native is None
+    assert set(saved.herdr or {}) == {"agy"}
+    assert saved.herdr["agy"] == [model for model in discovered if model != toggled]
+    assert tui._section_summary("models") == f"{len(discovered) - 1} enabled"
+
+    data = _load(cfg)
+    available = data["models"]["available"]
+    assert set(available) == {"herdr"}
+    assert set(available["herdr"]) == {"agy"}
+    assert available["herdr"]["agy"] == [model for model in discovered if model != toggled]
+
+
+def test_available_section_toggle_all_disables_and_enables(tmp_path: Path):
+    cfg = tmp_path / ".herdr-master.toml"
+    catalog = _offline_catalog()
+    tui = SetupTuiApp(config_path=cfg, catalog=catalog)
+
+    discovered = [opt.value for opt in catalog.models("agy", mode="herdr", current=None)]
+    assert len(discovered) >= 2
+
+    # Navigate to section 6, press ["DOWN", "DOWN"] to land cursor on "All" (available.all). Current value is True.
+    tui.drive(["6", "DOWN", "DOWN"])
+    assert tui.current_section == "models"
+    rows = tui._current_rows()
+    assert rows[2].key == "available.all"
+    assert rows[2].label == "All"
+    assert rows[2].current_value is True
+    assert rows[2].value_text == "true"
+
+    # Press "SPACE": toggles "All" to False. Status shows "Updated available.all".
+    tui.drive(["SPACE"])
+    assert "Updated available.all" in tui.status_message
+
+    # Verify all individual model rows in _current_rows() now have current_value is False and value_text == "false".
+    rows = tui._current_rows()
+    assert rows[2].current_value is False
+    assert rows[2].value_text == "false"
+    model_toggles = [row for row in rows if row.key.startswith("available.toggle.")]
+    assert len(model_toggles) == len(discovered)
+    assert all(row.current_value is False for row in model_toggles)
+    assert all(row.value_text == "false" for row in model_toggles)
+
+    # Press "s" to save.
+    tui.drive(["s"])
+    # Verify tui.saved is True.
+    assert tui.saved is True
+    # Verify tui.cfg.models.available.herdr["agy"] == [].
+    assert tui.cfg.models.available is not None
+    assert tui.cfg.models.available.herdr["agy"] == []
+    # Verify section summary shows "0 enabled".
+    assert tui._section_summary("models") == "0 enabled"
+    # Verify saved TOML contains [models.available.herdr] agy = [].
+    data = _load(cfg)
+    assert data["models"]["available"]["herdr"]["agy"] == []
+
+    # Next, press "SPACE" again on "All": toggles "All" to True.
+    tui.done = False
+    tui.drive(["SPACE"])
+    assert "Updated available.all" in tui.status_message
+    rows = tui._current_rows()
+    assert rows[2].current_value is True
+    assert rows[2].value_text == "true"
+
+    # Verify all individual model rows now have current_value is True and value_text == "true".
+    model_toggles = [row for row in rows if row.key.startswith("available.toggle.")]
+    assert len(model_toggles) == len(discovered)
+    assert all(row.current_value is True for row in model_toggles)
+    assert all(row.value_text == "true" for row in model_toggles)
+
+    # Press "s" to save.
+    tui.drive(["s"])
+    assert tui.saved is True
+    # Verify tui.cfg.models.available.herdr["agy"] == list(discovered).
+    assert tui.cfg.models.available.herdr["agy"] == list(discovered)
+    # Verify section summary shows f"{len(discovered)} enabled".
+    assert tui._section_summary("models") == f"{len(discovered)} enabled"
+    data = _load(cfg)
+    assert data["models"]["available"]["herdr"]["agy"] == list(discovered)
+
+
+def test_available_section_individual_toggle_syncs_all_state(tmp_path: Path):
+    cfg = tmp_path / ".herdr-master.toml"
+    catalog = _offline_catalog()
+    tui = SetupTuiApp(config_path=cfg, catalog=catalog)
+
+    discovered = [opt.value for opt in catalog.models("agy", mode="herdr", current=None)]
+    assert len(discovered) >= 2
+
+    # Navigate to section 6 ("models")
+    tui.drive(["6"])
+    rows = tui._current_rows()
+    assert rows[2].key == "available.all"
+    assert rows[2].current_value is True
+    assert rows[2].value_text == "true"
+
+    # Move down to first individual model toggle: index 3 (available.toggle.0)
+    # Cursor starts at 0 -> 1 -> 2 -> 3
+    tui.drive(["DOWN", "DOWN", "DOWN"])
+    rows = tui._current_rows()
+    assert rows[3].key == "available.toggle.0"
+    assert rows[3].current_value is True
+
+    # When all models are enabled, disabling one model turns "All" row value_text and current_value to False.
+    tui.drive(["SPACE"])
+    rows = tui._current_rows()
+    assert rows[3].current_value is False
+    assert rows[3].value_text == "false"
+    assert rows[2].key == "available.all"
+    assert rows[2].current_value is False
+    assert rows[2].value_text == "false"
+
+    # Toggling that model back to enabled turns "All" row back to True.
+    tui.drive(["SPACE"])
+    rows = tui._current_rows()
+    assert rows[3].current_value is True
+    assert rows[3].value_text == "true"
+    assert rows[2].key == "available.all"
+    assert rows[2].current_value is True
+    assert rows[2].value_text == "true"
+
+
+def test_available_section_all_toggle_with_empty_catalog(tmp_path: Path):
+    cfg = tmp_path / ".herdr-master.toml"
+    catalog = _offline_catalog()
+    catalog.herdr_models["agy"] = []
+    tui = SetupTuiApp(config_path=cfg, catalog=catalog)
+
+    # Navigate to section 6 ("models")
+    tui.drive(["6"])
+    rows = tui._current_rows()
+    assert len(rows) == 3
+    assert [row.key for row in rows] == [
+        "available.view.mode",
+        "available.view.harness",
+        "available.all",
+    ]
+    # Verify "All" row displays safely
+    assert rows[2].key == "available.all"
+    assert rows[2].label == "All"
+    assert rows[2].current_value is True
+    assert rows[2].value_text == "true"
+
+    # Move cursor to "All" (index 2)
+    tui.drive(["DOWN", "DOWN"])
+    # Verify toggling does not crash
+    tui.drive(["SPACE"])
+    assert "Updated available.all" in tui.status_message
+    rows = tui._current_rows()
+    assert rows[2].current_value is False
+    assert rows[2].value_text == "false"
+
+    # Toggle again
+    tui.drive(["SPACE"])
+    assert "Updated available.all" in tui.status_message
+    # Save does not crash
+    tui.drive(["s"])
+    assert tui.saved is True
+
+
+def test_allowlist_hides_disabled_models_and_keeps_current(tmp_path: Path):
+    seeded = HerdrMasterConfig()
+    seeded.models.available = AvailableModels(
+        herdr={
+            "pi": ["openai-codex/gpt-6.1-sol"],
+            "agy": ["gemini-3.8-flash"],
+        },
+        native={"agy": ["flash"]},
+    )
+    catalog = _offline_catalog(seeded)
+    tui = SetupTuiApp(
+        config_path=tmp_path / ".herdr-master.toml",
+        catalog=catalog,
+        cfg=seeded,
+    )
+
+    sentinel = catalog.models("claude", mode="herdr", current="sonnet")
+    original_models = tui.catalog.models
+
+    def _models(kind, mode="herdr", current=None):
+        if kind == "claude" and mode == "herdr":
+            return sentinel
+        return original_models(kind, mode=mode, current=current)
+
+    tui.catalog.models = _models
+    filtered_claude, hint = tui._filtered_model_options(
+        "claude", mode="herdr", current="sonnet"
+    )
+    assert filtered_claude is sentinel
+    assert hint == ""
+    tui.catalog.models = original_models
+
+    tui.handle_key("1")
+    rows = tui._current_rows()
+    harness = next(row for row in rows if row.key == "aihead.kind")
+    assert [opt.value for opt in harness.options] == [
+        opt.value for opt in catalog.harnesses(mode="herdr")
+    ]
+    model = next(row for row in rows if row.key == "aihead.model")
+    model_ids = [opt.value for opt in model.options]
+    assert tui.cfg.ai_head.model in model_ids
+    assert "xai/grok-4.7" not in model_ids
+    assert "xai/grok-4.7" in [
+        opt.value for opt in catalog.models("pi", mode="herdr", current=tui.cfg.ai_head.model)
+    ]
+
+    tui.handle_key("2")
+    scout = next(row for row in tui._current_rows() if row.key == "ergo.scout.model")
+    scout_ids = [opt.value for opt in scout.options]
+    assert tui.squad.scout.model in scout_ids
+    assert "gemini-3.8-flash" in scout_ids
+    assert "gemini-3.8-flash-low" not in scout_ids
+
+    tui.handle_key("3")
+    orch = next(row for row in tui._current_rows() if row.key == "orch.scout_model")
+    orch_ids = [opt.value for opt in orch.options]
+    assert tui.cfg.orchestration.scout_model in orch_ids
+    assert "flash" in orch_ids
+    assert "pro" not in orch_ids
+    native_harness = next(row for row in tui._current_rows() if row.key == "orch.harness")
+    assert [opt.value for opt in native_harness.options] == [
+        opt.value for opt in catalog.harnesses(mode="native")
+    ]
+
+    picker_cases = (
+        (
+            "4",
+            "council.coord.model",
+            "herdr",
+            tui.cfg.council.coordinator.kind.value,
+            tui.cfg.council.coordinator.model,
+        ),
+        (
+            "5",
+            "master.model",
+            "herdr",
+            tui.master_coordinator.kind.value,
+            tui.master_coordinator.model,
+        ),
+        (
+            "2",
+            "pool.0.model",
+            "herdr",
+            tui.squad.worker_pool[0].kind.value,
+            tui.squad.worker_pool[0].model,
+        ),
+    )
+    for section, key, mode, kind, current in picker_cases:
+        tui.handle_key(section)
+        row = next(item for item in tui._current_rows() if item.key == key)
+        expected, _empty = tui._filtered_model_options(kind, mode=mode, current=current)
+        assert [opt.value for opt in row.options] == [opt.value for opt in expected]
+        assert current in [opt.value for opt in row.options]
+
+
+def test_empty_allowlist_keeps_current_and_sets_hint(tmp_path: Path):
+    seeded = HerdrMasterConfig()
+    seeded.models.available = AvailableModels(herdr={"pi": []})
+    tui = SetupTuiApp(
+        config_path=tmp_path / ".herdr-master.toml",
+        catalog=_offline_catalog(seeded),
+        cfg=seeded,
+    )
+    tui.handle_key("1")
+    row = next(item for item in tui._current_rows() if item.key == "aihead.model")
+    assert row.hint == "no models enabled in Available"
+    assert [opt.value for opt in row.options] == [tui.cfg.ai_head.model]
+
+
+def test_automode_space_persists_without_shifting_enabled(tmp_path: Path):
+    cfg = tmp_path / ".herdr-master.toml"
+    tui = SetupTuiApp(config_path=cfg, catalog=_offline_catalog())
+    tui.handle_key("1")
+    rows = tui._current_rows()
+    assert [row.key for row in rows[:4]] == [
+        "aihead.kind",
+        "aihead.model",
+        "aihead.effort",
+        "aihead.enabled",
+    ]
+    assert [row.label for row in rows[:4]] == ["Harness", "Model", "Effort", "Enabled"]
+    skip_at = next(
+        index for index, row in enumerate(rows) if row.key == "aihead.dangerously_skip_permissions"
+    )
+    assert rows[skip_at + 1].key == "aihead.automode"
+    assert rows[skip_at + 1].label == "Automode"
+
+    # Same 1 → Harness → Model → Effort → Enabled path, then continue to Automode.
+    tui.drive(["DOWN", "DOWN", "DOWN"])
+    assert tui._current_row().key == "aihead.enabled"
+    while tui._current_row().key != "aihead.automode":
+        tui.handle_key("DOWN")
+        assert tui._current_row().key != "aihead.enabled"
+    tui.drive(["SPACE", "s"])
+
+    assert tui.saved is True
+    assert tui.cfg.ai_head.automode is True
+    assert tui.cfg.ai_head.enabled is False
+    data = _load(cfg)
+    assert data["ai_head"]["automode"] is True
+    assert data["ai_head"]["enabled"] is False
+
+
 # ---------------------------------------------------------------------------
 # Live catalog & CLI model discovery tests
 # ---------------------------------------------------------------------------
+
+
+def test_encoded_agy_effort_row_is_hidden_and_not_persisted(tmp_path: Path, monkeypatch):
+    cfg = tmp_path / "config.toml"
+    tui = SetupTuiApp(config_path=cfg, catalog=_offline_catalog())
+    assert tui.squad.scout.model == "gemini-3.8-flash-medium"
+    assert tui.squad.scout.effort is None
+
+    ergo_keys = [row.key for row in tui._section_rows("ergo")]
+    assert "ergo.scout.effort" not in ergo_keys
+    assert "ergo.architect.effort" in ergo_keys
+    assert "ergo.reviewer.effort" in ergo_keys
+    assert "orch.scout_effort" in [row.key for row in tui._section_rows("orchestration")]
+
+    for model in (
+        "gemini-3.8-flash-high",
+        "gemini-3.8-flash-medium",
+        "gemini-3.8-flash-low",
+    ):
+        tui._apply_field_value("ergo.scout.model", model)
+        assert tui.squad.scout.model == model
+        assert tui.squad.scout.effort is None
+        assert "ergo.scout.effort" not in [row.key for row in tui._section_rows("ergo")]
+
+    tui.squad.scout.model = "claude-opus-5-5-medium"
+    tui.squad.scout.effort = EffortLevel.MEDIUM
+    tui._clear_redundant_herdr_efforts()
+    assert tui.squad.scout.effort is None
+    assert "ergo.scout.effort" not in [row.key for row in tui._section_rows("ergo")]
+
+    tui._apply_field_value("ergo.scout.model", "gemini-3.8-flash")
+    assert tui.squad.scout.effort is not None
+    flash_effort = next(row for row in tui._section_rows("ergo") if row.key == "ergo.scout.effort")
+    assert flash_effort.current_value == tui.squad.scout.effort.value
+    assert all(opt.value is not None for opt in flash_effort.options)
+
+    for kind, model in (
+        (HarnessKind.PI, "vendor/model-high"),
+        (HarnessKind.OPENCODE, "opencode/model-low"),
+        (HarnessKind.CLAUDE, "claude-opus-5-5-medium"),
+        (HarnessKind.HERMES, "openai-codex/gpt-6.1-terra"),
+        (HarnessKind.AGY, "gemini-3.8-flash"),
+    ):
+        binding = HarnessBinding(kind=kind, model=model, effort=EffortLevel.HIGH)
+        rows = tui._binding_rows(kind.value, kind.value, binding)
+        assert any(row.key.endswith(".effort") for row in rows)
+        assert binding.effort == EffortLevel.HIGH
+        assert _herdr_effort_separate(kind.value, model) is True
+
+    monkeypatch.setattr(
+        "herdr_master.cli.setup_tui._allowed_efforts",
+        lambda kind, model, mode="herdr": [] if kind == "agy" else ["low", "medium", "high", "max"],
+    )
+    encoded = HarnessBinding(
+        kind=HarnessKind.AGY, model="custom-agy-model", effort=EffortLevel.LOW
+    )
+    assert _herdr_effort_separate("agy", "custom-agy-model") is False
+    hidden = tui._binding_rows("agy", "agy", encoded)
+    assert all(not row.key.endswith(".effort") for row in hidden)
+    tui._reconcile_binding(encoded)
+    assert encoded.effort is None
+
+    tui.squad.scout.kind = HarnessKind.AGY
+    tui.squad.scout.model = "claude-opus-5-5-medium"
+    tui.squad.scout.effort = EffortLevel.MEDIUM
+    assert tui.save() is True
+    assert _load(cfg)["models"]["default_squad"]["scout"] == "agy:claude-opus-5-5-medium"
+    assert _load(cfg)["models"]["worker_pool"]["worker-1"]["binding"].startswith("agy:")
 
 
 def test_live_model_parsers_and_catalog_modes():

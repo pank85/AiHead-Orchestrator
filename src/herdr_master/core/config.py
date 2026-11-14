@@ -24,8 +24,8 @@ else:
 
 import tomli_w
 
+from herdr_master.core.available_models import AvailableModels
 from herdr_master.core.catalog import (
-    CatalogError,
     HarnessKind,
     ensure_herdr_routable,
     get_harness,
@@ -62,12 +62,18 @@ class ModelsConfig(BaseModel):
     An empty worker_pool mapping is an explicit empty pool, not a missing one.
     Pydantic must not populate these with the product squad, or absent files
     become indistinguishable from explicit overrides.
+
+    ``available`` is None when no allowlist is saved: every mode and harness
+    stays unrestricted. A present harness key, including an empty list, is an
+    explicit allowlist for that mode and harness only. An absent harness key
+    stays unrestricted even when a sibling harness is listed.
     """
 
     model_config = ConfigDict(extra="allow")
 
     default_squad: Optional[Dict[str, str]] = None
     worker_pool: Optional[Dict[str, Any]] = None
+    available: Optional[AvailableModels] = None
 
 
 class TUIConfig(BaseModel):
@@ -280,7 +286,8 @@ class HarnessOrchestrationSettings(BaseModel):
                     "xhigh",
                 ):
                     raise ValueError(
-                        f"Worker model '{s}' must not specify an effort level (the Architect decides worker effort)."
+                        f"Worker model '{s}' must not specify an effort level "
+                        "(the Architect decides worker effort)."
                     )
             validated.append(s)
         return validated
@@ -451,7 +458,8 @@ class OrchestrationConfig(BaseModel):
                     "xhigh",
                 ):
                     raise ValueError(
-                        f"Worker model '{s}' must not specify an effort level (the Architect decides worker effort)."
+                        f"Worker model '{s}' must not specify an effort level "
+                        "(the Architect decides worker effort)."
                     )
             validated.append(s)
         return validated
@@ -572,7 +580,7 @@ class OrchestrationConfig(BaseModel):
         *,
         set_as_default: bool = False,
     ) -> None:
-        """Switch active harness, preserving current harness settings and restoring target harness settings."""
+        """Switch active harness, preserving current settings and restoring the target."""
         h_kind = (
             HarnessKind(new_harness) if isinstance(new_harness, str) else new_harness
         )
@@ -812,7 +820,8 @@ class CouncilConfig(BaseModel):
             ident_key = ident.lower()
             if ident_key in seen_identities:
                 raise ValueError(
-                    f"Duplicate Council member identity '{ident}'. Member identities must be unique."
+                    f"Duplicate Council member identity '{ident}'. "
+                    "Member identities must be unique."
                 )
             seen_identities.add(ident_key)
             _validate_council_binding(m, ident)
@@ -851,11 +860,28 @@ DEFAULT_AI_HEAD_SOUL: str = (
     "Software Architect and Workflow Orchestrator obsessed with UX best practices, "
     "accessibility, clear interaction design, architectural alignment with the existing codebase, "
     "code reusability without speculative abstraction, plain-language plan communication, "
-    "hierarchical parent notification protocol (child agents notify parent via herdr agent prompt upon completion), "
+    "hierarchical parent notification protocol (child agents notify parent via "
+    "herdr agent prompt upon completion), "
     "and intelligent workflow selection across Herdr-Master capabilities "
     "(/orchestration, /ergo, /council, /herdr-master) with dynamic model and harness "
     "discovery from project configuration (models.default_squad, orchestration, catalog)"
 )
+
+
+def _coerce_config_bool(value: Any, field_name: str) -> bool:
+    """Coerce TOML/CLI bool tokens. Absent keys never reach this helper."""
+    if isinstance(value, bool):
+        return value
+    if isinstance(value, str):
+        token = value.strip().lower()
+        if token in ("true", "1", "yes", "on"):
+            return True
+        if token in ("false", "0", "no", "off"):
+            return False
+        raise ValueError(f"Invalid boolean value for {field_name}: {value}")
+    if isinstance(value, (int, float)):
+        return bool(value)
+    return bool(value)
 
 
 def default_ai_head_binding() -> HarnessBinding:
@@ -867,7 +893,11 @@ def default_ai_head_binding() -> HarnessBinding:
 
 
 class AiHeadConfig(BaseModel):
-    """Configuration for autonomous AiHead decision-maker."""
+    """Configuration for autonomous AiHead decision-maker.
+
+    ``automode`` defaults to False. A missing key stays off. Values are coerced
+    like ``split`` (true/false/1/0/yes/no/on/off).
+    """
 
     model_config = ConfigDict(extra="allow", populate_by_name=True)
 
@@ -882,6 +912,7 @@ class AiHeadConfig(BaseModel):
     autonomy: str = "routine"
     close_foreign_tabs: bool = False
     dangerously_skip_permissions: bool = True
+    automode: bool = False
 
     @property
     def folder(self) -> Optional[str]:
@@ -958,16 +989,18 @@ class AiHeadConfig(BaseModel):
                 "label": "ai-head",
                 "description": base.description,
             }
-        if "split" in d:
-            val = d["split"]
+        for key in ("split", "automode"):
+            if key not in d:
+                continue
+            val = d[key]
             if isinstance(val, str):
                 s = val.strip().lower()
                 if s in ("true", "1", "yes", "on"):
-                    d["split"] = True
+                    d[key] = True
                 elif s in ("false", "0", "no", "off"):
-                    d["split"] = False
+                    d[key] = False
             elif isinstance(val, (int, float)):
-                d["split"] = bool(val)
+                d[key] = bool(val)
         for key in ("folder", "working_directory", "directory", "path"):
             if key in d and "cwd" not in d:
                 d["cwd"] = d.pop(key)
@@ -993,18 +1026,12 @@ class AiHeadConfig(BaseModel):
     @field_validator("split", mode="before")
     @classmethod
     def _validate_split(cls, v: Any) -> bool:
-        if isinstance(v, bool):
-            return v
-        if isinstance(v, str):
-            s = v.strip().lower()
-            if s in ("true", "1", "yes", "on"):
-                return True
-            if s in ("false", "0", "no", "off"):
-                return False
-            raise ValueError(f"Invalid boolean value for split: {v}")
-        if isinstance(v, (int, float)):
-            return bool(v)
-        return bool(v)
+        return _coerce_config_bool(v, "split")
+
+    @field_validator("automode", mode="before")
+    @classmethod
+    def _validate_automode(cls, v: Any) -> bool:
+        return _coerce_config_bool(v, "automode")
 
     @field_validator("mode")
     @classmethod
@@ -1179,7 +1206,7 @@ def resolve_folder_path(
     folder: Union[str, Path],
     base_dir: Optional[Union[str, Path]] = None,
 ) -> Path:
-    """Resolve a user-supplied folder path, expanding user directory and resolving relative paths."""
+    """Resolve a folder path, expanding ~ and resolving relative paths."""
     p = Path(folder).expanduser()
     if not p.is_absolute():
         base = Path(base_dir or Path.cwd()).resolve()
@@ -1195,7 +1222,10 @@ def is_folder_available(
     folder: Union[str, Path],
     base_dir: Optional[Union[str, Path]] = None,
 ) -> bool:
-    """Check whether a folder exists and is a directory, without raising on missing or unreadable paths."""
+    """Return whether a folder exists and is a directory.
+
+    Missing or unreadable paths return False instead of raising.
+    """
     try:
         resolved = resolve_folder_path(folder, base_dir)
         return resolved.is_dir()
@@ -1302,7 +1332,11 @@ def squad_to_project_config(
     squad: Squad,
     existing_config: Optional[HerdrMasterConfig] = None,
 ) -> HerdrMasterConfig:
-    """Export a Squad into HerdrMasterConfig models."""
+    """Export a Squad into HerdrMasterConfig models.
+
+    Mutates ``existing_config.models`` in place. Do not replace ``cfg.models``;
+    sibling fields such as ``available`` must survive a squad save.
+    """
     cfg = existing_config or HerdrMasterConfig()
     if cfg.models.default_squad is None:
         cfg.models.default_squad = {}
