@@ -24,7 +24,9 @@ from herdr_master.cli.setup_catalog import ChoiceOption, ModelCatalog, discover_
 from herdr_master.core.available_models import (
     enabled_model_ids,
     filter_model_ids,
+    is_all_enabled,
     materialize_toggle,
+    materialize_toggle_all,
 )
 from herdr_master.core.catalog import (
     _FLASH_BASE,
@@ -397,6 +399,11 @@ class SetupTuiApp:
             enabled_model_ids(self.cfg.models.available, mode, harness) if harness else None
         )
         enabled_set = None if enabled is None else set(enabled)
+        all_enabled = (
+            is_all_enabled(self.cfg.models.available, mode, harness, ids)
+            if harness
+            else True
+        )
         rows = [
             FieldRow(
                 key="available.view.mode",
@@ -421,6 +428,16 @@ class SetupTuiApp:
                 current_value=harness,
                 hint="View one harness allowlist (not saved)",
             ),
+            FieldRow(
+                key="available.all",
+                group="Models",
+                label="All",
+                kind="bool",
+                value_text="true" if all_enabled else "false",
+                options=[ChoiceOption(True, "true"), ChoiceOption(False, "false")],
+                current_value=all_enabled,
+                hint="Enable or disable all models for this harness",
+            ),
         ]
         for index, opt in enumerate(models):
             model_id = ids[index]
@@ -441,6 +458,21 @@ class SetupTuiApp:
 
     def _apply_available_field(self, parts: List[str], value: Any) -> bool:
         """Apply an Available field. False means view-only or rejected (not dirty)."""
+        if (len(parts) == 2 and parts[1] == "all") or (
+            len(parts) == 3 and parts[1] == "toggle" and parts[2] == "all"
+        ):
+            harness = self._available_toggle_harness
+            if not harness:
+                self._set_status("No harness selected for Available.", error=True)
+                return False
+            self.cfg.models.available = materialize_toggle_all(
+                self.cfg.models.available,
+                self._available_toggle_mode,
+                harness,
+                bool(value),
+                list(self._available_toggle_ids),
+            )
+            return True
         if len(parts) < 3:
             self._set_status(f"Unknown available field {'.'.join(parts)}", error=True)
             return False

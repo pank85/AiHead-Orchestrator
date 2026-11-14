@@ -17,7 +17,9 @@ from herdr_master.core.available_models import (
     enabled_model_ids,
     filter_model_ids,
     format_available_models_block,
+    is_all_enabled,
     materialize_toggle,
+    materialize_toggle_all,
 )
 from herdr_master.core.catalog import HarnessKind
 from herdr_master.core.config import (
@@ -291,3 +293,192 @@ def test_save_project_config_writes_available_and_reload_matches(tmp_path):
     assert reloaded.ai_head.automode is False
     assert reloaded.models.available.herdr["agy"] == []
     assert reloaded.models.available.native["agy"] == ["flash", "pro"]
+
+
+def test_is_all_enabled_unrestricted_and_empty_allowlist():
+    # Unrestricted scope: available=None
+    assert is_all_enabled(None, "herdr", "pi", ["a", "b"]) is True
+    assert is_all_enabled(None, "herdr", "pi", []) is True
+
+    # Unrestricted scope: AvailableModels with None mode maps
+    assert is_all_enabled(AvailableModels(), "herdr", "pi", ["a", "b"]) is True
+
+    # Unrestricted scope: harness not present in mode map
+    available = AvailableModels(herdr={"claude": ["c1"]})
+    assert is_all_enabled(available, "herdr", "pi", ["a", "b"]) is True
+    assert is_all_enabled(available, "native", "claude", ["c1"]) is True
+
+    # Explicit empty list [] returns False
+    empty_pi = AvailableModels(herdr={"pi": []})
+    assert is_all_enabled(empty_pi, "herdr", "pi", ["a", "b"]) is False
+    assert is_all_enabled(empty_pi, "herdr", "pi", []) is False
+    assert is_all_enabled(empty_pi, "herdr", HarnessKind.PI, ["a"]) is False
+
+    # Empty discovered list with unrestricted returns True, with non-empty allowlist returns True
+    populated = AvailableModels(herdr={"pi": ["a"]})
+    assert is_all_enabled(populated, "herdr", "pi", []) is True
+    assert is_all_enabled(None, "herdr", "pi", []) is True
+
+    # Unknown/invalid harness returns True (inherits unrestricted without error)
+    assert is_all_enabled(populated, "herdr", "nonexistent-harness", ["x"]) is True
+    assert is_all_enabled(None, "herdr", "unknown", ["x"]) is True
+    assert is_all_enabled(populated, "unknown-mode", "pi", ["x"]) is True
+
+
+def test_is_all_enabled_matching_superset_and_missing():
+    allow = AvailableModels(herdr={"pi": ["a", "b"]})
+
+    # Allowlist matching discovered returns True
+    assert is_all_enabled(allow, "herdr", "pi", ["a", "b"]) is True
+    assert is_all_enabled(allow, "herdr", "pi", ["b", "a"]) is True
+    assert is_all_enabled(allow, "herdr", HarnessKind.PI, ["a", "b"]) is True
+
+    # Allowlist superset of discovered returns True
+    assert is_all_enabled(allow, "herdr", "pi", ["a"]) is True
+    assert is_all_enabled(allow, "herdr", "pi", ["b"]) is True
+
+    # Allowlist missing one or more discovered models returns False
+    assert is_all_enabled(allow, "herdr", "pi", ["a", "b", "c"]) is False
+    assert is_all_enabled(allow, "herdr", "pi", ["c"]) is False
+    assert is_all_enabled(allow, "herdr", "pi", ["a", "missing"]) is False
+
+
+def test_materialize_toggle_all_disables_all_copy_on_touch():
+    # From None: copies only touched harness and mode, other mode stays None
+    result = materialize_toggle_all(None, "herdr", "pi", False, ["a", "b"])
+    assert result.herdr == {"pi": []}
+    assert result.native is None
+
+    # Starting from existing with other mode and other harness:
+    existing = AvailableModels.model_validate(
+        {"herdr": {"claude": ["c1"]}, "native": {"agy": ["flash"]}, "future_flag": 42}
+    )
+    result = materialize_toggle_all(existing, "herdr", HarnessKind.PI, False, ["p1", "p2"])
+    assert result.herdr == {"claude": ["c1"], "pi": []}
+    assert result.native == {"agy": ["flash"]}
+    assert result.native is not existing.native
+    assert result.model_extra["future_flag"] == 42
+    # Ensure original existing was not mutated
+    assert existing.herdr == {"claude": ["c1"]}
+    assert "pi" not in existing.herdr
+
+
+def test_materialize_toggle_all_enables_all_order_and_deduplication():
+    discovered = ["  model-b  ", "model-a", "model-b", "model-c", "model-a"]
+    result = materialize_toggle_all(None, "native", "agy", True, discovered)
+    assert result.native == {"agy": ["model-b", "model-a", "model-c"]}
+    assert result.herdr is None
+
+    # Order preserved as encountered
+    result2 = materialize_toggle_all(None, "herdr", HarnessKind.HERMES, True, ["z", "y", "x"])
+    assert result2.herdr == {"hermes": ["z", "y", "x"]}
+
+
+def test_materialize_toggle_all_replaces_existing_allowlist():
+    existing = AvailableModels(herdr={"pi": ["old-model"]})
+    result = materialize_toggle_all(existing, "herdr", "pi", True, ["new-1", "new-2"])
+    assert result.herdr == {"pi": ["new-1", "new-2"]}
+
+    # Replace with False -> []
+    disabled = materialize_toggle_all(result, "herdr", "pi", False, ["new-1", "new-2"])
+    assert disabled.herdr == {"pi": []}
+
+    # Replace [] with True -> new models
+    re_enabled = materialize_toggle_all(disabled, "herdr", "pi", True, ["m1", "m2", "m1"])
+    assert re_enabled.herdr == {"pi": ["m1", "m2"]}
+
+
+def test_materialize_toggle_all_empty_discovered():
+    # Empty discovered list with enabled=False results in []
+    res_false = materialize_toggle_all(None, "herdr", "pi", False, [])
+    assert res_false.herdr == {"pi": []}
+
+    # Empty discovered list with enabled=True results in []
+    res_true = materialize_toggle_all(None, "herdr", "pi", True, [])
+    assert res_true.herdr == {"pi": []}
+
+    # With pre-existing allowlist, empty discovered replaces with []
+    existing = AvailableModels(herdr={"pi": ["a", "b"]})
+    assert materialize_toggle_all(existing, "herdr", "pi", True, []).herdr == {"pi": []}
+    assert materialize_toggle_all(existing, "herdr", "pi", False, []).herdr == {"pi": []}
+
+
+def test_materialize_toggle_all_validations():
+    # TypeError for non-bool enabled
+    with pytest.raises(TypeError, match="enabled must be a bool"):
+        materialize_toggle_all(None, "herdr", "pi", "true", ["a"])  # type: ignore[arg-type]
+    with pytest.raises(TypeError, match="enabled must be a bool"):
+        materialize_toggle_all(None, "herdr", "pi", 1, ["a"])  # type: ignore[arg-type]
+    with pytest.raises(TypeError, match="enabled must be a bool"):
+        materialize_toggle_all(None, "herdr", "pi", 0, ["a"])  # type: ignore[arg-type]
+    with pytest.raises(TypeError, match="enabled must be a bool"):
+        materialize_toggle_all(None, "herdr", "pi", None, ["a"])  # type: ignore[arg-type]
+
+    # ValueError for unknown mode
+    with pytest.raises(ValueError, match="Unknown mode"):
+        materialize_toggle_all(None, "invalid_mode", "pi", True, ["a"])
+    with pytest.raises(ValueError, match="Unknown mode"):
+        materialize_toggle_all(None, 123, "pi", True, ["a"])  # type: ignore[arg-type]
+
+    # ValueError for unknown harness
+    with pytest.raises(ValueError, match="Unknown harness key"):
+        materialize_toggle_all(None, "herdr", "invalid_harness", True, ["a"])
+    with pytest.raises(ValueError, match="Unknown harness key"):
+        materialize_toggle_all(None, "herdr", 123, True, ["a"])  # type: ignore[arg-type]
+
+    # ValueError for blank string in discovered
+    with pytest.raises(ValueError, match="Model id must not be blank"):
+        materialize_toggle_all(None, "herdr", "pi", True, ["a", "   ", "b"])
+    with pytest.raises(ValueError, match="Model id must not be blank"):
+        materialize_toggle_all(None, "herdr", "pi", True, [""])
+
+    # ValueError for non-string type in discovered
+    with pytest.raises(ValueError, match="Model id must be a non-empty string"):
+        materialize_toggle_all(None, "herdr", "pi", True, ["a", None])  # type: ignore[list-item]
+    with pytest.raises(ValueError, match="Model id must be a non-empty string"):
+        materialize_toggle_all(None, "herdr", "pi", True, [123])  # type: ignore[list-item]
+
+
+def test_materialize_toggle_all_round_trip_persistence(tmp_path):
+    cfg = HerdrMasterConfig()
+    cfg.models.available = materialize_toggle_all(
+        cfg.models.available, "herdr", "pi", False, ["model-1", "model-2"]
+    )
+    cfg.models.available = materialize_toggle_all(
+        cfg.models.available, "native", "agy", True, ["  flash  ", "pro", "flash"]
+    )
+    path = tmp_path / ".herdr-master.toml"
+    save_project_config(cfg, path)
+
+    text = path.read_text(encoding="utf-8")
+    parsed = tomllib.loads(text)
+    assert parsed["models"]["available"]["herdr"]["pi"] == []
+    assert parsed["models"]["available"]["native"]["agy"] == ["flash", "pro"]
+
+    reloaded = load_project_config(path)
+    assert reloaded.models.available is not None
+    assert reloaded.models.available.herdr == {"pi": []}
+    assert reloaded.models.available.native == {"agy": ["flash", "pro"]}
+
+    # Toggle pi to all enabled and re-save
+    reloaded.models.available = materialize_toggle_all(
+        reloaded.models.available, "herdr", "pi", True, ["model-1", "model-2"]
+    )
+    save_project_config(reloaded, path)
+    reloaded2 = load_project_config(path)
+    assert reloaded2.models.available is not None
+    assert reloaded2.models.available.herdr == {"pi": ["model-1", "model-2"]}
+    assert reloaded2.models.available.native == {"agy": ["flash", "pro"]}
+
+
+def test_available_models_all_exports():
+    import herdr_master.core.available_models as mod
+
+    assert hasattr(mod, "__all__")
+    assert "is_all_enabled" in mod.__all__
+    assert "materialize_toggle_all" in mod.__all__
+    assert "materialize_toggle" in mod.__all__
+    assert "enabled_model_ids" in mod.__all__
+    assert "filter_model_ids" in mod.__all__
+    assert "format_available_models_block" in mod.__all__
+    assert "AvailableModels" in mod.__all__

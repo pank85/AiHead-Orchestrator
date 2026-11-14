@@ -545,15 +545,22 @@ def test_available_section_toggles_one_harness_and_leaves_others_unrestricted(
         "available.view.mode",
         "available.view.harness",
     ]
-    toggles = [row for row in rows if row.kind == "bool"]
-    assert [row.key for row in toggles] == [
+    assert rows[2].key == "available.all"
+    assert rows[2].label == "All"
+    assert rows[2].current_value is True
+
+    model_toggles = [row for row in rows if row.key.startswith("available.toggle.")]
+    assert [row.key for row in model_toggles] == [
         f"available.toggle.{index}" for index in range(len(discovered))
     ]
-    assert all(row.label == discovered[index] for index, row in enumerate(toggles))
+    assert all(row.label == discovered[index] for index, row in enumerate(model_toggles))
     assert toggled not in "".join(row.key for row in rows)
 
-    tui.drive(["DOWN", "SPACE", "s"])
+    tui.drive(["DOWN", "DOWN", "SPACE", "s"])
     assert tui.saved is True
+    rerendered = tui._current_rows()
+    assert rerendered[2].current_value is False
+    assert rerendered[2].value_text == "false"
     saved = tui.cfg.models.available
     assert saved is not None
     assert saved.native is None
@@ -566,6 +573,153 @@ def test_available_section_toggles_one_harness_and_leaves_others_unrestricted(
     assert set(available) == {"herdr"}
     assert set(available["herdr"]) == {"agy"}
     assert available["herdr"]["agy"] == [model for model in discovered if model != toggled]
+
+
+def test_available_section_toggle_all_disables_and_enables(tmp_path: Path):
+    cfg = tmp_path / ".herdr-master.toml"
+    catalog = _offline_catalog()
+    tui = SetupTuiApp(config_path=cfg, catalog=catalog)
+
+    discovered = [opt.value for opt in catalog.models("agy", mode="herdr", current=None)]
+    assert len(discovered) >= 2
+
+    # Navigate to section 6, press ["DOWN", "DOWN"] to land cursor on "All" (available.all). Current value is True.
+    tui.drive(["6", "DOWN", "DOWN"])
+    assert tui.current_section == "models"
+    rows = tui._current_rows()
+    assert rows[2].key == "available.all"
+    assert rows[2].label == "All"
+    assert rows[2].current_value is True
+    assert rows[2].value_text == "true"
+
+    # Press "SPACE": toggles "All" to False. Status shows "Updated available.all".
+    tui.drive(["SPACE"])
+    assert "Updated available.all" in tui.status_message
+
+    # Verify all individual model rows in _current_rows() now have current_value is False and value_text == "false".
+    rows = tui._current_rows()
+    assert rows[2].current_value is False
+    assert rows[2].value_text == "false"
+    model_toggles = [row for row in rows if row.key.startswith("available.toggle.")]
+    assert len(model_toggles) == len(discovered)
+    assert all(row.current_value is False for row in model_toggles)
+    assert all(row.value_text == "false" for row in model_toggles)
+
+    # Press "s" to save.
+    tui.drive(["s"])
+    # Verify tui.saved is True.
+    assert tui.saved is True
+    # Verify tui.cfg.models.available.herdr["agy"] == [].
+    assert tui.cfg.models.available is not None
+    assert tui.cfg.models.available.herdr["agy"] == []
+    # Verify section summary shows "0 enabled".
+    assert tui._section_summary("models") == "0 enabled"
+    # Verify saved TOML contains [models.available.herdr] agy = [].
+    data = _load(cfg)
+    assert data["models"]["available"]["herdr"]["agy"] == []
+
+    # Next, press "SPACE" again on "All": toggles "All" to True.
+    tui.done = False
+    tui.drive(["SPACE"])
+    assert "Updated available.all" in tui.status_message
+    rows = tui._current_rows()
+    assert rows[2].current_value is True
+    assert rows[2].value_text == "true"
+
+    # Verify all individual model rows now have current_value is True and value_text == "true".
+    model_toggles = [row for row in rows if row.key.startswith("available.toggle.")]
+    assert len(model_toggles) == len(discovered)
+    assert all(row.current_value is True for row in model_toggles)
+    assert all(row.value_text == "true" for row in model_toggles)
+
+    # Press "s" to save.
+    tui.drive(["s"])
+    assert tui.saved is True
+    # Verify tui.cfg.models.available.herdr["agy"] == list(discovered).
+    assert tui.cfg.models.available.herdr["agy"] == list(discovered)
+    # Verify section summary shows f"{len(discovered)} enabled".
+    assert tui._section_summary("models") == f"{len(discovered)} enabled"
+    data = _load(cfg)
+    assert data["models"]["available"]["herdr"]["agy"] == list(discovered)
+
+
+def test_available_section_individual_toggle_syncs_all_state(tmp_path: Path):
+    cfg = tmp_path / ".herdr-master.toml"
+    catalog = _offline_catalog()
+    tui = SetupTuiApp(config_path=cfg, catalog=catalog)
+
+    discovered = [opt.value for opt in catalog.models("agy", mode="herdr", current=None)]
+    assert len(discovered) >= 2
+
+    # Navigate to section 6 ("models")
+    tui.drive(["6"])
+    rows = tui._current_rows()
+    assert rows[2].key == "available.all"
+    assert rows[2].current_value is True
+    assert rows[2].value_text == "true"
+
+    # Move down to first individual model toggle: index 3 (available.toggle.0)
+    # Cursor starts at 0 -> 1 -> 2 -> 3
+    tui.drive(["DOWN", "DOWN", "DOWN"])
+    rows = tui._current_rows()
+    assert rows[3].key == "available.toggle.0"
+    assert rows[3].current_value is True
+
+    # When all models are enabled, disabling one model turns "All" row value_text and current_value to False.
+    tui.drive(["SPACE"])
+    rows = tui._current_rows()
+    assert rows[3].current_value is False
+    assert rows[3].value_text == "false"
+    assert rows[2].key == "available.all"
+    assert rows[2].current_value is False
+    assert rows[2].value_text == "false"
+
+    # Toggling that model back to enabled turns "All" row back to True.
+    tui.drive(["SPACE"])
+    rows = tui._current_rows()
+    assert rows[3].current_value is True
+    assert rows[3].value_text == "true"
+    assert rows[2].key == "available.all"
+    assert rows[2].current_value is True
+    assert rows[2].value_text == "true"
+
+
+def test_available_section_all_toggle_with_empty_catalog(tmp_path: Path):
+    cfg = tmp_path / ".herdr-master.toml"
+    catalog = _offline_catalog()
+    catalog.herdr_models["agy"] = []
+    tui = SetupTuiApp(config_path=cfg, catalog=catalog)
+
+    # Navigate to section 6 ("models")
+    tui.drive(["6"])
+    rows = tui._current_rows()
+    assert len(rows) == 3
+    assert [row.key for row in rows] == [
+        "available.view.mode",
+        "available.view.harness",
+        "available.all",
+    ]
+    # Verify "All" row displays safely
+    assert rows[2].key == "available.all"
+    assert rows[2].label == "All"
+    assert rows[2].current_value is True
+    assert rows[2].value_text == "true"
+
+    # Move cursor to "All" (index 2)
+    tui.drive(["DOWN", "DOWN"])
+    # Verify toggling does not crash
+    tui.drive(["SPACE"])
+    assert "Updated available.all" in tui.status_message
+    rows = tui._current_rows()
+    assert rows[2].current_value is False
+    assert rows[2].value_text == "false"
+
+    # Toggle again
+    tui.drive(["SPACE"])
+    assert "Updated available.all" in tui.status_message
+    # Save does not crash
+    tui.drive(["s"])
+    assert tui.saved is True
 
 
 def test_allowlist_hides_disabled_models_and_keeps_current(tmp_path: Path):

@@ -13,6 +13,16 @@ from pydantic import BaseModel, ConfigDict, field_validator
 
 from herdr_master.core.catalog import HarnessKind
 
+__all__ = [
+    "AvailableModels",
+    "enabled_model_ids",
+    "filter_model_ids",
+    "format_available_models_block",
+    "is_all_enabled",
+    "materialize_toggle",
+    "materialize_toggle_all",
+]
+
 _MODES = ("herdr", "native")
 _HARNESS_VALUES = {kind.value: kind.value for kind in HarnessKind}
 
@@ -79,6 +89,26 @@ def filter_model_ids(
     return filtered
 
 
+def is_all_enabled(
+    available: Optional[AvailableModels],
+    mode: str,
+    harness: Union[HarnessKind, str],
+    discovered: List[str],
+) -> bool:
+    """Return whether all discovered models are allowlisted.
+
+    An unrestricted scope (missing mode or harness key) returns True.
+    An explicit empty list returns False.
+    Otherwise, returns True if discovered is a subset of the allowlist.
+    """
+    allowlist = enabled_model_ids(available, mode, harness)
+    if allowlist is None:
+        return True
+    if not allowlist:
+        return False
+    return set(discovered).issubset(set(allowlist))
+
+
 def materialize_toggle(
     available: Optional[AvailableModels],
     mode: str,
@@ -113,6 +143,46 @@ def materialize_toggle(
     else:
         ids = [item for item in ids if item != cleaned_id]
     target[harness_key] = ids
+    if mode_name == "herdr":
+        herdr = target
+    else:
+        native = target
+    return AvailableModels(herdr=herdr, native=native, **extras)
+
+
+def materialize_toggle_all(
+    available: Optional[AvailableModels],
+    mode: str,
+    harness: Union[HarnessKind, str],
+    enabled: bool,
+    discovered: List[str],
+) -> AvailableModels:
+    """Materialize an all-enabled or all-disabled allowlist for a harness.
+
+    Toggling to True sets target[harness_key] to all cleaned, deduplicated
+    discovered ids. Toggling to False sets target[harness_key] to an explicit
+    empty list []. Untouched harnesses and modes remain unaffected.
+    """
+    if not isinstance(enabled, bool):
+        raise TypeError("enabled must be a bool")
+    mode_name = _require_mode(mode)
+    harness_key = _require_harness_key(harness)
+
+    herdr, native, extras = _clone_maps(available)
+    target = herdr if mode_name == "herdr" else native
+    if target is None:
+        target = {}
+
+    if enabled:
+        cleaned: List[str] = []
+        for item in discovered:
+            cid = _clean_model_id(item)
+            if cid not in cleaned:
+                cleaned.append(cid)
+        target[harness_key] = cleaned
+    else:
+        target[harness_key] = []
+
     if mode_name == "herdr":
         herdr = target
     else:
