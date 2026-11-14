@@ -44,6 +44,8 @@ When presenting or proposing a squad, list each role with its harness and exact 
 
 `herdm --aihead` is equivalent to `herdm aihead`: it adopts an existing Herdr workspace or starts Herdr and opens an interactive AiHead pane. Root flags forward to the same launcher: `--task`, `--harness`, `--model`, `--effort`, `-C/--cwd`, `--no-attach`.
 
+`--automode` / `--no-automode` are a launch override of saved `ai_head.automode`. Omitted means the saved value. These flags do not write `.herdr-master.toml`.
+
 `[ergo] coordinator` (or `--coordinator` on `herdm ergo`) sets the model/harness of the coordinator pane opened for a delegated Ergo run; it is not used when `/ergo` runs inside an already-open session (that session is the coordinator), and it falls back to the Scout binding when unset.
 
 `herdm --aihead-setup` (alias `herdm aihead-setup`) configures per-role models and persists them to `.herdr-master.toml`. Defaults:
@@ -56,6 +58,8 @@ When presenting or proposing a squad, list each role with its harness and exact 
 | Reviewer | `opencode` | `openai/gpt-6.1-sol` | `medium` |
 
 Non-interactive: `herdm --aihead-setup --defaults --yes --config PATH`. Invalid slugs or efforts exit non-zero without touching the file.
+
+Available models in `aihead --setup` are the single allowlist for later model pickers. An absent allowlist leaves those pickers unrestricted.
 
 ### Coordinator bindings — where they live and when they apply
 
@@ -100,6 +104,7 @@ When presented with any user request, problem statement, or objective, AiHead ex
 - One worker is permitted only for an atomic mechanical change in one file, with no design and no new behavior. Its binding still comes from the resolved catalog, not the parent pane.
 - Match role to work: mechanical → resolved scout or project simple worker; implementation → an allowed coder model; architecture → architect binding; review → reviewer binding.
 - AiHead selects among resolved routes without asking. If the catalog cannot resolve a required route, stop and ask rather than substitute.
+- Automode composes `/ergo` and `/orchestration` squads from the Available models allowlist in `aihead --setup` via the existing `--models` transports and must not invent model ids. `/ergo` may mix harnesses as `role:binding`; `/orchestration` stays one native harness with `role=model` ids. When automode is off, dispatch those pipelines with the saved squad unless the user asks for a different composition.
 
 1. **Simple Direct Agent (Single-Agent Focus)**:
    - **Criteria**: Only an atomic mechanical change in one file, with no design and no new behavior. Small tasks may also use `/orchestration` when appropriate.

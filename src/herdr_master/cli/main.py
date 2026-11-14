@@ -595,6 +595,11 @@ def run_aihead(
         "--split/--no-split",
         help="Split active Herdr terminal screen so AiHead becomes primary and active pane becomes secondary.",
     ),
+    automode: Optional[bool] = typer.Option(
+        None,
+        "--automode/--no-automode",
+        help="Override saved ai_head.automode for this launch. Omitted uses saved config.",
+    ),
     secondary: bool = typer.Option(
         False,
         "--secondary",
@@ -688,6 +693,7 @@ def run_aihead(
             session=session,
             cwd=str(cwd.resolve()) if cwd else None,
             config_path=config,
+            automode=automode,
         )
 
     shown = f"{kind.value} {model_slug}"
@@ -1423,6 +1429,7 @@ async def _dispatch_standalone_aihead(
     attach: bool,
     effective_cwd: Path,
     config_path: Optional[Path],
+    automode: Optional[bool] = None,
 ) -> Any:
     """Adopt or create one workspace, then launch interactive AiHead there.
 
@@ -1479,6 +1486,7 @@ async def _dispatch_standalone_aihead(
             session=launch_session,
             cwd=str(effective_cwd),
             config_path=config_path,
+            automode=automode,
         )
 
 
@@ -1615,6 +1623,11 @@ def launch_standalone_aihead(
             "Split the active Herdr screen so AiHead is primary "
             "and the active pane is secondary."
         ),
+    ),
+    automode: Optional[bool] = typer.Option(
+        None,
+        "--automode/--no-automode",
+        help="Override saved ai_head.automode for this launch. Omitted uses saved config.",
     ),
     secondary: bool = typer.Option(
         False,
@@ -1798,6 +1811,7 @@ def launch_standalone_aihead(
                 attach=attach,
                 effective_cwd=effective_cwd,
                 config_path=config_path,
+                automode=automode,
             )
         )
     except typer.Exit:

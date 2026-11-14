@@ -1371,6 +1371,7 @@ async def test_launch_ai_head_legacy_positional_order_and_permission_keyword(tmp
         "name": "legacy-head",
         "focus": False,
         "dangerously_skip_permissions": None,
+        "automode": None,
     }
 
     ctx = HerdrContext(

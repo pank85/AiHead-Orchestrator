@@ -13,7 +13,15 @@ from typing import Annotated, Optional
 
 import typer
 
-from herdr_master.core.catalog import CatalogError, catalog_document, qualify_binding_slug
+from herdr_master.cli.setup_catalog import discover_model_catalog
+from herdr_master.core.available_models import enabled_model_ids
+from herdr_master.core.catalog import (
+    CatalogError,
+    catalog_document,
+    qualify_binding_slug,
+    supported_harnesses,
+)
+from herdr_master.core.config import load_project_config
 from herdr_master.core.skill_resources import SkillResourceError
 from herdr_master.core.slug import InvalidBindingSlugError, parse_binding
 from herdr_master.pipeline.squad import (
@@ -216,3 +224,78 @@ def agent_cmd(
         )
 
     _guard(run)
+
+
+@catalog_app.command("available")
+def available_cmd(
+    json_output: Annotated[bool, typer.Option("--json", help="Emit machine JSON.")] = False,
+    project: Annotated[
+        Optional[Path],
+        typer.Option("--project", help="Project TOML. Absent means no project allowlist."),
+    ] = None,
+) -> None:
+    """Inspect the project allowlist alongside discovered catalog models."""
+
+    def run() -> None:
+        cfg = None
+        if project is not None:
+            path = Path(project)
+            if path.is_dir():
+                candidate = path / ".herdr-master.toml"
+                if not candidate.is_file():
+                    raise FileNotFoundError(
+                        f"Project configuration file not found: {candidate}"
+                    )
+                path = candidate
+            elif not path.is_file():
+                raise FileNotFoundError(
+                    f"Project configuration file not found: {path}"
+                )
+            cfg = load_project_config(path)
+
+        available_obj = cfg.models.available if cfg is not None else None
+        restricted = available_obj is not None
+        automode = bool(cfg.ai_head.automode) if cfg is not None else False
+        available_data = (
+            available_obj.model_dump() if available_obj is not None else None
+        )
+
+        catalog = discover_model_catalog(probe_live=False)
+        modes = {}
+        for mode in ("herdr", "native"):
+            modes[mode] = {}
+            for harness in supported_harnesses(mode=mode):
+                discovered = [opt.value for opt in catalog.models(harness, mode=mode)]
+                enabled = enabled_model_ids(available_obj, mode, harness)
+                modes[mode][harness] = {
+                    "discovered": discovered,
+                    "enabled": enabled,
+                }
+
+        payload = {
+            "restricted": restricted,
+            "automode": automode,
+            "available": available_data,
+            "modes": modes,
+        }
+        if json_output:
+            _emit(payload)
+            return
+
+        lines = [f"restricted={str(restricted).lower()} automode={str(automode).lower()}"]
+        for mode_name, harness_map in modes.items():
+            for harness_name, info in harness_map.items():
+                if info["enabled"] is None:
+                    status = "unrestricted"
+                elif not info["enabled"]:
+                    status = "none"
+                else:
+                    status = ",".join(info["enabled"])
+                discovered = ",".join(info["discovered"])
+                lines.append(
+                    f"{mode_name}.{harness_name}: enabled={status} (discovered: {discovered})"
+                )
+        sys.stdout.write("\n".join(lines) + "\n")
+
+    _guard(run)
+
