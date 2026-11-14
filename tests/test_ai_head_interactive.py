@@ -459,6 +459,9 @@ def test_build_interactive_ai_head_prompt_defaults():
     assert "Level 2 (Ergo Orchestrator / Council Coordinator / Job Worker) notifies Level 1 (AiHead / Master Coordinator)" in prompt
 
     assert "Update: <short>" in prompt
+    assert "Plan: <short>" in prompt
+    assert "Info: <short>" in prompt
+    assert "even when" in prompt and "approved automatically" in prompt
     assert "User ack/reply for Update tab <tab-id>: <response>" in prompt
     assert "interactive and stays open waiting for the user to see it" in prompt
     assert "--focus" in prompt
