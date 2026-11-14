@@ -250,14 +250,17 @@ def test_coder_alias_and_disagreement(monkeypatch, tmp_path):
 def test_tui_delegates_to_aiheaddev():
     with patch("shutil.which", return_value="/usr/local/bin/aiheaddev"), patch("os.execvp") as mock_execvp:
         result = runner.invoke(app, ["tui", "--session", "test-sess"])
-        mock_execvp.assert_called_once_with("/usr/local/bin/aiheaddev", ["/usr/local/bin/aiheaddev", "--session", "test-sess"])
+        mock_execvp.assert_called_once_with(
+            "/usr/local/bin/aiheaddev",
+            ["/usr/local/bin/aiheaddev", "--tui", "--session", "test-sess"],
+        )
 
 
 def test_tui_not_installed_exits_with_help():
     with patch("shutil.which", return_value=None), patch("importlib.util.find_spec", return_value=None):
         result = runner.invoke(app, ["tui"])
         assert result.exit_code != 0
-        assert "AiHeadDev cockpit is not installed" in result.output
+        assert "AiHead-Cockpit is not installed" in result.output
 
 
 def test_plugin_commands_are_path_entrypoints():

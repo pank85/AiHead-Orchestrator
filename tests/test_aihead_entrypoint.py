@@ -621,7 +621,7 @@ def test_tui_does_not_execute_aihead_when_aiheaddev_is_absent():
 
     text = _output(result)
     assert result.exit_code != 0, text
-    assert "AiHeadDev cockpit is not installed" in text
+    assert "AiHead-Cockpit is not installed" in text
     execvp.assert_not_called()
 
 

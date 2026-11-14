@@ -564,7 +564,8 @@ def test_master_binding_uses_config_and_explicit_override(tmp_path):
     assert resolve_master_binding(model="xai/grok-4.8", config_path=cfg)[1] == "xai/grok-4.8"
 
 
-def test_unified_ergo_config_is_used(tmp_path):
+def test_unified_ergo_config_is_used(tmp_path, monkeypatch):
+    monkeypatch.setenv("HERDR_ENV", "1")
     cfg = tmp_path / "config.toml"
     cfg.write_text('[models.default_squad]\nscout = "pi:xai/grok-4.7:high"\n')
     with patch("herdr_master.cli.main.launch_ergo", new_callable=AsyncMock) as launch:
@@ -590,14 +591,14 @@ def test_skill_launch_rejects_missing_config(tmp_path):
     launch.assert_not_called()
 
 
-def test_master_cli_explicit_overrides_are_forwarded():
+def test_master_cli_explicit_overrides_are_forwarded(monkeypatch):
+    monkeypatch.setenv("HERDR_ENV", "1")
     with patch("herdr_master.cli.main.launch_master", new_callable=AsyncMock) as launch:
         launch.return_value = {"workspace_id": "new", "pane_id": "new:p1"}
         result = runner.invoke(
             aihead_app,
             [
                 "--herdr-master",
-                "test",
                 "--harness",
                 "pi",
                 "--model",
@@ -607,6 +608,7 @@ def test_master_cli_explicit_overrides_are_forwarded():
             ],
         )
     assert result.exit_code == 0, result.output
+    assert launch.await_args.kwargs["initial_task"] is None
     assert launch.await_args.kwargs["harness"] == "pi"
     assert launch.await_args.kwargs["model"] == "xai/grok-4.7"
     assert launch.await_args.kwargs["effort"] == "high"
