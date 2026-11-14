@@ -10,6 +10,11 @@ else:
 import pytest
 from pydantic import ValidationError
 
+from herdr_master.cli.setup_catalog import (
+    ChoiceOption,
+    ModelCatalog,
+    discover_model_catalog,
+)
 from herdr_master.core.available_models import (
     AvailableModels as HelperAvailableModels,
 )
@@ -482,3 +487,169 @@ def test_available_models_all_exports():
     assert "filter_model_ids" in mod.__all__
     assert "format_available_models_block" in mod.__all__
     assert "AvailableModels" in mod.__all__
+
+
+def test_model_catalog_add_custom_model_all_harnesses_both_modes():
+    """Verify ModelCatalog.add_custom_model adds custom model IDs for all harnesses
+
+    in both herdr and native modes, and catalog.models(...) returns them.
+    """
+    catalog = discover_model_catalog(probe_live=False)
+
+    for harness in HarnessKind:
+        h_name = harness.value
+        for mode in ("herdr", "native"):
+            custom_id = f"custom-provider/{h_name}-{mode}-v1"
+
+            # Add custom model
+            catalog.add_custom_model(h_name, custom_id, mode=mode)
+
+            # models() should return the newly added custom model
+            options = catalog.models(h_name, mode=mode)
+            matches = [opt for opt in options if opt.value == custom_id]
+            assert len(matches) == 1, f"Expected 1 match for {custom_id} in {mode}/{h_name}"
+            assert matches[0].label == custom_id
+            assert matches[0].detail == "custom"
+
+            # models() with current matching custom model should include it without duplicate
+            curr_options = catalog.models(h_name, mode=mode, current=custom_id)
+            curr_matches = [opt for opt in curr_options if opt.value == custom_id]
+            assert len(curr_matches) == 1
+
+            # models() with another current model should still include the custom model
+            other_options = catalog.models(
+                h_name, mode=mode, current=f"some-other-{h_name}-current"
+            )
+            assert any(opt.value == custom_id for opt in other_options)
+
+
+def test_model_catalog_add_custom_model_deduplication_and_validation():
+    """Verify deduplication, whitespace stripping, and input validation."""
+    catalog = ModelCatalog(
+        herdr_harnesses=[],
+        native_harnesses=[],
+        herdr_models={"pi": [ChoiceOption(value="stock-pi-1", label="stock-pi-1", detail="live")]},
+        native_models={},
+    )
+
+    # Adding custom model
+    catalog.add_custom_model("pi", "custom/foo", mode="herdr")
+    opts = [opt for opt in catalog.models("pi", mode="herdr") if opt.value == "custom/foo"]
+    assert len(opts) == 1
+
+    # Adding exact duplicate is a no-op
+    catalog.add_custom_model("pi", "custom/foo", mode="herdr")
+    opts = [opt for opt in catalog.models("pi", mode="herdr") if opt.value == "custom/foo"]
+    assert len(opts) == 1
+
+    # Adding with whitespace strips and prevents duplicate
+    catalog.add_custom_model("pi", "  custom/foo  ", mode="herdr")
+    opts = [opt for opt in catalog.models("pi", mode="herdr") if opt.value == "custom/foo"]
+    assert len(opts) == 1
+
+    # Adding existing stock model does not duplicate or overwrite detail
+    catalog.add_custom_model("pi", "stock-pi-1", mode="herdr")
+    matches = [opt for opt in catalog.models("pi", mode="herdr") if opt.value == "stock-pi-1"]
+    assert len(matches) == 1
+    assert matches[0].detail == "live"
+
+    # Validation: empty or blank model ID
+    with pytest.raises(ValueError, match="blank"):
+        catalog.add_custom_model("pi", "", mode="herdr")
+    with pytest.raises(ValueError, match="blank"):
+        catalog.add_custom_model("pi", "   ", mode="herdr")
+
+    # Validation: non-string model ID
+    with pytest.raises(ValueError, match="non-empty string"):
+        catalog.add_custom_model("pi", None, mode="herdr")  # type: ignore[arg-type]
+    with pytest.raises(ValueError, match="non-empty string"):
+        catalog.add_custom_model("pi", 123, mode="herdr")  # type: ignore[arg-type]
+
+    # Validation: invalid mode
+    with pytest.raises(ValueError, match="Unknown mode"):
+        catalog.add_custom_model("pi", "custom/foo", mode="invalid_mode")
+
+
+def test_custom_models_allowlist_materialize_toggle_and_filter():
+    """Verify custom model IDs in allowlist work with materialize_toggle and filter_model_ids."""
+    for harness in HarnessKind:
+        for mode in ("herdr", "native"):
+            custom_id = f"custom-org/model-{harness.value}"
+            stock_id = f"stock-model-{harness.value}"
+
+            # First touch: materialize_toggle adds custom_id to discovered pool
+            available = materialize_toggle(
+                None, mode, harness, custom_id, True, [stock_id]
+            )
+            allowlist = enabled_model_ids(available, mode, harness)
+            assert allowlist is not None
+            assert custom_id in allowlist
+            assert stock_id in allowlist
+
+            # filter_model_ids retains allowlisted custom and stock models
+            discovered = [stock_id, custom_id, "unallowed-model"]
+            filtered = filter_model_ids(available, mode, harness, discovered)
+            assert filtered == [stock_id, custom_id]
+
+            # filter_model_ids appends non-empty current even if not in allowlist
+            filtered_curr = filter_model_ids(
+                available, mode, harness, discovered, current="another-custom"
+            )
+            assert filtered_curr == [stock_id, custom_id, "another-custom"]
+
+            # Toggle off custom model
+            available_off = materialize_toggle(
+                available, mode, harness, custom_id, False, discovered
+            )
+            allowlist_off = enabled_model_ids(available_off, mode, harness)
+            assert allowlist_off is not None
+            assert custom_id not in allowlist_off
+            assert stock_id in allowlist_off
+
+            # is_all_enabled checks
+            assert is_all_enabled(available, mode, harness, [stock_id, custom_id]) is True
+            assert is_all_enabled(available, mode, harness, [stock_id, custom_id, "other"]) is False
+            assert is_all_enabled(available_off, mode, harness, [custom_id]) is False
+
+
+def test_custom_models_serialization_and_roundtrip_toml(tmp_path):
+    """Verify serialization and roundtrip of custom model IDs in .herdr-master.toml."""
+    cfg = HerdrMasterConfig()
+    herdr_allowlist = {
+        h.value: [f"custom-vendor/{h.value}-herdr-1", f"custom-vendor/{h.value}-herdr-2"]
+        for h in HarnessKind
+    }
+    native_allowlist = {
+        h.value: [f"custom-vendor/{h.value}-native-1"]
+        for h in HarnessKind
+    }
+    cfg.models.available = AvailableModels(
+        herdr=herdr_allowlist,
+        native=native_allowlist,
+    )
+
+    config_path = tmp_path / ".herdr-master.toml"
+    save_project_config(cfg, config_path)
+
+    # Verify written text contains custom model names
+    text = config_path.read_text(encoding="utf-8")
+    for h in HarnessKind:
+        assert f"custom-vendor/{h.value}-herdr-1" in text
+        assert f"custom-vendor/{h.value}-native-1" in text
+
+    # Reload and verify full roundtrip
+    reloaded = load_project_config(config_path)
+    assert reloaded.models.available is not None
+    assert reloaded.models.available.herdr == herdr_allowlist
+    assert reloaded.models.available.native == native_allowlist
+
+    for h in HarnessKind:
+        assert (
+            enabled_model_ids(reloaded.models.available, "herdr", h)
+            == herdr_allowlist[h.value]
+        )
+        assert (
+            enabled_model_ids(reloaded.models.available, "native", h)
+            == native_allowlist[h.value]
+        )
+

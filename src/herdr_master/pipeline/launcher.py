@@ -430,17 +430,17 @@ async def _allocate_launch_target(
     the current session and leaves the caller's workspace untouched. Failures
     propagate to the caller.
     """
+    caller_pane = parent_pane_id
+    if caller_pane:
+        delegated = True
+
     eff_parent_pane = (
         parent_pane_id
         if parent_pane_id is not None
         else (
-            (os.environ.get("HERDR_PANE_ID") or getattr(ctx, "pane_id", None))
-            if delegated
-            else (
-                (getattr(ctx, "pane_id", None) or os.environ.get("HERDR_PARENT_PANE_ID"))
-                if getattr(ctx, "is_inside_herdr", False)
-                else None
-            )
+            getattr(ctx, "pane_id", None)
+            or os.environ.get("HERDR_PANE_ID")
+            or (os.environ.get("HERDR_PARENT_PANE_ID") if getattr(ctx, "is_inside_herdr", False) else None)
         )
     )
     if delegated and not eff_parent_pane and ctx.is_inside_herdr:
@@ -472,6 +472,7 @@ async def _allocate_launch_target(
             tab_id=tab_id,
             owns_workspace=False,
             parent_pane_id=eff_parent_pane,
+            delegated=delegated,
         )
 
     if fresh_workspace and ctx.is_inside_herdr:
@@ -507,6 +508,7 @@ async def _allocate_launch_target(
             tab_id=_tab_id(tab_res),
             owns_workspace=False,
             parent_pane_id=eff_parent_pane,
+            delegated=delegated,
         )
 
     session_name = _isolated_session_name(session, isolated_name)
@@ -544,6 +546,7 @@ async def _allocate_launch_target(
         tab_id=_tab_id(tab_res),
         owns_workspace=False,
         parent_pane_id=eff_parent_pane,
+        delegated=delegated,
     )
 
 
@@ -637,13 +640,21 @@ async def _resolve_and_wire_ai_head(
     if head_config is None:
         return None, config_path
 
-    if allocated.delegated:
+    caller_pane = allocated.parent_pane_id or (
+        os.environ.get("HERDR_PANE_ID") if not allocated.owns_workspace else None
+    )
+
+    if allocated.delegated or (allocated.parent_pane_id and allocated.owns_workspace):
         # The caller is authoritative; do not create a second AiHead in the child workspace.
         head_config = head_config.model_copy(update={"enabled": True})
         return build_ai_head_discovery(
-            head_config, target_cwd, mode="herdr", session_name=allocated.session_name,
-            socket_path=allocated.socket_path, workspace_id=os.environ.get("HERDR_WORKSPACE_ID"),
-            pane_id=allocated.parent_pane_id,
+            head_config,
+            target_cwd,
+            mode="herdr",
+            session_name=allocated.session_name,
+            socket_path=allocated.socket_path,
+            workspace_id=os.environ.get("HERDR_WORKSPACE_ID") or allocated.workspace_id,
+            pane_id=allocated.parent_pane_id or caller_pane,
         ), config_path
 
     if ai_head_override is not None:
@@ -654,9 +665,6 @@ async def _resolve_and_wire_ai_head(
 
     if allocated.workspace_id and allocated.client:
         try:
-            caller_pane = allocated.parent_pane_id or (
-                os.environ.get("HERDR_PANE_ID") if not allocated.owns_workspace else None
-            )
             try:
                 head_info = await ensure_herdr_ai_head(
                     allocated.client,
@@ -783,6 +791,7 @@ async def launch_master(
     fresh_workspace: bool = False,
     focus: bool = True,
     delegated: bool = False,
+    parent_pane_id: Optional[str] = None,
     config_path: Path | None = None,
 ) -> Dict[str, Any]:
     """Launch a Herdr Master coordinator with the canonical skill body.
@@ -809,6 +818,7 @@ async def launch_master(
         fresh_workspace=fresh_workspace,
         focus=focus,
         delegated=delegated,
+        parent_pane_id=parent_pane_id,
     )
     if not allocated.pane_id:
         raise RuntimeError(f"Could not allocate pane in workspace {allocated.workspace_id}")
@@ -866,6 +876,7 @@ async def launch_ergo(
     fresh_workspace: bool = False,
     focus: bool = True,
     delegated: bool = False,
+    parent_pane_id: Optional[str] = None,
     coordinator: HarnessBinding | None = None,
 ) -> Dict[str, Any]:
     """Hand an Ergo job to the canonical skill.
@@ -894,6 +905,7 @@ async def launch_ergo(
         fresh_workspace=fresh_workspace,
         focus=focus,
         delegated=delegated,
+        parent_pane_id=parent_pane_id,
     )
     if not allocated.pane_id:
         raise RuntimeError(
@@ -967,6 +979,7 @@ async def launch_orchestration(
     fresh_workspace: bool = False,
     focus: bool = True,
     delegated: bool = False,
+    parent_pane_id: Optional[str] = None,
 ) -> Dict[str, Any]:
     """Launch a self-contained subagent orchestration pipeline in a single harness.
 
@@ -1074,6 +1087,7 @@ async def launch_orchestration(
         fresh_workspace=fresh_workspace,
         focus=focus,
         delegated=delegated,
+        parent_pane_id=parent_pane_id,
     )
     if not allocated.pane_id:
         raise RuntimeError(
@@ -1144,6 +1158,7 @@ async def launch_council(
     fresh_workspace: bool = False,
     focus: bool = True,
     delegated: bool = False,
+    parent_pane_id: Optional[str] = None,
 ) -> Dict[str, Any]:
     """Launch an AI Council deliberation session hosted by the coordinator.
 
@@ -1191,6 +1206,7 @@ async def launch_council(
         fresh_workspace=fresh_workspace,
         focus=focus,
         delegated=delegated,
+        parent_pane_id=parent_pane_id,
     )
     if not allocated.pane_id:
         raise RuntimeError(

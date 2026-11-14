@@ -556,6 +556,10 @@ def test_job_workspace_and_question_tab_contract():
     aihead = load_skill_body("aihead")
     assert "launch its work in a new background Herdr pane" in aihead
     assert "never creates a second coordinator workspace speculatively" in aihead
+    assert "Plan: <short>" in aihead
+    assert "Info: <short>" in aihead
+    assert "any essential information the user must see" in aihead.lower()
+    assert "approved automatically" in aihead
 
 
 def test_pane_lifecycle_and_unmerged_ownership_contract_all_skills():

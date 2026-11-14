@@ -21,7 +21,13 @@ from herdr_master.cli.setup_catalog import (
     _parse_pi_models,
     discover_model_catalog,
 )
-from herdr_master.cli.setup_tui import SECTIONS, SetupTuiApp, _herdr_effort_separate
+from herdr_master.cli.setup_tui import (
+    ADD_CUSTOM_MODEL_VALUE,
+    ADD_CUSTOM_OPTION,
+    SECTIONS,
+    SetupTuiApp,
+    _herdr_effort_separate,
+)
 from herdr_master.core.available_models import AvailableModels
 from herdr_master.core.config import HerdrMasterConfig
 from herdr_master.core.models import EffortLevel, HarnessBinding, HarnessKind
@@ -693,11 +699,12 @@ def test_available_section_all_toggle_with_empty_catalog(tmp_path: Path):
     # Navigate to section 6 ("models")
     tui.drive(["6"])
     rows = tui._current_rows()
-    assert len(rows) == 3
+    assert len(rows) == 4
     assert [row.key for row in rows] == [
         "available.view.mode",
         "available.view.harness",
         "available.all",
+        "available.add_custom",
     ]
     # Verify "All" row displays safely
     assert rows[2].key == "available.all"
@@ -750,7 +757,7 @@ def test_allowlist_hides_disabled_models_and_keeps_current(tmp_path: Path):
     filtered_claude, hint = tui._filtered_model_options(
         "claude", mode="herdr", current="sonnet"
     )
-    assert filtered_claude is sentinel
+    assert filtered_claude == [*sentinel, ADD_CUSTOM_OPTION]
     assert hint == ""
     tui.catalog.models = original_models
 
@@ -764,6 +771,7 @@ def test_allowlist_hides_disabled_models_and_keeps_current(tmp_path: Path):
     model_ids = [opt.value for opt in model.options]
     assert tui.cfg.ai_head.model in model_ids
     assert "xai/grok-4.7" not in model_ids
+    assert ADD_CUSTOM_MODEL_VALUE in model_ids
     assert "xai/grok-4.7" in [
         opt.value for opt in catalog.models("pi", mode="herdr", current=tui.cfg.ai_head.model)
     ]
@@ -774,6 +782,7 @@ def test_allowlist_hides_disabled_models_and_keeps_current(tmp_path: Path):
     assert tui.squad.scout.model in scout_ids
     assert "gemini-3.8-flash" in scout_ids
     assert "gemini-3.8-flash-low" not in scout_ids
+    assert ADD_CUSTOM_MODEL_VALUE in scout_ids
 
     tui.handle_key("3")
     orch = next(row for row in tui._current_rows() if row.key == "orch.scout_model")
@@ -781,6 +790,7 @@ def test_allowlist_hides_disabled_models_and_keeps_current(tmp_path: Path):
     assert tui.cfg.orchestration.scout_model in orch_ids
     assert "flash" in orch_ids
     assert "pro" not in orch_ids
+    assert ADD_CUSTOM_MODEL_VALUE in orch_ids
     native_harness = next(row for row in tui._current_rows() if row.key == "orch.harness")
     assert [opt.value for opt in native_harness.options] == [
         opt.value for opt in catalog.harnesses(mode="native")
@@ -828,7 +838,10 @@ def test_empty_allowlist_keeps_current_and_sets_hint(tmp_path: Path):
     tui.handle_key("1")
     row = next(item for item in tui._current_rows() if item.key == "aihead.model")
     assert row.hint == "no models enabled in Available"
-    assert [opt.value for opt in row.options] == [tui.cfg.ai_head.model]
+    assert [opt.value for opt in row.options] == [
+        tui.cfg.ai_head.model,
+        ADD_CUSTOM_MODEL_VALUE,
+    ]
 
 
 def test_automode_space_persists_without_shifting_enabled(tmp_path: Path):
@@ -1038,3 +1051,267 @@ def test_master_cli_explicit_overrides_are_forwarded(monkeypatch):
     assert launch.await_args.kwargs["harness"] == "pi"
     assert launch.await_args.kwargs["model"] == "xai/grok-4.7"
     assert launch.await_args.kwargs["effort"] == "high"
+
+
+# ---------------------------------------------------------------------------
+# Custom model selection & allowlist tests
+# ---------------------------------------------------------------------------
+
+
+def test_every_harness_model_picker_offers_available_models_and_add_custom(tmp_path: Path):
+    """Check every harness in HarnessKind in both Herdr and Native modes;
+
+    verify returned options include both available models and [+] Add custom model...
+    """
+    cfg = tmp_path / ".herdr-master.toml"
+    catalog = _offline_catalog()
+    tui = SetupTuiApp(config_path=cfg, catalog=catalog)
+
+    # 1. Test every harness in HarnessKind for both herdr and native modes
+    for kind in HarnessKind:
+        kind_str = kind.value
+
+        # Herdr mode
+        herdr_opts, _ = tui._filtered_model_options(kind_str, mode="herdr")
+        assert len(herdr_opts) >= 1
+        assert herdr_opts[-1] == ADD_CUSTOM_OPTION
+        assert herdr_opts[-1].value == ADD_CUSTOM_MODEL_VALUE
+        herdr_values = [str(opt.value) for opt in herdr_opts]
+        assert ADD_CUSTOM_MODEL_VALUE in herdr_values
+        # Stock catalog models are present
+        stock_herdr = [str(opt.value) for opt in catalog.models(kind_str, mode="herdr")]
+        for stock_model in stock_herdr:
+            assert stock_model in herdr_values
+
+        # Native mode
+        native_opts, _ = tui._filtered_model_options(kind_str, mode="native")
+        assert len(native_opts) >= 1
+        assert native_opts[-1] == ADD_CUSTOM_OPTION
+        assert native_opts[-1].value == ADD_CUSTOM_MODEL_VALUE
+        native_values = [str(opt.value) for opt in native_opts]
+        assert ADD_CUSTOM_MODEL_VALUE in native_values
+        stock_native = [str(opt.value) for opt in catalog.models(kind_str, mode="native")]
+        for stock_model in stock_native:
+            assert stock_model in native_values
+
+    # 2. Test restricted allowlist still appends ADD_CUSTOM_OPTION
+    tui.cfg.models.available = AvailableModels(
+        herdr={"agy": ["gemini-3.8-flash"]},
+        native={"agy": ["flash"]},
+    )
+    restricted_herdr, _ = tui._filtered_model_options("agy", mode="herdr")
+    assert [opt.value for opt in restricted_herdr] == ["gemini-3.8-flash", ADD_CUSTOM_MODEL_VALUE]
+
+    restricted_native, _ = tui._filtered_model_options("agy", mode="native")
+    assert [opt.value for opt in restricted_native] == ["flash", ADD_CUSTOM_MODEL_VALUE]
+
+    # 3. Test every section's model rows expose ADD_CUSTOM_OPTION
+    # AiHead
+    tui.handle_key("1")
+    ah_model = next(r for r in tui._current_rows() if r.key == "aihead.model")
+    assert ah_model.options[-1] == ADD_CUSTOM_OPTION
+
+    # Ergo
+    tui.handle_key("2")
+    for role in ("scout", "architect", "reviewer"):
+        row = next(r for r in tui._current_rows() if r.key == f"ergo.{role}.model")
+        assert row.options[-1] == ADD_CUSTOM_OPTION
+    pool_model = next(r for r in tui._current_rows() if r.key == "pool.0.model")
+    assert pool_model.options[-1] == ADD_CUSTOM_OPTION
+
+    # Orchestration
+    tui.handle_key("3")
+    for role in ("scout", "architect", "reviewer"):
+        row = next(r for r in tui._current_rows() if r.key == f"orch.{role}_model")
+        assert row.options[-1] == ADD_CUSTOM_OPTION
+    worker_row = next(r for r in tui._current_rows() if r.key == "orch.worker.0")
+    assert worker_row.options[-1] == ADD_CUSTOM_OPTION
+
+    # Council
+    tui.handle_key("4")
+    coord_row = next(r for r in tui._current_rows() if r.key == "council.coord.model")
+    assert coord_row.options[-1] == ADD_CUSTOM_OPTION
+    member_row = next(r for r in tui._current_rows() if r.key == "council.member.0.model")
+    assert member_row.options[-1] == ADD_CUSTOM_OPTION
+
+    # Herdr-Master
+    tui.handle_key("5")
+    master_model = next(r for r in tui._current_rows() if r.key == "master.model")
+    assert master_model.options[-1] == ADD_CUSTOM_OPTION
+
+
+def test_custom_model_entry_via_prompt_sets_model_and_persists(tmp_path: Path):
+    """Drive SetupTuiApp to select [+] Add custom model..., type custom ID,
+
+    press ENTER, verify value applied and saved to TOML.
+    """
+    cfg = tmp_path / ".herdr-master.toml"
+    catalog = _offline_catalog()
+    tui = SetupTuiApp(config_path=cfg, catalog=catalog)
+
+    # 1. Drive AiHead model picker to select [+] Add custom model...
+    # Section 1, move cursor to aihead.model (index 1)
+    # Open picker, filter "custom", press ENTER to select [+] Add custom model...
+    # This dismisses picker and opens text_prompt
+    tui.drive(["1", "DOWN", "ENTER", *"custom", "ENTER"])
+    assert tui.text_prompt is not None
+    assert tui.text_prompt.field_key == "aihead.model"
+
+    # Type custom model ID and press ENTER
+    custom_herdr_id = "my-custom/herdr-flash"
+    tui.drive([*custom_herdr_id, "ENTER"])
+    assert tui.text_prompt is None
+    assert tui.cfg.ai_head.binding.model == custom_herdr_id
+    assert f"Set aihead.model to custom model {custom_herdr_id}" in tui.status_message
+
+    # Verify custom model was added to catalog in herdr mode
+    catalog_herdr = [
+        opt.value for opt in tui.catalog.models(tui.cfg.ai_head.binding.kind.value, mode="herdr")
+    ]
+    assert custom_herdr_id in catalog_herdr
+
+    # 2. Drive Orchestration worker to enter custom native model
+    # Switch native host to opencode (which supports arbitrary native model IDs)
+    tui.drive(["3", "ENTER", *"opencode", "ENTER"])
+    rows = tui._current_rows()
+    worker_idx = next(i for i, r in enumerate(rows) if r.key == "orch.worker.0")
+    tui.field_cursors["orchestration"] = worker_idx
+    tui.drive(["ENTER", *"custom", "ENTER"])
+    assert tui.text_prompt is not None
+    assert tui.text_prompt.field_key == "orch.worker.0"
+
+    custom_native_id = "my-custom-native-coder"
+    tui.drive([*custom_native_id, "ENTER"])
+    assert tui.text_prompt is None
+    assert tui.cfg.orchestration.worker_models[0] == custom_native_id
+
+    # 3. Save to disk and verify roundtrip in TOML
+    tui.drive(["s"])
+    assert tui.saved is True
+
+    data = _load(cfg)
+    assert data["ai_head"]["binding"]["model"] == custom_herdr_id
+    assert data["orchestration"]["worker_models"] == [custom_native_id]
+
+
+def test_available_section_add_custom_model_persists_to_allowlist(tmp_path: Path):
+    """Test adding custom model in Available section and verifying allowlist persistence."""
+    cfg = tmp_path / ".herdr-master.toml"
+    catalog = _offline_catalog()
+    tui = SetupTuiApp(config_path=cfg, catalog=catalog)
+
+    # Navigate to section 6 ("models")
+    tui.drive(["6"])
+    assert tui.current_section == "models"
+    assert tui.available_view_mode == "herdr"
+    assert tui.available_view_harness == "agy"
+
+    # Trigger available.add_custom via 'a'
+    tui.drive(["a"])
+    assert tui.text_prompt is not None
+    assert tui.text_prompt.field_key == "available.add_custom"
+    assert "agy" in tui.text_prompt.title
+
+    # Type custom model ID and press ENTER
+    custom_agy_id = "gemini-custom-experimental"
+    tui.drive([*custom_agy_id, "ENTER"])
+    assert tui.text_prompt is None
+    assert tui.dirty is True
+    assert f"Added custom model {custom_agy_id} to agy (herdr) allowlist" in tui.status_message
+
+    # Verify custom model is now present in the catalog and allowlist
+    assert tui.cfg.models.available is not None
+    assert custom_agy_id in tui.cfg.models.available.herdr["agy"]
+
+    # Verify rows in Section 6 now include a toggle row for the new custom model
+    rows = tui._current_rows()
+    custom_toggle = next((r for r in rows if r.label == custom_agy_id), None)
+    assert custom_toggle is not None
+    assert custom_toggle.current_value is True
+    assert custom_toggle.value_text == "true"
+
+    # Also test adding a custom model to Native allowlist via action row
+    # Switch view mode to native: cursor on mode (0), RIGHT
+    tui.drive(["HOME", "RIGHT"])
+    assert tui.available_view_mode == "native"
+    harness = tui.available_view_harness
+    assert harness is not None
+
+    # Navigate cursor to bottom row: available.add_custom, and press ENTER
+    tui.drive(["END", "ENTER"])
+    assert tui.text_prompt is not None
+    assert tui.text_prompt.field_key == "available.add_custom"
+
+    custom_native_id = "custom-native-experimental"
+    tui.drive([*custom_native_id, "ENTER"])
+    assert tui.text_prompt is None
+    assert custom_native_id in tui.cfg.models.available.native[harness]
+
+    # Save and verify both custom models are persisted in TOML
+    tui.drive(["s"])
+    assert tui.saved is True
+
+    data = _load(cfg)
+    assert custom_agy_id in data["models"]["available"]["herdr"]["agy"]
+    assert custom_native_id in data["models"]["available"]["native"][harness]
+
+
+def test_custom_model_entry_cancel_preserves_current_value(tmp_path: Path):
+    """Verify ESC or empty string cancels without changing value."""
+    cfg = tmp_path / ".herdr-master.toml"
+    catalog = _offline_catalog()
+    tui = SetupTuiApp(config_path=cfg, catalog=catalog)
+    initial_model = tui.cfg.ai_head.binding.model
+
+    # 1. Cancel via ESC
+    tui.drive(["1", "DOWN", "ENTER", *"custom", "ENTER"])
+    assert tui.text_prompt is not None
+    tui.drive([*"my-cancelled-model", "ESC"])
+    assert tui.text_prompt is None
+    assert tui.status_message == "Prompt cancelled."
+    assert tui.cfg.ai_head.binding.model == initial_model
+    catalog_herdr = [
+        opt.value for opt in tui.catalog.models(tui.cfg.ai_head.binding.kind.value, mode="herdr")
+    ]
+    assert "my-cancelled-model" not in catalog_herdr
+
+    # 2. Cancel via empty ENTER
+    tui.drive(["ENTER", *"custom", "ENTER"])
+    assert tui.text_prompt is not None
+    tui.drive(["ENTER"])
+    assert tui.text_prompt is None
+    assert tui.status_message == "Prompt cancelled."
+    assert tui.cfg.ai_head.binding.model == initial_model
+
+    # 3. Cancel via whitespace-only ENTER
+    tui.drive(["ENTER", *"custom", "ENTER"])
+    assert tui.text_prompt is not None
+    tui.drive([" ", " ", "ENTER"])
+    assert tui.text_prompt is None
+    assert tui.status_message == "Prompt cancelled."
+    assert tui.cfg.ai_head.binding.model == initial_model
+
+    # 4. Backspace editing in text prompt
+    tui.drive(["ENTER", *"custom", "ENTER"])
+    assert tui.text_prompt is not None
+    tui.drive([*"abc", "BACKSPACE"])
+    assert tui.text_prompt.value == "ab"
+    tui.drive(["BACKSPACE", "BACKSPACE"])
+    assert tui.text_prompt.value == ""
+    # Backspace on empty value does not crash
+    tui.drive(["BACKSPACE", "ESC"])
+    assert tui.text_prompt is None
+    assert tui.cfg.ai_head.binding.model == initial_model
+
+    # 5. Cycling LEFT / RIGHT never cycles into ADD_CUSTOM_MODEL_VALUE
+    tui.handle_key("1")
+    tui.field_cursors["aihead"] = 1  # aihead.model
+    model_row = tui._current_row()
+    assert model_row.key == "aihead.model"
+    total_options = len([o for o in model_row.options if o.value != ADD_CUSTOM_MODEL_VALUE])
+    for _ in range(total_options + 2):
+        tui.handle_key("RIGHT")
+        assert tui.cfg.ai_head.binding.model != ADD_CUSTOM_MODEL_VALUE
+    for _ in range(total_options + 2):
+        tui.handle_key("LEFT")
+        assert tui.cfg.ai_head.binding.model != ADD_CUSTOM_MODEL_VALUE

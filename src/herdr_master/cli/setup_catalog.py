@@ -7,12 +7,13 @@ import subprocess
 from concurrent.futures import ThreadPoolExecutor
 from dataclasses import dataclass, field
 from pathlib import Path
-from typing import Any, Dict, List, Optional, Sequence
+from typing import Any, Dict, List, Optional, Sequence, Union
 
 from herdr_master.core.catalog import (
     _AGY_TIERS,
     _EFFORT_BY_FLASH,
     _FLASH_BASE,
+    HarnessKind,
     _allowed_efforts,
     compatibility_presets,
     default_squad_data,
@@ -302,19 +303,51 @@ class ModelCatalog:
         return list(self.native_harnesses if mode == "native" else self.herdr_harnesses)
 
     def models(
-        self, kind: str, *, mode: str = "herdr", current: Optional[str] = None
+        self,
+        kind: Union[HarnessKind, str],
+        *,
+        mode: str = "herdr",
+        current: Optional[str] = None,
     ) -> List[ChoiceOption]:
-        pool = self.native_models if mode == "native" else self.herdr_models
-        items = list(pool.get(kind, ()))
+        kind_key = (kind.value if hasattr(kind, "value") else str(kind)).strip().lower()
+        mode_key = str(mode).strip().lower()
+        pool = self.native_models if mode_key == "native" else self.herdr_models
+        items = list(pool.get(kind_key, ()))
         if current and current.strip():
+            curr = current.strip()
             # Native agy only permits tier IDs; avoid injecting invalid exact slugs into agy native.
-            if not (mode == "native" and kind == "agy" and current not in _AGY_TIERS):
-                if not (mode == "herdr" and kind == "agy" and current in _AGY_TIERS):
-                    if all(opt.value != current for opt in items):
+            if not (mode_key == "native" and kind_key == "agy" and curr not in _AGY_TIERS):
+                if not (mode_key == "herdr" and kind_key == "agy" and curr in _AGY_TIERS):
+                    if all(opt.value != curr for opt in items):
                         items.insert(
-                            0, ChoiceOption(value=current, label=current, detail="current")
+                            0, ChoiceOption(value=curr, label=curr, detail="current")
                         )
         return items
+
+    def add_custom_model(
+        self,
+        kind: Union[HarnessKind, str],
+        model_id: str,
+        *,
+        mode: str = "herdr",
+    ) -> None:
+        """Add a custom model option to the specified harness and launch mode."""
+        if not isinstance(model_id, str):
+            raise ValueError(
+                f"Model id must be a non-empty string, got {type(model_id).__name__}."
+            )
+        cleaned = model_id.strip()
+        if not cleaned:
+            raise ValueError("Custom model ID must not be blank.")
+        mode_key = str(mode).strip().lower()
+        if mode_key not in ("herdr", "native"):
+            raise ValueError(f"Unknown mode {mode!r}. Expected 'herdr' or 'native'.")
+        kind_key = (kind.value if hasattr(kind, "value") else str(kind)).strip().lower()
+        pool = self.native_models if mode_key == "native" else self.herdr_models
+        items = pool.setdefault(kind_key, [])
+        if any(opt.value == cleaned for opt in items):
+            return
+        items.append(ChoiceOption(value=cleaned, label=cleaned, detail="custom"))
 
     def efforts(
         self,
