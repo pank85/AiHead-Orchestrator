@@ -1532,8 +1532,17 @@ def _launch_skill(skill: str, intent: Optional[str], session: Optional[str], cwd
             _require_herdr_executable("start or attach to the Herdr session")
         client = HerdrClient(session=ctx.session_name, socket_path=ctx.socket_path)
         label = f"{skill}-{datetime.now().strftime('%Y%m%d-%H%M%S')}"
-        common = dict(client=client, cwd=str(cwd.resolve()) if cwd else None,
-                      session=session, fresh_workspace=True, focus=True, delegated=False)
+        caller_pane_id = os.environ.get("HERDR_PANE_ID") or getattr(ctx, "pane_id", None)
+        is_delegated = bool(caller_pane_id)
+        common = dict(
+            client=client,
+            cwd=str(cwd.resolve()) if cwd else None,
+            session=session,
+            fresh_workspace=True,
+            focus=True,
+            delegated=is_delegated,
+            parent_pane_id=caller_pane_id if is_delegated else None,
+        )
         if skill == "ergo":
             resolved = _resolve_ergo_once(models=None, scout=None, architect=None,
                                           workers=None, coder=None, reviewer=None, run_squad=None,

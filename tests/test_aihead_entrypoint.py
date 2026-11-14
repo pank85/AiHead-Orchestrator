@@ -16,9 +16,10 @@ from unittest.mock import AsyncMock, patch
 import pytest
 from typer.testing import CliRunner
 
-from herdr_master.cli.main import aihead_app, app
+from herdr_master.cli.main import _launch_skill, aihead_app, app
+from herdr_master.core.config import HerdrMasterConfig
 from herdr_master.core.context import HerdrContext
-from herdr_master.core.models import EffortLevel, HarnessKind
+from herdr_master.core.models import EffortLevel, HarnessKind, Squad
 from herdr_master.herdr.socket import HerdrConnectionError, HerdrRPCError
 from herdr_master.menu import MenuError
 
@@ -768,3 +769,217 @@ def test_menu_flag_conflicts_are_rejected(flags: list[str], expected_err: str):
     assert expected_err in _output(result)
     run_mock.assert_not_called()
     launch.assert_not_called()
+
+
+# ============================================================================
+# Skill Launch Caller Pane Delegation Contract Tests
+# ============================================================================
+
+_SKILL_CLI_CASES = [
+    ("ergo", ["--ergo", "ship feature"], "launch_ergo"),
+    ("council", ["--council", "deliberate arch"], "launch_council"),
+    ("orchestration", ["--orchestration", "run pipeline"], "launch_orchestration"),
+    ("herdr-master", ["--herdr-master"], "launch_master"),
+]
+
+
+@pytest.mark.parametrize(("skill", "flags", "target_mock_name"), _SKILL_CLI_CASES)
+def test_aihead_skill_cli_with_herdr_pane_id_env_passes_delegated_true(
+    tmp_path: Path, monkeypatch, skill: str, flags: list[str], target_mock_name: str
+):
+    """When HERDR_PANE_ID is set in environment, aihead --ergo/--council/--orchestration/--herdr-master
+    delegates to the caller pane (delegated=True, parent_pane_id=HERDR_PANE_ID)."""
+    caller_pane = "caller-env-pane-101"
+    monkeypatch.setenv("HERDR_PANE_ID", caller_pane)
+    sock = tmp_path / "herdr.sock"
+    ctx = _ctx(inside=True, socket=sock, pane_id=None)
+
+    dummy_result = {"session": "alpha", "workspace_id": "ws-1", "pane_id": "ws-1:p1"}
+    mocks = {
+        "launch_ergo": AsyncMock(return_value=dummy_result),
+        "launch_council": AsyncMock(return_value=dummy_result),
+        "launch_orchestration": AsyncMock(return_value=dummy_result),
+        "launch_master": AsyncMock(return_value=dummy_result),
+    }
+
+    with (
+        patch("herdr_master.cli.main.resolve_launch_context", return_value=ctx),
+        patch("herdr_master.cli.main.HerdrClient", return_value=AsyncMock()),
+        patch("herdr_master.cli.main.launch_ergo", mocks["launch_ergo"]),
+        patch("herdr_master.cli.main.launch_council", mocks["launch_council"]),
+        patch("herdr_master.cli.main.launch_orchestration", mocks["launch_orchestration"]),
+        patch("herdr_master.cli.main.launch_master", mocks["launch_master"]),
+        patch("herdr_master.cli.main._resolve_ergo_once", return_value=SimpleNamespace(squad=Squad())),
+        patch("herdr_master.cli.main.resolve_ergo_coordinator", return_value=None),
+        patch("herdr_master.cli.main.load_project_config", return_value=HerdrMasterConfig()),
+        patch("herdr_master.cli.main._require_herdr_executable"),
+        patch("os.execvp"),
+    ):
+        result = runner.invoke(aihead_app, flags)
+
+    assert result.exit_code == 0, _output(result)
+    mock = mocks[target_mock_name]
+    assert mock.call_count == 1
+    kwargs = mock.call_args.kwargs
+    assert kwargs["delegated"] is True
+    assert kwargs["parent_pane_id"] == caller_pane
+
+
+@pytest.mark.parametrize(("skill", "flags", "target_mock_name"), _SKILL_CLI_CASES)
+def test_aihead_skill_cli_inside_herdr_with_ctx_pane_id_passes_delegated_true(
+    tmp_path: Path, monkeypatch, skill: str, flags: list[str], target_mock_name: str
+):
+    """When inside Herdr and ctx.pane_id is present (HERDR_PANE_ID env unset),
+    _launch_skill passes delegated=True and parent_pane_id=ctx.pane_id."""
+    monkeypatch.delenv("HERDR_PANE_ID", raising=False)
+    sock = tmp_path / "herdr.sock"
+    ctx_pane = "caller-ctx-pane-202"
+    ctx = _ctx(inside=True, socket=sock, pane_id=ctx_pane)
+
+    dummy_result = {"session": "alpha", "workspace_id": "ws-2", "pane_id": "ws-2:p1"}
+    mocks = {
+        "launch_ergo": AsyncMock(return_value=dummy_result),
+        "launch_council": AsyncMock(return_value=dummy_result),
+        "launch_orchestration": AsyncMock(return_value=dummy_result),
+        "launch_master": AsyncMock(return_value=dummy_result),
+    }
+
+    with (
+        patch("herdr_master.cli.main.resolve_launch_context", return_value=ctx),
+        patch("herdr_master.cli.main.HerdrClient", return_value=AsyncMock()),
+        patch("herdr_master.cli.main.launch_ergo", mocks["launch_ergo"]),
+        patch("herdr_master.cli.main.launch_council", mocks["launch_council"]),
+        patch("herdr_master.cli.main.launch_orchestration", mocks["launch_orchestration"]),
+        patch("herdr_master.cli.main.launch_master", mocks["launch_master"]),
+        patch("herdr_master.cli.main._resolve_ergo_once", return_value=SimpleNamespace(squad=Squad())),
+        patch("herdr_master.cli.main.resolve_ergo_coordinator", return_value=None),
+        patch("herdr_master.cli.main.load_project_config", return_value=HerdrMasterConfig()),
+        patch("herdr_master.cli.main._require_herdr_executable"),
+        patch("os.execvp"),
+    ):
+        result = runner.invoke(aihead_app, flags)
+
+    assert result.exit_code == 0, _output(result)
+    mock = mocks[target_mock_name]
+    assert mock.call_count == 1
+    kwargs = mock.call_args.kwargs
+    assert kwargs["delegated"] is True
+    assert kwargs["parent_pane_id"] == ctx_pane
+
+
+@pytest.mark.parametrize(("skill", "flags", "target_mock_name"), _SKILL_CLI_CASES)
+def test_aihead_skill_cli_without_caller_pane_passes_delegated_false(
+    tmp_path: Path, monkeypatch, skill: str, flags: list[str], target_mock_name: str
+):
+    """When HERDR_PANE_ID is unset and outside Herdr without pane,
+    _launch_skill passes delegated=False and parent_pane_id=None."""
+    monkeypatch.delenv("HERDR_PANE_ID", raising=False)
+    sock = tmp_path / "herdr.sock"
+    ctx = _ctx(inside=False, socket=sock, pane_id=None)
+
+    dummy_result = {"session": "alpha", "workspace_id": "ws-3", "pane_id": "ws-3:p1"}
+    mocks = {
+        "launch_ergo": AsyncMock(return_value=dummy_result),
+        "launch_council": AsyncMock(return_value=dummy_result),
+        "launch_orchestration": AsyncMock(return_value=dummy_result),
+        "launch_master": AsyncMock(return_value=dummy_result),
+    }
+
+    with (
+        patch("herdr_master.cli.main.resolve_launch_context", return_value=ctx),
+        patch("herdr_master.cli.main.HerdrClient", return_value=AsyncMock()),
+        patch("herdr_master.cli.main.launch_ergo", mocks["launch_ergo"]),
+        patch("herdr_master.cli.main.launch_council", mocks["launch_council"]),
+        patch("herdr_master.cli.main.launch_orchestration", mocks["launch_orchestration"]),
+        patch("herdr_master.cli.main.launch_master", mocks["launch_master"]),
+        patch("herdr_master.cli.main._resolve_ergo_once", return_value=SimpleNamespace(squad=Squad())),
+        patch("herdr_master.cli.main.resolve_ergo_coordinator", return_value=None),
+        patch("herdr_master.cli.main.load_project_config", return_value=HerdrMasterConfig()),
+        patch("herdr_master.cli.main._require_herdr_executable"),
+        patch("os.execvp"),
+    ):
+        result = runner.invoke(aihead_app, flags)
+
+    assert result.exit_code == 0, _output(result)
+    mock = mocks[target_mock_name]
+    assert mock.call_count == 1
+    kwargs = mock.call_args.kwargs
+    assert kwargs["delegated"] is False
+    assert kwargs["parent_pane_id"] is None
+
+
+@pytest.mark.parametrize(
+    ("skill", "intent", "target_mock_name"),
+    [
+        ("ergo", "do ergo", "launch_ergo"),
+        ("council", "do council", "launch_council"),
+        ("orchestration", "do orchestration", "launch_orchestration"),
+        ("herdr-master", None, "launch_master"),
+    ],
+)
+def test_launch_skill_direct_delegation_behavior(
+    tmp_path: Path, monkeypatch, skill: str, intent: str | None, target_mock_name: str
+):
+    """Direct invocation of _launch_skill verifies delegated=True when HERDR_PANE_ID is set,
+    and delegated=False when HERDR_PANE_ID is unset."""
+    dummy_result = {"session": "alpha", "workspace_id": "ws-direct", "pane_id": "ws-direct:p1"}
+    sock = tmp_path / "herdr.sock"
+
+    # Case A: HERDR_PANE_ID is set
+    monkeypatch.setenv("HERDR_PANE_ID", "caller-direct-pane-1")
+    ctx_inside = _ctx(inside=True, socket=sock, pane_id=None)
+    mock_func_a = AsyncMock(return_value=dummy_result)
+    with (
+        patch("herdr_master.cli.main.resolve_launch_context", return_value=ctx_inside),
+        patch("herdr_master.cli.main.HerdrClient", return_value=AsyncMock()),
+        patch(f"herdr_master.cli.main.{target_mock_name}", mock_func_a),
+        patch("herdr_master.cli.main._resolve_ergo_once", return_value=SimpleNamespace(squad=Squad())),
+        patch("herdr_master.cli.main.resolve_ergo_coordinator", return_value=None),
+        patch("herdr_master.cli.main.load_project_config", return_value=HerdrMasterConfig()),
+        patch("herdr_master.cli.main._require_herdr_executable"),
+        patch("os.execvp"),
+    ):
+        _launch_skill(
+            skill=skill,
+            intent=intent,
+            session="alpha",
+            cwd=tmp_path,
+            config=None,
+            harness=None,
+            model=None,
+            effort=None,
+        )
+
+    assert mock_func_a.call_count == 1
+    assert mock_func_a.call_args.kwargs["delegated"] is True
+    assert mock_func_a.call_args.kwargs["parent_pane_id"] == "caller-direct-pane-1"
+
+    # Case B: HERDR_PANE_ID is unset and ctx.pane_id is None
+    monkeypatch.delenv("HERDR_PANE_ID", raising=False)
+    ctx_outside = _ctx(inside=False, socket=sock, pane_id=None)
+    mock_func_b = AsyncMock(return_value=dummy_result)
+    with (
+        patch("herdr_master.cli.main.resolve_launch_context", return_value=ctx_outside),
+        patch("herdr_master.cli.main.HerdrClient", return_value=AsyncMock()),
+        patch(f"herdr_master.cli.main.{target_mock_name}", mock_func_b),
+        patch("herdr_master.cli.main._resolve_ergo_once", return_value=SimpleNamespace(squad=Squad())),
+        patch("herdr_master.cli.main.resolve_ergo_coordinator", return_value=None),
+        patch("herdr_master.cli.main.load_project_config", return_value=HerdrMasterConfig()),
+        patch("herdr_master.cli.main._require_herdr_executable"),
+        patch("os.execvp"),
+    ):
+        _launch_skill(
+            skill=skill,
+            intent=intent,
+            session="alpha",
+            cwd=tmp_path,
+            config=None,
+            harness=None,
+            model=None,
+            effort=None,
+        )
+
+    assert mock_func_b.call_count == 1
+    assert mock_func_b.call_args.kwargs["delegated"] is False
+    assert mock_func_b.call_args.kwargs["parent_pane_id"] is None
+
