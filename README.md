@@ -195,8 +195,8 @@ without needing the cockpit.
 
 Run `aihead --setup` (with optional `--config <absolute .herdr-master.toml>`)
 to open the single-screen settings TUI. The settings screen covers `aihead`,
-`ergo`, `orchestration`, `council`, `herdr-master`, and the `worker-pool`
-(worker pool). Cancelling leaves the configuration file unchanged. Ergo bindings
+`ergo` (including the worker pool), `orchestration`, `council`,
+`herdr-master`, and Available models. Cancelling leaves the configuration file unchanged. Ergo bindings
 can use different harnesses; orchestration uses one selected harness for all
 its models; `[master_coordinator]` supplies the master launcher default.
 

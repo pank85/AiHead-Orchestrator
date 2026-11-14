@@ -27,8 +27,10 @@ from herdr_master.core.available_models import (
     materialize_toggle,
 )
 from herdr_master.core.catalog import (
+    _FLASH_BASE,
     CatalogError,
     HarnessKind,
+    _allowed_efforts,
     describe_herdr_agent,
     ensure_herdr_routable,
     get_harness,
@@ -56,7 +58,6 @@ SECTIONS: Tuple[Tuple[str, str], ...] = (
     ("orchestration", "orchestration"),
     ("council", "council"),
     ("herdr-master", "herdr-master"),
-    ("worker-pool", "worker-pool"),
     ("models", "Available"),
 )
 
@@ -106,6 +107,25 @@ def _effort_str(binding: HarnessBinding) -> Optional[str]:
     return binding.effort.value if binding.effort else None
 
 
+_ENCODED_EFFORT_SUFFIXES = ("-low", "-medium", "-high", "-max", "-xhigh")
+
+
+def _herdr_effort_separate(kind: str, model: str) -> bool:
+    """Whether Herdr mode has a separate Effort selector for this binding.
+
+    ``agy`` slugs such as ``gemini-3.8-flash-high`` or ``claude-opus-5-5-medium``
+    already encode the tier. An empty allowed-effort list means the same thing:
+    there is nothing to pick, so the row would only restate the slug.
+    """
+    if kind != "agy":
+        return True
+    allowed = _allowed_efforts(kind, model or "", mode="herdr")
+    if not allowed:
+        return False
+    slug = (model or "").strip().lower()
+    return not slug.endswith(_ENCODED_EFFORT_SUFFIXES)
+
+
 class SetupTuiApp:
     """One-screen interactive setup state machine, renderer, and headless driver."""
 
@@ -147,7 +167,7 @@ class SetupTuiApp:
         self.saved: bool = False
         self.saved_path: Optional[Path] = None
         self.status_message: str = (
-            "1-7/↑↓ section  Tab/Enter edit  ←→ cycle  Space/Enter pick  S save  Q quit"
+            "1-6/↑↓ section  Tab/Enter edit  ←→ cycle  Space/Enter pick  S save  Q quit"
         )
         self.status_is_error: bool = False
 
@@ -204,6 +224,30 @@ class SetupTuiApp:
             self.master_coordinator = HarnessBinding(
                 kind=kind, model=model, effort=effort, label="master-coordinator"
             )
+        self._clear_redundant_herdr_efforts()
+
+    def _clear_redundant_herdr_efforts(self) -> None:
+        """Drop effort that an agy Herdr slug already encodes.
+
+        Worker-pool effort stays unset so the Architect can choose it per task.
+        Persistence remains ``[models.worker_pool]``.
+        """
+        bindings = [
+            self.cfg.ai_head.binding,
+            self.squad.scout,
+            self.squad.architect,
+            self.squad.reviewer,
+            self.ergo_coordinator,
+            self.master_coordinator,
+            self.cfg.council.coordinator,
+            self.cfg.council.scout,
+            *self.cfg.council.members,
+        ]
+        for binding in bindings:
+            if not _herdr_effort_separate(binding.kind.value, binding.model):
+                binding.effort = None
+        for worker in self.squad.worker_pool:
+            worker.effort = None
 
     @property
     def current_section(self) -> str:
@@ -225,7 +269,9 @@ class SetupTuiApp:
         if models and all(opt.value != binding.model for opt in models):
             binding.model = str(models[0].value)
 
-        if not allow_effort:
+        if allow_effort and binding.kind.value == "agy" and binding.model == _FLASH_BASE:
+            allow_none_effort = False
+        if not allow_effort or not _herdr_effort_separate(binding.kind.value, binding.model):
             binding.effort = None
             return
 
@@ -485,7 +531,8 @@ class SetupTuiApp:
                 deletable_id=deletable_id,
             ),
         ]
-        if allow_effort:
+        show_effort = allow_effort and _herdr_effort_separate(kind, binding.model)
+        if show_effort:
             cur_eff = _effort_str(binding)
             rows.append(
                 FieldRow(
@@ -633,7 +680,7 @@ class SetupTuiApp:
                 )
             for role in ("scout", "architect", "reviewer"):
                 binding = getattr(self.squad, role)
-                needs_effort = binding.kind.value == "agy" and binding.model == "gemini-3.8-flash"
+                needs_effort = binding.kind.value == "agy" and binding.model == _FLASH_BASE
                 rows.extend(
                     self._binding_rows(
                         f"ergo.{role}",
@@ -642,6 +689,7 @@ class SetupTuiApp:
                         allow_none_effort=not needs_effort,
                     )
                 )
+            rows.extend(self._worker_pool_rows())
             return rows
 
         if section == "orchestration":
@@ -824,8 +872,10 @@ class SetupTuiApp:
         if section == "models":
             return self._available_rows()
 
-        # section == "worker-pool"
-        rows = []
+        return []
+
+    def _worker_pool_rows(self) -> List[FieldRow]:
+        rows: List[FieldRow] = []
         for idx, worker in enumerate(self.squad.worker_pool):
             label = worker.label or f"worker-{idx + 1}"
             tag = ("pool_worker", idx)
@@ -902,10 +952,9 @@ class SetupTuiApp:
             )
         elif attr == "model":
             binding.model = str(value)
-            if allow_effort:
-                self._reconcile_binding(
-                    binding, allow_effort=True, allow_none_effort=allow_none_effort
-                )
+            self._reconcile_binding(
+                binding, allow_effort=allow_effort, allow_none_effort=allow_none_effort
+            )
         elif attr == "effort":
             binding.effort = _effort_enum(value)
 
@@ -932,12 +981,7 @@ class SetupTuiApp:
             else:
                 role, attr = parts[1], parts[2]
                 binding = getattr(self.squad, role)
-                needs_effort = (
-                    binding.kind.value == "agy" and binding.model == "gemini-3.8-flash"
-                )
-                self._apply_binding_change(
-                    binding, attr, value, allow_none_effort=not needs_effort
-                )
+                self._apply_binding_change(binding, attr, value)
 
         elif root == "orch":
             orch = self.cfg.orchestration
@@ -1169,6 +1213,7 @@ class SetupTuiApp:
         """Validate every skill and return a fresh validated (cfg, squad) pair."""
         from herdr_master.pipeline.launcher import resolve_coordinator_binding
 
+        self._clear_redundant_herdr_efforts()
         cfg = self.cfg.model_copy(deep=True)
         squad = self.squad.model_copy(deep=True)
         for worker in squad.worker_pool:
@@ -1392,7 +1437,7 @@ class SetupTuiApp:
             self._set_status("Reset edits to saved configuration.")
             return
 
-        if key in ("1", "2", "3", "4", "5", "6", "7"):
+        if key in ("1", "2", "3", "4", "5", "6"):
             self.section_index = int(key) - 1
             self.focus_pane = "options"
             self._clamp_cursor()
@@ -1451,7 +1496,7 @@ class SetupTuiApp:
                 self._run_action("orch.worker_add")
             elif self.current_section == "council":
                 self._run_action("council.member_add")
-            elif self.current_section == "worker-pool":
+            elif self.current_section == "ergo":
                 self._run_action("pool.add")
         elif key in ("d", "D", "DELETE", "BACKSPACE") and row is not None:
             if row.deletable_id is not None:
@@ -1470,7 +1515,12 @@ class SetupTuiApp:
             b = self.cfg.ai_head.binding
             text = f"{b.kind.value}:{b.model}"
         elif section == "ergo":
-            text = f"s={self.squad.scout.kind.value} a={self.squad.architect.kind.value}"
+            enabled_w = sum(1 for w in self.squad.worker_pool if w.enabled)
+            text = (
+                f"s={self.squad.scout.kind.value} "
+                f"a={self.squad.architect.kind.value} "
+                f"w={enabled_w}/{len(self.squad.worker_pool)}"
+            )
         elif section == "orchestration":
             text = f"{self.cfg.orchestration.harness.value} (native)"
         elif section == "council":
@@ -1481,9 +1531,6 @@ class SetupTuiApp:
                 text = "default (scout)"
             else:
                 text = f"{self.master_coordinator.kind.value}:{self.master_coordinator.model}"
-        elif section == "worker-pool":
-            enabled_w = sum(1 for w in self.squad.worker_pool if w.enabled)
-            text = f"{enabled_w}/{len(self.squad.worker_pool)} workers"
         elif section == "models":
             text = self._available_enabled_summary()
         else:
