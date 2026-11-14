@@ -510,11 +510,10 @@ def test_aihead_skill_contract():
 def test_aihead_delegation_limits_same_session_subagents_to_path_selection():
     body = load_skill_body("aihead")
     assert (
-        "Same-session asynchronous background subagents are allowed **only** to evaluate "
-        "or select the execution skill/path" in body
+        "Same-session asynchronous background subagents may only evaluate which skill to use" in body
     )
     assert (
-        "they must not execute the task, monitor children, or perform other delegated work" in body
+        "they must not edit files, do the job, execute the task, monitor children, or perform other delegated work" in body
     )
     assert "launch its work in a new background Herdr pane" in body
     assert "Small tasks may also use `/orchestration` when appropriate" in body
@@ -537,7 +536,16 @@ def test_job_workspace_and_question_tab_contract():
         assert "herdr workspace create" in body
         assert "User answer for <qid>" in body
         assert "herdr tab close <tab-id>" in body
-        assert "must not close the tab" in body
+        assert "do not close this tab yourself" in body
+        assert "must not close its own tab" in body
+        assert "Update: <short>" in body
+        assert "User ack/reply for Update tab <tab-id>" in body
+        assert "Update tab is interactive and stays open waiting for the user to see it" in body
+        assert "does NOT auto-close it immediately upon verification" in body
+        assert "if the user only acknowledged (such as 'ok', 'ack', or 'thanks'), the coordinator closes that Update tab" in body
+        assert "For an update, do not ask for a reply and do not wait." not in body
+        assert "An Update tab does not wait for a reply." not in body
+        assert "leave Update tabs open" not in body
         assert "job workspace" in body and "never in" in body
 
     master = load_skill_body("herdr-master")

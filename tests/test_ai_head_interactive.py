@@ -436,7 +436,7 @@ def test_build_interactive_ai_head_prompt_defaults():
 
     assert "/herdr-master" in prompt
     assert "Master coordinator" in prompt
-    assert "managing multiple parallel jobs" in prompt
+    assert "each job gets its own Herdr workspace" in prompt
 
     # Selection Heuristics
     assert "WORKFLOW SELECTION HEURISTICS:" in prompt
@@ -457,6 +457,16 @@ def test_build_interactive_ai_head_prompt_defaults():
     assert "herdr agent prompt <PARENT_PANE_ID>" in prompt
     assert "Level 3 (Coders / Reviewer / Council Members) notify Level 2 (Ergo Orchestrator / Council Coordinator)" in prompt
     assert "Level 2 (Ergo Orchestrator / Council Coordinator / Job Worker) notifies Level 1 (AiHead / Master Coordinator)" in prompt
+
+    assert "Update: <short>" in prompt
+    assert "User ack/reply for Update tab <tab-id>: <response>" in prompt
+    assert "interactive and stays open waiting for the user to see it" in prompt
+    assert "--focus" in prompt
+    assert "$HERDR_WORKSPACE_ID" in prompt
+    assert "herdr tab close <tab-id>" in prompt
+    assert "not a shell reader" in prompt
+    assert "A shell reader prints the text" not in prompt
+    assert "User answer for <qid> tab <tab-id>: <answer>" in prompt
 
     # Safety Guardrails
     assert "Safety Guardrails:" in prompt
