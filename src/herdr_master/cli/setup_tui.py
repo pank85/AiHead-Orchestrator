@@ -63,6 +63,13 @@ SECTIONS: Tuple[Tuple[str, str], ...] = (
     ("models", "Available"),
 )
 
+ADD_CUSTOM_MODEL_VALUE: str = "__custom__"
+ADD_CUSTOM_OPTION = ChoiceOption(
+    value=ADD_CUSTOM_MODEL_VALUE,
+    label="[+] Add custom model...",
+    detail="enter custom model ID",
+)
+
 
 @dataclass
 class FieldRow:
@@ -99,6 +106,16 @@ class PickerState:
             for opt in self.options
             if query in opt.label.lower() or query in opt.detail.lower()
         ]
+
+
+@dataclass
+class TextPromptState:
+    """Inline single-line text input prompt overlay."""
+
+    field_key: str
+    title: str
+    prompt: str
+    value: str = ""
 
 
 def _effort_enum(value: Optional[str]) -> Optional[EffortLevel]:
@@ -156,6 +173,7 @@ class SetupTuiApp:
         self.field_cursors: Dict[str, int] = {sec_id: 0 for sec_id, _ in SECTIONS}
         self.field_scroll: Dict[str, int] = {sec_id: 0 for sec_id, _ in SECTIONS}
         self.picker: Optional[PickerState] = None
+        self.text_prompt: Optional[TextPromptState] = None
         # View-only Available filters. Mode and harness are not written to TOML.
         self.available_view_mode: str = "herdr"
         self.available_view_harness: Optional[str] = None
@@ -344,7 +362,7 @@ class SetupTuiApp:
             current=current,
         )
         if filtered is discovered:
-            return options, ""
+            return list(options) + [ADD_CUSTOM_OPTION], ""
         by_value = {str(opt.value): opt for opt in options}
         rebuilt = [
             by_value[model_id]
@@ -352,6 +370,7 @@ class SetupTuiApp:
             else ChoiceOption(value=model_id, label=model_id, detail="current")
             for model_id in filtered
         ]
+        rebuilt.append(ADD_CUSTOM_OPTION)
         allowlist = enabled_model_ids(self.cfg.models.available, mode, kind)
         intersection_empty = allowlist is not None and not any(
             model_id in set(allowlist) for model_id in discovered
@@ -454,6 +473,16 @@ class SetupTuiApp:
                     hint="Toggle this model in the allowlist",
                 )
             )
+        rows.append(
+            FieldRow(
+                key="available.add_custom",
+                group="Models",
+                label="+ Add Custom Model",
+                kind="action",
+                value_text="Enter / A",
+                hint="Add a custom model ID to the allowlist for this harness",
+            )
+        )
         return rows
 
     def _apply_available_field(self, parts: List[str], value: Any) -> bool:
@@ -1161,6 +1190,11 @@ class SetupTuiApp:
 
         if action_key == "pool.remove":
             self._delete_item("pool_worker", len(self.squad.worker_pool) - 1)
+            return
+
+        if action_key == "available.add_custom":
+            self._open_custom_model_prompt("available.add_custom")
+            return
 
     def _delete_item(self, kind_tag: str, idx: int) -> None:
         if kind_tag == "orch_worker":
@@ -1212,9 +1246,72 @@ class SetupTuiApp:
         if cur >= len(rows):
             self.field_cursors[self.current_section] = len(rows) - 1
 
+    def _harness_and_mode_for_field(self, field_key: str) -> Tuple[str, str]:
+        parts = field_key.split(".")
+        root = parts[0]
+        if root == "aihead":
+            return self.cfg.ai_head.binding.kind.value, "herdr"
+        if root == "ergo":
+            if len(parts) >= 2 and parts[1] == "coord":
+                return self.ergo_coordinator.kind.value, "herdr"
+            if len(parts) >= 2 and parts[1] in ("scout", "architect", "reviewer"):
+                return getattr(self.squad, parts[1]).kind.value, "herdr"
+            return self.squad.scout.kind.value, "herdr"
+        if root == "orch":
+            return self.cfg.orchestration.harness.value, "native"
+        if root == "council":
+            if len(parts) >= 2 and parts[1] == "coord":
+                return self.cfg.council.coordinator.kind.value, "herdr"
+            if len(parts) >= 2 and parts[1] == "scout":
+                return self.cfg.council.scout.kind.value, "herdr"
+            if len(parts) >= 3 and parts[1] == "member":
+                try:
+                    idx = int(parts[2])
+                    return self.cfg.council.members[idx].kind.value, "herdr"
+                except (ValueError, IndexError):
+                    pass
+            return self.cfg.council.coordinator.kind.value, "herdr"
+        if root == "master":
+            return self.master_coordinator.kind.value, "herdr"
+        if root == "pool":
+            if len(parts) >= 2:
+                try:
+                    idx = int(parts[1])
+                    return self.squad.worker_pool[idx].kind.value, "herdr"
+                except (ValueError, IndexError):
+                    pass
+            return self.squad.worker_pool[0].kind.value, "herdr"
+        if root == "available":
+            mode = (
+                self.available_view_mode
+                if self.available_view_mode in ("herdr", "native")
+                else "herdr"
+            )
+            harness = self.available_view_harness or self._available_toggle_harness
+            if not harness:
+                harnesses = self.catalog.harnesses(mode=mode)
+                harness = str(harnesses[0].value) if harnesses else "agy"
+            return harness, mode
+        return "agy", "herdr"
+
+    def _open_custom_model_prompt(self, field_key: str) -> None:
+        harness, mode = self._harness_and_mode_for_field(field_key)
+        self.text_prompt = TextPromptState(
+            field_key=field_key,
+            title=f"Add Custom Model ({harness} - {mode})",
+            prompt=f"Enter custom model ID for {harness} [{mode}]:",
+            value="",
+        )
+        self._set_status(
+            f"Enter custom model ID for {harness} ({mode}). Press Enter to confirm, Esc to cancel."
+        )
+
     def _open_picker(self, row: FieldRow) -> None:
         if not row.options:
             self._set_status(f"No choices available for {row.label}.", error=True)
+            return
+        if len(row.options) == 1 and row.options[0].value == ADD_CUSTOM_MODEL_VALUE:
+            self._open_custom_model_prompt(row.key)
             return
         cursor = 0
         for idx, opt in enumerate(row.options):
@@ -1233,13 +1330,16 @@ class SetupTuiApp:
             self._apply_field_value(row.key, not bool(row.current_value))
             return
         if row.kind == "choice" and row.options:
+            concrete = [opt for opt in row.options if opt.value != ADD_CUSTOM_MODEL_VALUE]
+            if not concrete:
+                return
             cur_idx = 0
-            for idx, opt in enumerate(row.options):
+            for idx, opt in enumerate(concrete):
                 if opt.value == row.current_value:
                     cur_idx = idx
                     break
-            next_idx = (cur_idx + delta) % len(row.options)
-            self._apply_field_value(row.key, row.options[next_idx].value)
+            next_idx = (cur_idx + delta) % len(concrete)
+            self._apply_field_value(row.key, concrete[next_idx].value)
 
     def validate_and_build(self) -> Tuple[HerdrMasterConfig, Squad]:
         """Validate every skill and return a fresh validated (cfg, squad) pair."""
@@ -1428,7 +1528,10 @@ class SetupTuiApp:
                 chosen = items[max(0, min(picker.cursor, len(items) - 1))]
                 field_key = picker.field_key
                 self.picker = None
-                self._apply_field_value(field_key, chosen.value)
+                if chosen.value == ADD_CUSTOM_MODEL_VALUE:
+                    self._open_custom_model_prompt(field_key)
+                else:
+                    self._apply_field_value(field_key, chosen.value)
             else:
                 self.picker = None
             return
@@ -1441,6 +1544,64 @@ class SetupTuiApp:
             picker.filter_text += key
             picker.cursor = 0
 
+    def _handle_text_prompt_key(self, key: str) -> None:
+        prompt_state = self.text_prompt
+        if prompt_state is None:
+            return
+        if key == "ESC":
+            self.text_prompt = None
+            self._set_status("Prompt cancelled.")
+            return
+        if key in ("BACKSPACE", "KEY_BACKSPACE", "\b", "127"):
+            if prompt_state.value:
+                prompt_state.value = prompt_state.value[:-1]
+            return
+        if key in ("ENTER", "KEY_ENTER", "\n", "\r"):
+            field_key = prompt_state.field_key
+            clean = prompt_state.value.strip()
+            if clean:
+                harness, mode = self._harness_and_mode_for_field(field_key)
+                try:
+                    self.catalog.add_custom_model(harness, clean, mode=mode)
+                except ValueError as err:
+                    self.text_prompt = None
+                    self._set_status(f"Invalid model ID: {err}", error=True)
+                    return
+                if field_key == "available.add_custom":
+                    catalog_models = self.catalog.models(harness, mode=mode, current=None)
+                    discovered = [str(opt.value) for opt in catalog_models]
+                    self.cfg.models.available = materialize_toggle(
+                        self.cfg.models.available,
+                        mode,
+                        harness,
+                        clean,
+                        True,
+                        discovered,
+                    )
+                    self.dirty = True
+                    self._set_status(f"Added custom model {clean} to {harness} ({mode}) allowlist")
+                else:
+                    if enabled_model_ids(self.cfg.models.available, mode, harness) is not None:
+                        catalog_models = self.catalog.models(harness, mode=mode, current=None)
+                        discovered = [str(opt.value) for opt in catalog_models]
+                        self.cfg.models.available = materialize_toggle(
+                            self.cfg.models.available,
+                            mode,
+                            harness,
+                            clean,
+                            True,
+                            discovered,
+                        )
+                    self._apply_field_value(field_key, clean)
+                    self._set_status(f"Set {field_key} to custom model {clean}")
+                self.text_prompt = None
+            else:
+                self.text_prompt = None
+                self._set_status("Prompt cancelled.")
+            return
+        if len(key) == 1 and (32 <= ord(key) <= 126 or key.isprintable()):
+            prompt_state.value += key
+
     def handle_key(self, key: str) -> None:
         """Process one normalized key event."""
         if self.done:
@@ -1448,6 +1609,10 @@ class SetupTuiApp:
 
         if key == "CTRL_C":
             raise KeyboardInterrupt
+
+        if self.text_prompt is not None:
+            self._handle_text_prompt_key(key)
+            return
 
         if self.picker is not None:
             self._handle_picker_key(key)
@@ -1530,6 +1695,8 @@ class SetupTuiApp:
                 self._run_action("council.member_add")
             elif self.current_section == "ergo":
                 self._run_action("pool.add")
+            elif self.current_section == "models":
+                self._run_action("available.add_custom")
         elif key in ("d", "D", "DELETE", "BACKSPACE") and row is not None:
             if row.deletable_id is not None:
                 self._delete_item(*row.deletable_id)
@@ -1666,7 +1833,36 @@ class SetupTuiApp:
             box=ROUNDED,
         )
 
+    def _render_text_prompt(self, body_height: int) -> Panel:
+        assert self.text_prompt is not None
+        prompt_state = self.text_prompt
+        lines: List[Text] = [
+            Text(""),
+            Text(f"  {prompt_state.prompt}", style="bold white"),
+            Text(""),
+        ]
+        input_line = Text()
+        input_line.append("  > ", style="bold cyan")
+        if prompt_state.value:
+            input_line.append(prompt_state.value, style="bold cyan reverse")
+        else:
+            input_line.append("(type model ID)", style="dim")
+        lines.append(input_line)
+        lines.append(Text(""))
+        lines.append(Text("  Type the model ID and press Enter to confirm.", style="dim"))
+        lines.append(Text("  Press Esc to cancel.", style="dim"))
+        content = Text("\n").join(lines)
+        return Panel(
+            content,
+            title=prompt_state.title,
+            subtitle="Enter Confirm  Esc Cancel  Backspace Delete",
+            border_style="cyan",
+            box=ROUNDED,
+        )
+
     def _render_options(self, body_height: int) -> Panel:
+        if self.text_prompt is not None:
+            return self._render_text_prompt(body_height)
         if self.picker is not None:
             return self._render_picker(body_height)
 

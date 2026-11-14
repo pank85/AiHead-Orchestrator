@@ -84,8 +84,10 @@ def filter_model_ids(
         return discovered
     allowed = set(allowlist)
     filtered = [model_id for model_id in discovered if model_id in allowed]
-    if _nonempty_current(current) and current not in filtered:
-        filtered.append(current)
+    if _nonempty_current(current):
+        curr = current.strip()
+        if curr not in filtered and current not in filtered:
+            filtered.append(current)
     return filtered
 
 
@@ -134,7 +136,11 @@ def materialize_toggle(
     if target is None:
         target = {}
     if harness_key not in target:
-        ids = [_clean_model_id(item) for item in discovered]
+        ids = []
+        for item in discovered:
+            cid = _clean_model_id(item)
+            if cid not in ids:
+                ids.append(cid)
     else:
         ids = list(target[harness_key])
     if enabled:
