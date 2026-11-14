@@ -114,6 +114,7 @@ Plain `/ergo` and master-forwarded Ergo jobs execute in Herdr mode.
    `herdr agent start <name> --kind <kind> --pane <PANE_ID> -- <resolved_argv...>`
 4. Send the prompt with `herdr agent prompt <PANE_ID> "<prompt>"`.
 5. **Non-Blocking Parent Rule**: Parent sessions (including the Ergo Orchestrator) NEVER block or wait in polling loops after spawning/prompting children — return immediately after spawning/prompting a role tab (or arm a non-blocking async watcher if supported) and resume when the child sends its `herdr agent prompt <ORCHESTRATOR_PANE_ID> "..."` notification. For parallel `INDEPENDENT` tasks, start and prompt all coder tabs in the same turn and return immediately; verify completion via `herdr agent get/read` plus expected summary files when notified.
+   **Same-turn handoff**: When a child reports completion or a blocker, act in that same turn. Verifying a summary and spawning the next role are actions, not a closing sentence. Do not end the turn on "I'll verify" or "I'll start the reviewer." If the next role is the Reviewer, create the tab, start the agent, register it, prompt it, and confirm `agent_status` is `working` plus the expected model in the footer before reporting that review started. A pane that exists but is idle with no prompt is not a running review.
 6. **Strict One-Level-Up Hierarchy (NEVER Skip Levels)**:
    - **Level 3 workers (Scout, Architect, Coders, Reviewer)** notify **ONLY** the Level 2 Ergo Orchestrator (`ORCHESTRATOR_PANE_ID` = `$HERDR_PANE_ID`) via `herdr agent prompt <ORCHESTRATOR_PANE_ID> ...` for BOTH `"user/decision needed"` (questions, blockers) AND `"completed"` (stage/task finished) — **NEVER AiHead or Herdr-Master directly!**
    - **Level 2 (Ergo Orchestrator)** notifies its direct Level 1 parent (`HERDR_PARENT_PANE_ID`, i.e., AiHead or Herdr-Master Coordinator) via `herdr agent prompt "$HERDR_PARENT_PANE_ID" ...` for BOTH `"user/decision needed"` (dirty tree, `unitTestsMode`, Plan Approval Gate, architectural mismatches, blockers) AND `"completed"` (pipeline finished).
@@ -264,6 +265,7 @@ Track one checklist item per step and complete in order:
 - Verify every coder wrote a non-empty `RUN_DIR/coder_<N>_summary.md` (retry once if missing; STOP on second failure).
 
 ### Step 6: Full Reviewer & Scoped Fix Loop (NEVER skip)
+- Apply the **Same-turn handoff** rule above when the coders complete: actually launch and verify the Reviewer rather than ending on a promise to do so.
 - Spawn one fresh **Reviewer** on the combined diff against the base commit, `RUN_DIR/plan.md`, all `coder_<N>_summary.md` files, and `unitTestsMode`.
 - Output: `RUN_DIR/review.md` (`APPROVED` or `NEEDS FIXES`) and, per coder needing fixes, `RUN_DIR/fixes_<N>.md`.
 - **Worker Lifecycle Pruning**:

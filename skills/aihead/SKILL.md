@@ -163,6 +163,8 @@ Never assume a spawned pane started. After `herdr tab create` + `herdr agent sta
 - `herdr agent read <PANE>` → no startup/permission/credit error, and the expected model visible in the TUI footer.
 - `agent_not_found` or a vanished pane means the launch FAILED; never report it as started.
 
+**Evidence before reporting progress**: Do not tell the user a child is running, or that a stage has started, until `herdr agent get` reports `working` and `herdr agent read` shows the task in progress rather than a promise to start. If a child ends its turn on a future-tense promise, prompt it again with the concrete actions. Do not report the promise as progress.
+
 opencode v2.2.6 TUI has no `--model` flag. `herdr agent start ... -- --model provider/model` times out ("timed out waiting for agent startup") and the pane dies. Launch plain, then set the model inside the TUI:
 
 - `herdr agent prompt <PANE> "/models"`
