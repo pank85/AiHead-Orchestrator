@@ -8,7 +8,7 @@ The `/orchestration` skill provides a **100% Herdr-free**, single-harness engine
 
 Unlike Ergo, which coordinates cross-harness tabs inside a Herdr workspace, `/orchestration` is completely self-contained:
 - **No Herdr Daemon Required**: Operates without `herdr`, Herdr sockets, or terminal workspaces.
-- **No `herdm` CLI Required**: Does not invoke `herdm` or perform external catalog lookups.
+- **No External CLI Required**: Does not invoke `aihead`/`herdm` or perform external catalog lookups.
 - **Pure Host Native Execution**: Every role executes as a native subagent spawned directly by the host agent session.
 - **Host Ecosystem Velocity**: Ideal for cohesive, fast-moving tasks within a single agent platform (`agy`, `pi`, `claude`, `opencode`, `hermes`).
 

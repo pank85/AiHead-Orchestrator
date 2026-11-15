@@ -64,7 +64,7 @@ In Herdr-Master, the user or caller can dynamically customize which harness and 
 
 ```bash
 # Example 1: Full multi-harness pipeline run
-herdm pipeline run ergo \
+aihead pipeline run ergo \
   --scout agy:gemini-3.8-flash \
   --architect claude:claude-opus-5-5 \
   --workers pi:xai/grok-4.7,pi:openai-codex/gpt-6.1-terra,agy:gemini-4-argon \

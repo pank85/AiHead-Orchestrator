@@ -16,6 +16,67 @@ from herdr_master.pipeline.launcher import (
 
 runner = CliRunner()
 
+AIHEAD_COMMANDS = (
+    "master", "pipeline", "skills", "catalog", "council-state",
+    "init", "status", "config", "tui", "workspace", "install",
+    "head", "aihead-cli", "ergo", "orchestration", "council",
+    "setup", "aihead-setup",
+)
+
+
+def test_aihead_help_lists_shared_commands():
+    result = runner.invoke(aihead_app, ["--help"])
+    assert result.exit_code == 0, result.output
+    assert "COMMAND" in result.output
+    for command in AIHEAD_COMMANDS:
+        assert command in result.output
+    assert "[deprecated]" not in result.stderr
+
+
+@pytest.mark.parametrize("command", AIHEAD_COMMANDS)
+def test_aihead_subcommand_help_skips_standalone_launch(command):
+    with (
+        patch("herdr_master.cli.main.resolve_launch_context") as resolve,
+        patch("herdr_master.cli.main.run_aihead_setup") as setup,
+        patch("herdr_master.cli.main.launch_ai_head") as launch,
+    ):
+        result = runner.invoke(aihead_app, [command, "--help"])
+    assert result.exit_code == 0, result.output
+    assert "[deprecated]" not in result.stderr
+    resolve.assert_not_called()
+    setup.assert_not_called()
+    launch.assert_not_called()
+
+
+def test_aihead_catalog_dispatch_skips_root_mode_validation():
+    with patch("herdr_master.cli.main.resolve_launch_context") as resolve:
+        result = runner.invoke(
+            aihead_app, ["--setup", "--ergo", "ignored", "catalog", "show", "--json"]
+        )
+    assert result.exit_code == 0, result.output
+    assert '"canonical_skills"' in result.output
+    assert "[deprecated]" not in result.stderr
+    resolve.assert_not_called()
+
+
+def test_aihead_ergo_subcommand_dispatches_without_standalone_launch():
+    with (
+        patch("herdr_master.cli.main.launch_ergo", new_callable=AsyncMock) as launch,
+        patch("herdr_master.cli.main.launch_ai_head") as standalone,
+        patch("herdr_master.cli.main.resolve_launch_context") as resolve,
+    ):
+        resolve.return_value = HerdrContext(
+            is_inside_herdr=True, session_name="default", socket_path=Path("/tmp/a")
+        )
+        launch.return_value = {"workspace_id": "w", "pane_id": "p"}
+        result = runner.invoke(aihead_app, ["ergo", "test", "--no-attach"])
+    assert result.exit_code == 0, result.output
+    assert "[deprecated]" not in result.stderr
+    launch.assert_awaited_once()
+    assert launch.await_args.kwargs["intent"] == "test"
+    resolve.assert_called_once_with(None)
+    standalone.assert_not_called()
+
 
 def test_tui_dispatches():
     with patch("herdr_master.cli.main.tui") as cockpit:

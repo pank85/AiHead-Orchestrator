@@ -94,8 +94,8 @@ def test_aihead_app_help_is_a_direct_launch_command():
     text = _output(result)
     assert result.exit_code == 0, text
     assert "Usage: aihead [OPTIONS]" in text
-    assert "COMMAND" not in text
-    assert "Launch an interactive AiHead session" in text
+    assert "COMMAND [ARGS]..." in text
+    assert "Launch an interactive AiHead session or run a subcommand." in text
     for option in (
         "--task",
         "-t",
@@ -982,4 +982,3 @@ def test_launch_skill_direct_delegation_behavior(
     assert mock_func_b.call_count == 1
     assert mock_func_b.call_args.kwargs["delegated"] is False
     assert mock_func_b.call_args.kwargs["parent_pane_id"] is None
-

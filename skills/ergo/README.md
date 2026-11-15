@@ -38,28 +38,28 @@ Ergo supports two execution models:
 | :--- | :--- | :--- |
 | **Orchestration Plane** | Herdr terminal workspace with interactive agent tabs. | Host harness's native subagent tool within current session. |
 | **Model Diversity** | **Cross-harness**: mixes best-of-breed models across `agy`, `pi`, `claude`, `opencode`, and `hermes`. | **Single-harness**: all roles execute within the host's supported native subagent adapter. |
-| **External Dependencies**| Requires Herdr daemon (`herdr`) and `herdm` CLI. | 100% Herdr-free; requires only shell, git, and native subagent tool. |
-| **Native Adapters** | N/A (all managed via Herdr tabs and `herdm catalog agent`). | `agy` (`invoke_subagent`), `pi` (`subagent`), `claude` (`Agent`), `opencode` (`subagent`). Hermes is rejected (no native tool adapter). |
+| **External Dependencies**| Requires Herdr daemon (`herdr`) and `aihead` (or `herdm`) CLI. | 100% Herdr-free; requires only shell, git, and native subagent tool. |
+| **Native Adapters** | N/A (all managed via Herdr tabs and `aihead catalog agent`). | `agy` (`invoke_subagent`), `pi` (`subagent`), `claude` (`Agent`), `opencode` (`subagent`). Hermes is rejected (no native tool adapter). |
 
 ### Launching Ergo
 - **Standard Herdr Mode**:
   ```bash
-  aihead --ergo "Implement JWT authentication and refresh token rotation"
+  aihead ergo "Implement JWT authentication and refresh token rotation"
   ```
 - **Explicit Native Subagent Mode**:
   ```bash
-  aihead --ergo "Refactor database repositories" --native
+  aihead ergo "Refactor database repositories" --native
   ```
 - **With Inline Model Overrides**:
   ```bash
-  aihead --ergo "Build search dashboard" --models "scout=agy:gemini-3.8-flash-medium architect=pi:openai-codex/gpt-6.1-sol workers=agy:gemini-3.8-flash,pi:xai/grok-4.7 reviewer=pi:xai/grok-4.7"
+  aihead ergo "Build search dashboard" --models "scout:agy:gemini-3.8-flash-medium architect:pi:openai-codex/gpt-6.1-sol workers:agy:gemini-3.8-flash,pi:xai/grok-4.7 reviewer:pi:xai/grok-4.7"
   ```
 
 ---
 
 ## 3. Configuration Hierarchy & Squad Resolution
 
-Ergo resolves squad roles and allowed worker models strictly through `herdm catalog squad` without hardcoded fallback tables:
+Ergo resolves squad roles and allowed worker models strictly through `aihead catalog squad` without hardcoded fallback tables:
 
 ```
 1. Inline CLI Overrides (--models, --scout, --architect, --workers, --reviewer)
@@ -75,7 +75,7 @@ Ergo resolves squad roles and allowed worker models strictly through `herdm cata
 ```
 
 ### Authoritative Product Default Squad
-Resolved via `herdm catalog squad --mode herdr --json`:
+Resolved via `aihead catalog squad --mode herdr --json`:
 - **Scout**: `agy:gemini-3.8-flash-medium` (`--effort medium --dangerously-skip-permissions`)
 - **Architect**: `pi:openai-codex/gpt-6.1-sol:max` (`--provider openai-codex --model gpt-6.1-sol --thinking max`)
 - **Reviewer**: `pi:xai/grok-4.7:high` (`--provider xai --model grok-4.7 --thinking high`)

@@ -26,7 +26,7 @@ review gate on the accumulated diff, and squash-merges only what passes into `de
 
 1. **Herdr** — the skill refuses to run unless those three variables are present. It never creates a
    server or takes over an unrelated workspace.
-2. **`herdm`** — the CLI from this repo, used for catalog resolution and skill installation.
+2. **`aihead`** — the CLI from this repo, used for catalog resolution and skill installation.
 3. **A git repository** with a clean working tree. The integration branch is `develop`; if it does
    not exist it is created from the current `HEAD`.
 
@@ -34,13 +34,13 @@ review gate on the accumulated diff, and squash-merges only what passes into `de
 
 ```bash
 # from the checkout
-uv run herdm skills install
+uv run aihead skills install
 
 # or, after installing the package
-herdm skills install
+aihead skills install
 
 # verify each harness endpoint
-herdm skills list
+aihead skills list
 ```
 
 This symlinks the skill + slash command into Antigravity, Pi, Claude Code, and OpenCode.
@@ -57,12 +57,12 @@ Inside a Herdr pane:
 Or launch it from the CLI, outside or inside Herdr:
 
 ```bash
-herdm master start                          # waits for interactive delegation
-herdm master start --task "Audit billing"   # with an initial job
-herdm master start --name backend-lead --harness claude --model <model>
+aihead master start                          # waits for interactive delegation
+aihead master start --task "Audit billing"   # with an initial job
+aihead master start --name backend-lead --harness claude --model <model>
 ```
 
-Interactive alternative: `herdm tui` opens the cockpit, where **New Master** takes a project
+Interactive alternative: `aihead tui` opens the cockpit, where **New Master** takes a project
 folder and starts a master there.
 
 ## What it does with a job

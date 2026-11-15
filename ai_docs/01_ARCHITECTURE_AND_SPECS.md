@@ -151,6 +151,6 @@ To prevent orchestrators from wasting context windows, spinning CPU cycles, or b
     - **Pi (`pi`)**: Native background subagent (`async: true`) running `herdr agent wait <pane-id>`.
     - **Claude Code (`claude`)**: Background subagent or background bash task running `herdr agent wait`.
     - **OpenCode (`opencode`)**: Background subagent running `herdr agent wait`.
-    - **Standalone CLI / TUI (`herdm`)**: Python `asyncio.create_task` subscribing to the Herdr Unix socket event stream.
+    - **Standalone CLI / TUI (`aihead` / `herdm`)**: Python `asyncio.create_task` subscribing to the Herdr Unix socket event stream.
 - The parent coordinator immediately completes its turn, freeing resources.
 - When the watcher fires upon state change (`idle`, `done`, `blocked`, or timeout), the orchestrator is awakened reactively.

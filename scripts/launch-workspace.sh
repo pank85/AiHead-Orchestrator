@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# Compatibility shim. Workspace creation lives in `herdm workspace`.
+# Compatibility shim. Workspace creation lives in `aihead workspace`.
 set -euo pipefail
 
 label="${1:-herdr-master}"
@@ -11,4 +11,4 @@ fi
 if [[ "$cwd" != /* ]]; then
   cwd="$(cd -- "$cwd" && pwd)"
 fi
-exec herdm workspace --label "$label" --cwd "$cwd"
+exec aihead workspace --label "$label" --cwd "$cwd"

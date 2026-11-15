@@ -285,7 +285,7 @@ def test_launch_workspace_shim_forwards(tmp_path):
     bindir = tmp_path / "bin"
     bindir.mkdir()
     capture = tmp_path / "args"
-    fake = bindir / "herdm"
+    fake = bindir / "aihead"
     fake.write_text('#!/bin/sh\nprintf "%s\\n" "$@" > "$CAPTURE"\n', encoding="utf-8")
     fake.chmod(0o755)
     work = tmp_path / "work space"

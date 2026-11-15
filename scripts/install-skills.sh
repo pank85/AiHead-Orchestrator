@@ -5,11 +5,11 @@ SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 REPO_ROOT="$(cd "$SCRIPT_DIR/.." && pwd)"
 
 if command -v uv >/dev/null 2>&1; then
-    exec uv run --project "$REPO_ROOT" herdm skills install "$@"
+    exec uv run --project "$REPO_ROOT" aihead skills install "$@"
 fi
 
-if [ -n "${VIRTUAL_ENV:-}" ] && command -v herdm >/dev/null 2>&1; then
-    exec herdm skills install "$@"
+if [ -n "${VIRTUAL_ENV:-}" ] && command -v aihead >/dev/null 2>&1; then
+    exec aihead skills install "$@"
 fi
 
 if command -v python3 >/dev/null 2>&1 && python3 -c "import herdr_master" 2>/dev/null; then

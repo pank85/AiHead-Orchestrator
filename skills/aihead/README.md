@@ -51,7 +51,7 @@ Upon receiving an objective, problem statement, or feature request, AiHead immed
 | **1. Simple Direct Agent** | Atomic mechanical change in 1 file (no design, no new behavior, no architectural risk). | 1 new Herdr workspace (`herdr workspace create ... --no-focus`). Optional background review pane. | Single worker pane adopting resolved worker binding from catalog. Sub-jobs stay in that workspace. |
 | **2. `/orchestration`** | Fast, cohesive, self-contained tasks within a single agent ecosystem (`agy`, `pi`, `claude`, `opencode`, `hermes`). | Native host subagents (100% Herdr-free). | Scout → Architect → Parallel Coders → Blind Reviewer. Worktree branch `orchestration/<run-id>`. |
 | **3. `/ergo`** | Substantial feature work requiring best-of-breed models across different harnesses, strict isolation, and adversarial review. | Phased cross-harness Herdr pipeline (or explicit `--native`). | Scout → Architect → Parallel Specialist Coders → Reviewer loop. Worktree branch `ergo/<run-id>`. |
-| **4. `/council`** | Complex, ambiguous, or high-stakes architectural planning requiring multi-agent consensus before code is written. | Multi-member deliberation coordinated by `herdr-master council-state`. | Impartial Coordinator + Scout + $\ge$2 Council Members. Max 5 cycles. Produces `RUN_DIR/final_plan.md` only (no code/commits). |
+| **4. `/council`** | Complex, ambiguous, or high-stakes architectural planning requiring multi-agent consensus before code is written. | Multi-member deliberation coordinated by `aihead council-state`. | Impartial Coordinator + Scout + $\ge$2 Council Members. Max 5 cycles. Produces `RUN_DIR/final_plan.md` only (no code/commits). |
 | **5. `/herdr-master`** | Multi-job coordination managing concurrent workstreams across parallel isolated worktrees. | Root multi-job orchestrator with async watchers. | Workspace-per-job delegation, native async watchers (`herdr agent wait`), serial squash-merge into `develop`. |
 
 ---
@@ -81,17 +81,17 @@ pi = ["anthropic/claude-3-7-sonnet", "xai/grok-4.7"]
 
 - If `[models.available]` is absent, model selection is unrestricted.
 - If a harness table is present, only explicitly listed models are available.
-- Inspect current allowlists via `herdm catalog available [--project <path>] [--json]`.
+- Inspect current allowlists via `aihead catalog available [--project <path>] [--json]`.
 
 ### Squad Composition Transports
 When dispatching child pipelines:
 - **For `/ergo`**: Passes whitespace-separated `role:binding` overrides:
   ```bash
-  aihead --ergo "<intent>" --models "scout=agy:gemini-3.8-flash-medium architect=pi:openai-codex/gpt-6.1-sol workers=agy:gemini-3.8-flash,pi:xai/grok-4.7 reviewer=pi:xai/grok-4.7"
+  aihead ergo "<intent>" --models "scout:agy:gemini-3.8-flash-medium architect:pi:openai-codex/gpt-6.1-sol workers:agy:gemini-3.8-flash,pi:xai/grok-4.7 reviewer:pi:xai/grok-4.7"
   ```
 - **For `/orchestration`**: Passes single native harness plus comma-separated role models:
   ```bash
-  aihead --orchestration "<intent>" --models "scout=flash,architect=pro,coder=flash,reviewer=pro"
+  aihead orchestration "<intent>" --models "scout=flash,architect=pro,coder=flash,reviewer=pro"
   ```
 
 ---

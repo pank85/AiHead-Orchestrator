@@ -330,7 +330,7 @@ def test_shell_install_wrapper_delegation(tmp_path: Path):
     assert proc.returncode == 0
 
     logged_args = log_file.read_text(encoding="utf-8").strip()
-    assert f"run --project {REPO_ROOT} herdm skills install --no-force" in logged_args
+    assert f"run --project {REPO_ROOT} aihead skills install --no-force" in logged_args
 
 
 def test_shell_install_wrapper_failure_without_tools(tmp_path: Path):
@@ -338,7 +338,7 @@ def test_shell_install_wrapper_failure_without_tools(tmp_path: Path):
     clean_bin = tmp_path / "clean_bin"
     clean_bin.mkdir()
 
-    # Symlink only bash and core tools, ensuring uv and herdm are absent
+    # Symlink only bash and core tools, ensuring uv and aihead are absent
     for tool in ["bash", "dirname", "pwd", "echo"]:
         tool_path = Path(f"/usr/bin/{tool}")
         if not tool_path.exists():
@@ -358,3 +358,36 @@ def test_shell_install_wrapper_failure_without_tools(tmp_path: Path):
     )
     assert proc.returncode != 0
     assert "Error: 'uv' or active virtualenv is required" in proc.stderr
+
+
+def test_launch_workspace_shim(tmp_path: Path):
+    """Verify scripts/launch-workspace.sh dispatches to aihead workspace."""
+    script = REPO_ROOT / "scripts" / "launch-workspace.sh"
+    bin_dir = tmp_path / "bin"
+    bin_dir.mkdir()
+    log_file = tmp_path / "stub_aihead.log"
+
+    stub_aihead = bin_dir / "aihead"
+    stub_aihead.write_text(
+        f'#!/bin/sh\necho "$@" > "{log_file}"\nexit 0\n',
+        encoding="utf-8",
+    )
+    stub_aihead.chmod(stub_aihead.stat().st_mode | stat.S_IEXEC)
+
+    env = dict(os.environ)
+    env["PATH"] = f"{bin_dir}:{env['PATH']}"
+
+    target_dir = tmp_path / "workdir"
+    target_dir.mkdir()
+
+    proc = subprocess.run(
+        [str(script), "custom-label", str(target_dir)],
+        env=env,
+        capture_output=True,
+        text=True,
+        check=True,
+    )
+    assert proc.returncode == 0
+
+    logged_args = log_file.read_text(encoding="utf-8").strip()
+    assert logged_args == f"workspace --label custom-label --cwd {target_dir}"

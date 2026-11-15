@@ -2077,6 +2077,6 @@ def run_setup_tui(
     if not sys.stdin.isatty():
         raise RuntimeError(
             "Interactive setup TUI requires a terminal. "
-            "Use `herdm aihead-setup --defaults --yes` for non-interactive setup."
+            "Use `aihead setup --defaults --yes` for non-interactive setup."
         )
     return run_terminal_tui(app)
