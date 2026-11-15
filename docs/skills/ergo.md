@@ -20,12 +20,12 @@ Scout → Architect → parallel specialist Coders → blind Reviewer → single
 
 | Dependency | Default mode (Herdr cross-harness) | `--native` mode |
 | :--- | :--- | :--- |
-| `herdm` CLI | **required** (squad resolution) | **required** (squad resolution) |
+| `aihead` CLI | **required** (squad resolution) | **required** (squad resolution) |
 | Herdr | **required** — roles launch as Herdr agent tabs | not used |
 | git repo with clean tree | required | required |
 
-Without `herdm` the skill stops with an installation error; it never falls back to a hardcoded
-model table. If you do not want Herdr **or** `herdm`, use [`/orchestration`](orchestration.md).
+Without `aihead` the skill stops with an installation error; it never falls back to a hardcoded
+model table. If you do not want Herdr **or** `aihead`, use [`/orchestration`](orchestration.md).
 
 The run happens in a `git worktree` on branch `ergo/<run-id>`.
 
@@ -33,15 +33,15 @@ The run happens in a `git worktree` on branch `ergo/<run-id>`.
 
 ```
 /ergo Implement Redis rate limiting middleware
-/ergo --models scout=<binding>,architect=<binding>,reviewer=<binding> "Add WebSocket notifications"
+/ergo --models "scout:<binding> architect:<binding> reviewer:<binding>" "Add WebSocket notifications"
 /ergo --native "Refactor the invoice calculator"
 ```
 
 CLI equivalent:
 
 ```bash
-herdm ergo "Implement Redis rate limiting middleware"
-herdm ergo "Add WebSocket notifications" \
+aihead ergo "Implement Redis rate limiting middleware"
+aihead ergo "Add WebSocket notifications" \
   --scout agy:gemini-3.8-flash-medium:medium \
   --architect pi:openai-codex/gpt-6.1-sol:max \
   --workers agy:gemini-3.8-flash,pi:xai/grok-4.7 \
@@ -76,8 +76,8 @@ Highest priority first — earlier sources win:
 Query the authority rather than trusting tables in docs:
 
 ```bash
-herdm catalog squad --json
-herdm catalog agent --mode herdr --binding agy:gemini-3.8-flash-medium:medium --role scout --json
+aihead catalog squad --json
+aihead catalog agent --mode herdr --binding agy:gemini-3.8-flash-medium:medium --role scout --json
 ```
 
 Product default squad:
@@ -123,7 +123,7 @@ Everything the run produces is under `RUN_DIR` — inspect those files if a stag
 
 | Symptom | Cause | Fix |
 | :--- | :--- | :--- |
-| "actionable installation prerequisite error" | `herdm` not found | Install/activate the package, then re-run |
+| "actionable installation prerequisite error" | `aihead` not found | Install/activate the package, then re-run |
 | Binding rejected in `--native` | Product squad mixes harnesses | Pass compatible `--scout/--architect/--reviewer/--workers` or use default Herdr mode |
 | Plan sent back | Missing persona or overlapping files | Let the Architect fix it — do not hand-edit `plan.md` |
 | Fix loop caps out | Critical findings unresolved | Worktree and branch are preserved; inspect `review.md` |

@@ -67,21 +67,22 @@ id = "herdr-master"
 name = "Herdr Master Orchestrator"
 version = "0.1.0"
 description = "Multi-master, multi-worker cross-harness AI orchestrator"
-binary = "herdm"
+binary = "aihead"
 socket_protocol = 22
 
 [integration.hooks]
-on_agent_blocked = "herdm protocol notify-blocked --pane {pane_id}"
-on_turn_settled = "herdm protocol notify-settled --pane {pane_id}"
+# Note: 'protocol' command group is planned/unimplemented in the current CLI release
+on_agent_blocked = "aihead protocol notify-blocked --pane {pane_id}"
+on_turn_settled = "aihead protocol notify-settled --pane {pane_id}"
 
 [integration.commands]
-orchestrate = "herdm master start"
-tui = "herdm tui"
+orchestrate = "aihead master start"
+tui = "aihead tui"
 ```
 
 ---
 
-## 3. Modality B: Standalone CLI & TUI Tool (`herdm`)
+## 3. Modality B: Standalone CLI & TUI Tool (`aihead` / `herdm`)
 
 For scenarios where the developer wants an interactive terminal dashboard or wants to script orchestration from outside an agent chat, Herdr-Master runs as a standalone CLI tool.
 
@@ -102,8 +103,9 @@ uv venv && source .venv/bin/activate
 uv pip install -e ".[dev]"
 ```
 
-### Background Daemon / Socket Bridge
-`herdm daemon` runs as a lightweight background process that connects directly to the Herdr Unix socket:
+### Background Daemon / Socket Bridge (Planned / Unimplemented)
+*Note: `aihead daemon` is a planned/unimplemented background command.*
+When implemented, `aihead daemon` runs as a lightweight background process that connects directly to the Herdr Unix socket:
 - Listens to lifecycle events (`agent_prompt_stalled`, `working`, `idle`, `blocked`, `done`).
 - Updates the central status registry (`.herdr-master/sessions/`).
 - Dispatches notifications to the active TUI and to parent orchestrators.

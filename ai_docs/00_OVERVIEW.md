@@ -11,7 +11,7 @@ It bridges the gap between disparate LLM agent harnesses (**Antigravity (`agy`)*
 4. **Minimalist, High-Density TUI Dashboard**: An interactive terminal UI inspired by Herdr's aesthetics, featuring live state monitoring, git worktree diff viewers, message streams, and one-key approval/landing controls.
 5. **Dual Distribution Model**:
    - **Herdr Plugin / Native Skill**: Seamlessly invocable inside Herdr terminal panes via `/herdr-master`.
-   - **Standalone CLI & TUI Tool (`herdm` / `herdr-master`)**: Standalone binary or Python package managing Herdr workspaces, tabs, and agents from the command line or an interactive terminal application.
+   - **Standalone CLI & TUI Tool (`aihead` / `herdm`)**: Standalone binary or Python package managing Herdr workspaces, tabs, and agents from the command line or an interactive terminal application.
 
 ---
 
@@ -78,9 +78,9 @@ graph TD
 
 ## 4. Dual Packaging Model
 
-| Aspect | Herdr Plugin / Extension Mode | Standalone CLI & TUI Tool (`herdm`) |
+| Aspect | Herdr Plugin / Extension Mode | Standalone CLI & TUI Tool (`aihead` / `herdm`) |
 | :--- | :--- | :--- |
-| **Invocation** | `/herdr-master [task]` within an agent session | `herdm [subcommand]` or `herdm tui` in any terminal |
+| **Invocation** | `/herdr-master [task]` within an agent session | `aihead [subcommand]` (or `aihead tui`; legacy `herdm`) in any terminal |
 | **Runtime Environment** | Injected into Herdr pane with `HERDR_ENV=1` | Runs as an external orchestrator process |
 | **Control Mechanism** | Agent prompts, native subagent watchers | Herdr Socket API (`herdr api snapshot/events`) + CLI wrappers |
 | **UI Experience** | Native conversational agent chat | Rich / Textual interactive full-screen dashboard |

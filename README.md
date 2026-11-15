@@ -31,7 +31,7 @@ flowchart TD
     
     subgraph Governance ["Allowlist Governance ([models.available])"]
         SetupTUI["aihead --setup<br/>(Interactive Toggle & Discovery)"] --> ConfigFile[".herdr-master.toml<br/>[models.available]"]
-        CatalogCLI["herdm catalog available<br/>(Audit & Inspection)"] -.-> ConfigFile
+        CatalogCLI["aihead catalog available<br/>(Audit & Inspection)"] -.-> ConfigFile
         ConfigFile --> DynamicFilter["Strict Allowlist Enforcement<br/>(Zero Hallucinated Model IDs)"]
     end
     
@@ -93,10 +93,10 @@ Audit and verify your active allowlist and discovered catalog models at any time
 
 ```bash
 # Human-readable summary of restrictions, Automode status, and enabled models
-herdm catalog available
+aihead catalog available
 
 # Machine-readable JSON output for scripting and CI
-herdm catalog available --json --project /path/to/project
+aihead catalog available --json --project /path/to/project
 ```
 
 ---
@@ -110,7 +110,7 @@ When working inside a Herdr workspace, the plugin registers 6 actions accessible
 
 | Action ID | Title | Execution Command | Behavior |
 | :--- | :--- | :--- | :--- |
-| **`head`** | **AiHead** | `herdm head` (or `aihead`) | Launches an interactive AiHead session in a new tab. |
+| **`head`** | **AiHead** | `aihead` (or legacy `herdm head`) | Launches an interactive AiHead session in a new tab. |
 | **`master`** | **New Master** | `aihead --herdr-master` | Spawns a root Herdr-Master multi-job orchestrator in a new tab. |
 | **`ergo`** | **New Ergo** | `python3 src/herdr_master/menu.py ergo` | Prompts for an objective, attaches project config, and starts Ergo. |
 | **`orchestration`** | **Orchestrate** | `python3 src/herdr_master/menu.py orchestration` | Prompts for an objective, attaches project config, and starts Orchestration. |
@@ -181,10 +181,10 @@ Install all 5 canonical skills (`/aihead`, `/ergo`, `/orchestration`, `/council`
 
 ```bash
 # Using the CLI installer (recommended)
-herdm install
+aihead install
 
 # Or using the explicit skills subcommand
-herdm skills install
+aihead skills install
 
 # Or using the standalone shell script
 ./scripts/install-skills.sh
@@ -201,15 +201,15 @@ herdm skills install
 | **Hermes (`hermes`)** | Skill | `~/.hermes/skills/<skill>/SKILL.md` | Protected against unowned clobbering |
 
 > [!NOTE]
-> `herdm install` includes safety protections: existing non-Hermes symlinks are safely overwritten with `--force` (default: `True`), while unowned Hermes files are strictly protected against accidental clobbering via YAML frontmatter collision checks.
+> `aihead install` (and `aihead skills install`) includes safety protections: existing non-Hermes symlinks are safely overwritten with `--force` (default: `True`), while unowned Hermes files are strictly protected against accidental clobbering via YAML frontmatter collision checks.
 
 ### 3. Inspecting & Removing Skills
 ```bash
 # Inspect installation status across all harnesses (Active, Stale, Broken, Missing)
-herdm skills list
+aihead skills list
 
 # Remove installed symlinks across all harnesses
-herdm skills remove
+aihead skills remove
 ```
 
 ---
@@ -248,39 +248,42 @@ aihead [OPTIONS]
 - `--model <str>`: Model slug override.
 - `--effort <str>`: Reasoning effort override (`low`, `medium`, `high`, `max`).
 
-### 2. `herdm catalog` CLI Reference
+### 2. `aihead catalog` CLI Reference
 
 Inspect harnesses, resolve squads, and verify allowlists:
 
 ```bash
 # 1. Audit allowlist and catalog models
-herdm catalog available [--project <path>] [--json]
+aihead catalog available [--project <path>] [--json]
 
 # 2. Inspect catalog identities, product defaults, and canonical skill paths
-herdm catalog show [--json]
+aihead catalog show [--json]
 
 # 3. Resolve effective squad across catalog defaults, project configs, and CLI overrides
-herdm catalog squad [--mode herdr|native] [--harness <host>] \
-  [--models "scout=agy:gemini-3.8-flash-medium architect=pi:openai-codex/gpt-6.1-sol"] \
+aihead catalog squad [--mode herdr|native] [--harness <host>] \
+  [--models "scout:agy:gemini-3.8-flash-medium architect:pi:openai-codex/gpt-6.1-sol"] \
   [--write-snapshot /abs/path/squad.toml] [--json]
 
 # 4. Resolve a binding slug into Herdr launch argv or native subagent descriptors
-herdm catalog agent --binding agy:gemini-3.8-flash:medium --role coder [--mode herdr|native]
+aihead catalog agent --binding agy:gemini-3.8-flash:medium --role coder [--mode herdr|native]
 ```
 
-### 3. Headless Decisions & Compatibility Commands
+### 3. Headless Decisions & Subcommands
+
+*(Legacy `herdm` and `herdr-master` commands remain supported as backwards-compatible entry points.)*
+
 ```bash
 # Headless bounded decision-maker (used by pipelines when no active AiHead session is running)
-herdm aihead-cli -q "Select database engine" -c "High write throughput required" --choices "postgres,scylladb"
+aihead aihead-cli -q "Select database engine" -c "High write throughput required" --choices "postgres,scylladb"
 
 # Initialize project configuration
-herdm init --target-branch develop
+aihead init --target-branch develop
 
 # Show active sessions, worktrees, and running pipelines
-herdm status
+aihead status
 
 # View parsed configuration
-herdm config
+aihead config
 ```
 
 ---

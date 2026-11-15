@@ -237,7 +237,7 @@ def resolve_ergo_coordinator(
 ) -> HarnessBinding | None:
     """Resolve the Ergo coordinator pane binding, or None to keep the Scout host.
 
-    Only a new-pane launch (``herdm ergo``, ``aihead --ergo``) consults this.
+    Only a new-pane launch (``aihead ergo``, ``aihead --ergo``) consults this.
     An ``/ergo`` run inside an open harness session is already the coordinator.
     """
     if override is not None:

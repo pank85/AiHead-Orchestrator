@@ -36,7 +36,7 @@ def test_canonical_skills_loadable_and_valid():
 
 
 def test_ergo_skill_default_mode_is_herdr_and_uses_catalog():
-    """Assert /ergo defaults to Herdr mode and queries herdm catalog."""
+    """Assert /ergo defaults to Herdr mode and queries aihead catalog."""
     body = load_skill_body("ergo")
 
     # Default Mode is Herdr
@@ -44,9 +44,9 @@ def test_ergo_skill_default_mode_is_herdr_and_uses_catalog():
     assert "Plain `/ergo` defaults to Herdr mode" in body
     assert "`--herdr` is an explicit alias" in body
 
-    # Sourcing from herdm catalog squad (no hand-maintained fallback tables)
-    assert "herdm catalog squad" in body
-    assert "herdm catalog agent" in body
+    # Sourcing from aihead catalog squad (no hand-maintained fallback tables)
+    assert "aihead catalog squad" in body
+    assert "aihead catalog agent" in body
     assert "Do NOT maintain or consult hardcoded default model tables" in body
 
     # Actionable install prerequisite on missing resolver
@@ -168,7 +168,7 @@ def test_ergo_skill_phase_persona_and_gate_preservation():
     assert "NEVER run `git reset --hard`" in body
 
     # Snapshot persistence via catalog
-    assert "herdm catalog squad --from-json - --write-snapshot" in body
+    assert "aihead catalog squad --from-json - --write-snapshot" in body
 
     # Native reviewer read-only report persistence
     assert "persist" in body.lower()
@@ -177,7 +177,7 @@ def test_ergo_skill_phase_persona_and_gate_preservation():
 
 
 def test_ergo_skill_workspace_adoption_and_no_recursive_kickoff():
-    """Assert bootstrap adoption contract and no recursive herdm ergo."""
+    """Assert bootstrap adoption contract and no recursive aihead ergo."""
     body = load_skill_body("ergo")
 
     # Bootstrap owns_workspace boolean is the ONLY ownership signal
@@ -201,7 +201,7 @@ def test_ergo_skill_workspace_adoption_and_no_recursive_kickoff():
     assert "Adopted workspaces are NEVER closed" in body
 
     # No recursive kickoff
-    assert "Do NOT recursively invoke `herdm ergo`" in body
+    assert "Do NOT recursively invoke `aihead ergo`" in body
     assert "The current session IS the orchestrator" in body
 
 
@@ -235,8 +235,8 @@ def test_herdr_master_skill_catalog_consumption_and_bindings():
     body = load_skill_body("herdr-master")
 
     # Uses catalog
-    assert "herdm catalog squad" in body
-    assert "herdm catalog agent" in body
+    assert "aihead catalog squad" in body
+    assert "aihead catalog agent" in body
 
     # Scout/bootstrap binding is product Scout (agy:gemini-3.8-flash-medium:medium)
     assert "agy:gemini-3.8-flash-medium:medium" in body
@@ -260,12 +260,12 @@ def test_herdr_master_skill_catalog_consumption_and_bindings():
     assert "must never send input or start a coordinator" in body
 
     # Resolves canonical /ergo from catalog, not dotfiles
-    assert "herdm catalog show --json" in body
+    assert "aihead catalog show --json" in body
     assert "dotfiles" not in body
 
     # Adopted workspaces are not created or closed
     assert "Adopted workspaces (`owns_workspace == false`) are NEVER closed" in body
-    assert "Do NOT recursively invoke `herdm ergo`" in body
+    assert "Do NOT recursively invoke `aihead ergo`" in body
 
 
 def test_orchestration_skill_is_herdr_free_and_keeps_every_gate():
@@ -738,8 +738,8 @@ def test_canonical_skills_hermes_support():
     assert "Hermes does not provide a headless CLI runner" in council_body
 
     aihead_body = load_skill_body("aihead")
-    assert "herdm aihead" in aihead_body
-    assert "herdm skills install --no-force" in aihead_body
+    assert "aihead --harness hermes" in aihead_body
+    assert "aihead skills install --no-force" in aihead_body
     assert "Harness Skill Target Inventory" in aihead_body
     assert "Profile-Aware No-Clobber Opt-In Collision Procedure" in aihead_body
     assert "NEVER alter, rename, or delete user skills without explicit permission" in aihead_body
@@ -890,3 +890,25 @@ for text in ('---\n"name": ergo\ndescription: user\n---\n',
     result = subprocess.run([python, "-B", "-I", "-c", script, workspace, str(tmp_path)],
                             cwd=tmp_path, env=env, capture_output=True, text=True, timeout=60)
     assert result.returncode == 0, result.stdout + result.stderr
+
+
+def test_ergo_and_aihead_readme_command_and_models_grammar():
+    """Verify READMEs use aihead ergo and colon syntax for --models."""
+    ergo_readme = (REPO_ROOT / "skills" / "ergo" / "README.md").read_text(encoding="utf-8")
+    aihead_readme = (REPO_ROOT / "skills" / "aihead" / "README.md").read_text(encoding="utf-8")
+
+    expected_models = (
+        '--models "scout:agy:gemini-3.8-flash-medium architect:pi:openai-codex/gpt-6.1-sol '
+        'workers:agy:gemini-3.8-flash,pi:xai/grok-4.7 reviewer:pi:xai/grok-4.7"'
+    )
+    assert expected_models in ergo_readme
+    assert expected_models in aihead_readme
+
+    assert 'aihead ergo "Build search dashboard"' in ergo_readme
+    assert 'aihead ergo "<intent>"' in aihead_readme
+    assert 'aihead orchestration "<intent>"' in aihead_readme
+
+    # Ensure obsolete equal syntax is absent in both READMEs
+    for bad in ('scout=agy', 'architect=pi', 'workers=agy', 'reviewer=pi'):
+        assert bad not in ergo_readme
+        assert bad not in aihead_readme

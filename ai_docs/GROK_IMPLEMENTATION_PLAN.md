@@ -1,5 +1,6 @@
 The plan below is the build contract for turning the current stub (`herdm` init/status/tui printouts, partial models, IHCP envelope) into the Ergo cockpit. It is bound to Herdr **0.9.5 / Protocol 22 / schema_version 1** as shipped on this machine, and to the Ergo `--herdr` role contract in `/home/pank/projects/dotfiles/ergo/SKILL.md`.
 
+> **Historical document.** This plan was written while the CLI entry point was still `herdm`. References to `herdm` below describe that era's contract and are intentionally left unedited; today's entry point is `aihead`, with `herdm` kept as a deprecated backwards-compatible alias.
 # Herdr-Master Implementation Plan
 
 ## 0. Current baseline and non-negotiables
@@ -417,7 +418,7 @@ tests/
   fixtures/protocol22/*.jsonl
 ```
 
-CLI surface to grow on the existing Typer app (spec in `ai_docs/04_CLI_AND_TUI_SPEC.md`): `init`, `master`, `worker`, `pipeline`, `worktree`, `protocol`, `status`, `tui`. `herdm tui` constructs `HerdrMasterApp` and runs it. `herdm pipeline run ergo` calls the same `pipeline/ergo.py` the TUI calls.
+CLI surface to grow on the existing Typer app (spec in `ai_docs/04_CLI_AND_TUI_SPEC.md`): `init`, `master`, `worker`, `pipeline`, `worktree`, `protocol`, `status`, `tui`. `aihead tui` (or `herdm tui`) constructs `HerdrMasterApp` and runs it. `aihead pipeline run ergo` calls the same `pipeline/ergo.py` the TUI calls.
 
 ---
 
@@ -477,7 +478,7 @@ Sequence matches `ai_docs/03_ORCHESTRATION_AND_ERGO_PIPELINE.md` and Ergo steps 
 
 ### Phase 6 — TUI shell
 
-**Deliverables:** `ui/tui/app.py`, `state.py`, `messages.py`, `theme.py`, `header_bar.py`, `hierarchy.py`, `deck.py`, `footer.py`. `herdm tui` launches it. `herdm tui --demo` loads fixtures so the UI is reviewable with no server.
+**Deliverables:** `ui/tui/app.py`, `state.py`, `messages.py`, `theme.py`, `header_bar.py`, `hierarchy.py`, `deck.py`, `footer.py`. `aihead tui` launches it. `aihead tui --demo` loads fixtures so the UI is reviewable with no server.
 
 **Done when:** header, tree, four deck stubs, and footer render; `1`–`4`, `Tab`, `j`/`k`, `q` work in demo mode; quitting does not emit `workspace.close`.
 
@@ -497,7 +498,7 @@ Wire `p`, `r`, `m`, `k`, `c`, `d` to the engine. Output pane appends only on scr
 
 ### Phase 9 — Hardening
 
-**Deliverables:** CLI/TUI parity tests, skill touch-up in `skills/herdr-master/SKILL.md` pointing operators at `herdm tui` for squad edits (do not duplicate the engine into the skill), `integration.toml` from `ai_docs/05` only if `herdr integration` accepts it in a spike — otherwise leave the manifest as a doc and do not pretend it is installed.
+**Deliverables:** CLI/TUI parity tests, skill touch-up in `skills/herdr-master/SKILL.md` pointing operators at `aihead tui` for squad edits (do not duplicate the engine into the skill), `integration.toml` from `ai_docs/05` only if `herdr integration` accepts it in a spike — otherwise leave the manifest as a doc and do not pretend it is installed.
 
 **Done when:** `pytest` is green offline; `ruff` clean; a manual smoke (not CI) can open the TUI, show a real snapshot from the active session, and quit without closing unrelated workspaces.
 

@@ -24,7 +24,7 @@ except Exception:
 import typer
 from rich.console import Console
 
-from herdr_master.cli.aihead_setup import run_aihead_setup, run_skill_setup
+from herdr_master.cli.aihead_setup import run_aihead_setup
 from herdr_master.cli.catalog import catalog_app
 from herdr_master.cli.skills import install_skills as run_install_skills
 from herdr_master.cli.skills import skills_app
@@ -82,19 +82,17 @@ app = typer.Typer(
     invoke_without_command=True,
     no_args_is_help=False,
 )
-# Console-script entry for `aihead`. One callback, no nested command, and never
-# the headless `herdm aihead-cli` decision path.
+# Primary console-script entry: standalone launcher plus the shared command tree.
 aihead_app = typer.Typer(
     name="aihead",
     help=(
-        "Launch an interactive AiHead session in a Herdr workspace. "
+        "Launch an interactive AiHead session or run a subcommand. "
         "Adopts an existing workspace when one is already available; otherwise "
         "starts Herdr and opens a new workspace."
     ),
     invoke_without_command=True,
     no_args_is_help=False,
     add_completion=True,
-    subcommand_metavar="",
 )
 master_app = typer.Typer(help="Manage and launch Herdr Master orchestrators (Multiple Jobs).")
 pipeline_app = typer.Typer(help="Manage and run cross-harness Ergo pipelines (Single Major Job).")
@@ -103,6 +101,10 @@ app.add_typer(master_app, name="master")
 app.add_typer(pipeline_app, name="pipeline")
 app.add_typer(skills_app, name="skills")
 app.add_typer(catalog_app, name="catalog")
+aihead_app.add_typer(master_app, name="master")
+aihead_app.add_typer(pipeline_app, name="pipeline")
+aihead_app.add_typer(skills_app, name="skills")
+aihead_app.add_typer(catalog_app, name="catalog")
 
 console = Console()
 
@@ -144,12 +146,12 @@ def root(
     aihead: bool = typer.Option(
         False,
         "--aihead",
-        help="Launch an interactive AiHead session (same as `herdm aihead`).",
+        help="Launch an interactive AiHead session (same as `aihead head`).",
     ),
     aihead_setup: bool = typer.Option(
         False,
         "--aihead-setup",
-        help="Configure per-role AiHead models (same as `herdm aihead-setup`).",
+        help="Configure per-role AiHead models (same as `aihead setup`).",
     ),
     task: Optional[str] = typer.Option(
         None, "--task", "-t", help="Initial instruction for `--aihead`."
@@ -196,6 +198,7 @@ def root(
 
 
 @app.command()
+@aihead_app.command()
 def init(
     target_branch: str = typer.Option("develop", help="Target integration branch"),
     session: str = typer.Option(
@@ -207,10 +210,11 @@ def init(
     console.print("[green]✓[/green] Initializing Herdr-Master in current workspace...")
     console.print(f"  • Target integration branch: [cyan]{target_branch}[/cyan]")
     console.print(f"  • Herdr session: [cyan]{session}[/cyan]")
-    console.print("[green]✓[/green] Ready. Use 'herdm master start' or '/herdr-master' in a pane.")
+    console.print("[green]✓[/green] Ready. Use 'aihead master start' or '/herdr-master' in a pane.")
 
 
 @app.command()
+@aihead_app.command()
 def status():
     """Show current active masters, workers, and pipelines."""
     from herdr_master.core.context import resolve_herdr_context
@@ -220,7 +224,7 @@ def status():
     env_status = "Active (inside Herdr)" if ctx.is_inside_herdr else "Outside Herdr"
     console.print(f"  • Herdr Environment: {env_status}")
     console.print(f"  • Socket: [cyan]{ctx.socket_path}[/cyan]")
-    console.print("Run [yellow]herdm tui[/yellow] to launch the interactive terminal dashboard.")
+    console.print("Run [yellow]aihead tui[/yellow] to launch the interactive terminal dashboard.")
 
 
 @master_app.command("start")
@@ -304,6 +308,7 @@ def _resolve_ergo_once(
 
 @pipeline_app.command("ergo")
 @app.command("ergo")
+@aihead_app.command("ergo")
 def run_ergo(
     intent: str = typer.Argument(..., help="Feature intent or objective"),
     label: Optional[str] = typer.Option(None, "--label", "-l", help="Dedicated workspace label"),
@@ -388,6 +393,7 @@ def run_ergo(
 
 @pipeline_app.command("orchestration")
 @app.command("orchestration")
+@aihead_app.command("orchestration")
 def run_orchestration(
     intent: str = typer.Argument(..., help="Feature intent or objective"),
     label: Optional[str] = typer.Option(None, "--label", "-l", help="Dedicated workspace label"),
@@ -503,6 +509,7 @@ def run_orchestration(
 
 @pipeline_app.command("council")
 @app.command("council")
+@aihead_app.command("council")
 def run_council(
     intent: str = typer.Argument(..., help="Specifications, plan intent, or objective"),
     label: Optional[str] = typer.Option(None, "--label", "-l", help="Dedicated workspace label"),
@@ -569,6 +576,7 @@ def run_council(
 
 @app.command("aihead")
 @app.command("head")
+@aihead_app.command("head")
 def run_aihead(
     harness: Optional[str] = typer.Option(
         None,
@@ -735,6 +743,8 @@ def run_aihead(
 
 
 @app.command("aihead-setup")
+@aihead_app.command("aihead-setup")
+@aihead_app.command("setup")
 def aihead_setup_cmd(
     defaults: bool = typer.Option(
         False, "--defaults", help="Apply defaults without prompting."
@@ -749,6 +759,7 @@ def aihead_setup_cmd(
 
 
 @app.command("aihead-cli")
+@aihead_app.command("aihead-cli")
 def aihead_cli_cmd(
     request_file: Optional[Path] = typer.Option(
         None, "--request-file", help="Path to JSON file containing AiHeadDecisionRequest"
@@ -855,6 +866,7 @@ council_state_app = typer.Typer(
     help="Internal state-gate CLI for AI Council deliberations.",
 )
 app.add_typer(council_state_app, name="council-state")
+aihead_app.add_typer(council_state_app, name="council-state")
 
 
 @council_state_app.command("init")
@@ -1122,6 +1134,7 @@ def council_status_cmd(
 
 
 @app.command("config")
+@aihead_app.command("config")
 def config_cmd(
     path: Optional[str] = typer.Option(None, "--path", "-p", help="Project path or config file"),
     json_output: bool = typer.Option(True, "--json/--no-json", help="Output JSON format"),
@@ -1141,6 +1154,7 @@ def config_cmd(
 
 
 @app.command()
+@aihead_app.command()
 def tui(
     session: Optional[str] = typer.Option(None, "--session", help=_SESSION_HELP),
     demo: bool = typer.Option(
@@ -1194,6 +1208,7 @@ def _workspace_id(result: dict) -> Optional[str]:
 
 
 @app.command("workspace")
+@aihead_app.command("workspace")
 def workspace_cmd(
     label: str = typer.Option("herdr-master", "--label", help="Workspace label."),
     cwd: Optional[str] = typer.Option(
@@ -1249,6 +1264,7 @@ def workspace_cmd(
 
 
 @app.command("install")
+@aihead_app.command("install")
 def install_cmd(
     force: bool = typer.Option(
         True,
@@ -1589,6 +1605,10 @@ def _launch_skill(skill: str, intent: Optional[str], session: Optional[str], cwd
 def launch_standalone_aihead(
     ctx: typer.Context,
     setup: bool = typer.Option(False, "--setup", help="Open the settings TUI."),
+    defaults: bool = typer.Option(
+        False, "--defaults", help="Apply setup defaults without prompting."
+    ),
+    yes: bool = typer.Option(False, "--yes", "-y", help="Skip the setup confirmation prompt."),
     tui_flag: bool = typer.Option(False, "--tui", help="Launch the AiHead-Cockpit TUI."),
     menu: bool = typer.Option(
         False, "--menu", help="Open the AiHead menu in a Herdr command pane."
@@ -1679,6 +1699,8 @@ def launch_standalone_aihead(
     ),
 ) -> None:
     """Launch an interactive AiHead session in a Herdr workspace."""
+    if ctx.invoked_subcommand is not None:
+        return
     skills: list[tuple[str, Optional[str]]] = [
         (name, value)
         for name, value in (
@@ -1695,14 +1717,14 @@ def launch_standalone_aihead(
     ):
         _abort("Choose only one launch mode.")
     if setup:
-        if not attach:
+        if not attach and not defaults:
             _abort("--no-attach is not supported with --setup.")
         if harness is not None or model is not None or effort is not None:
             _abort("Configure bindings in the wizard, not with launch overrides.")
         target = config.expanduser() if config is not None else None
         if target is None and cwd is not None:
             target = find_project_config_path(cwd) or cwd / ".herdr-master.toml"
-        run_skill_setup(config=target)
+        run_aihead_setup(defaults=defaults, yes=yes, config=target)
         return
     if tui_flag:
         if not attach:

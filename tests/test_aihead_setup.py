@@ -6,6 +6,8 @@ import sys
 from pathlib import Path
 from unittest.mock import AsyncMock, patch
 
+import pytest
+
 if sys.version_info >= (3, 11):
     import tomllib
 else:
@@ -52,6 +54,91 @@ def _pick_keys(app_obj: SetupTuiApp, option_label: str) -> list[str]:
 # ---------------------------------------------------------------------------
 # Non-interactive --defaults --yes tests (must NOT open TUI)
 # ---------------------------------------------------------------------------
+
+
+@pytest.mark.parametrize("form", ["--setup", "setup", "aihead-setup"])
+@pytest.mark.parametrize("yes_flag", ["--yes", "-y"])
+def test_aihead_defaults_setup_is_noninteractive(tmp_path: Path, form, yes_flag):
+    cfg = tmp_path / "config.toml"
+    args = [form, "--defaults", yes_flag, "--config", str(cfg)]
+    if form == "--setup":
+        args.append("--no-attach")
+    with (
+        patch("herdr_master.cli.aihead_setup.run_setup_tui") as tui_mock,
+        patch("herdr_master.cli.aihead_setup.Confirm.ask") as confirm,
+        patch("herdr_master.cli.main.resolve_launch_context") as resolve,
+        patch("herdr_master.cli.main.launch_ai_head") as launch,
+    ):
+        result = runner.invoke(aihead_app, args)
+    assert result.exit_code == 0, result.output
+    assert "[deprecated]" not in result.stderr
+    assert _load(cfg)["models"]["default_squad"]["scout"] == "opencode:opencode/beam-free:medium"
+    tui_mock.assert_not_called()
+    confirm.assert_not_called()
+    resolve.assert_not_called()
+    launch.assert_not_called()
+
+
+@pytest.mark.parametrize("existing", [False, True])
+def test_aihead_defaults_setup_resolves_cwd_config(tmp_path: Path, existing):
+    project = tmp_path / "project"
+    project.mkdir()
+    cwd = project / "nested"
+    cwd.mkdir()
+    cfg = (project if existing else cwd) / ".herdr-master.toml"
+    if existing:
+        cfg.write_text('[unrelated]\nvalue = "keep"\n', encoding="utf-8")
+    with (
+        patch("herdr_master.cli.aihead_setup.run_setup_tui") as tui_mock,
+        patch("herdr_master.cli.aihead_setup.Confirm.ask") as confirm,
+        patch("herdr_master.cli.main.resolve_launch_context") as resolve,
+    ):
+        result = runner.invoke(
+            aihead_app,
+            ["--setup", "--defaults", "--yes", "--no-attach", "--cwd", str(cwd)],
+        )
+    assert result.exit_code == 0, result.output
+    assert "models" in _load(cfg)
+    if existing:
+        assert _load(cfg)["unrelated"]["value"] == "keep"
+        assert not (cwd / ".herdr-master.toml").exists()
+    tui_mock.assert_not_called()
+    confirm.assert_not_called()
+    resolve.assert_not_called()
+
+
+def test_aihead_yes_only_setup_stays_interactive(tmp_path: Path):
+    cfg = tmp_path / "config.toml"
+    with patch("herdr_master.cli.aihead_setup.run_setup_tui") as tui_mock:
+        result = runner.invoke(aihead_app, ["--setup", "--yes", "--config", str(cfg)])
+    assert result.exit_code == 0, result.output
+    tui_mock.assert_called_once()
+
+
+def test_aihead_defaults_setup_still_confirms_without_yes(tmp_path: Path):
+    cfg = tmp_path / "config.toml"
+    with patch("herdr_master.cli.aihead_setup.Confirm.ask", return_value=False) as confirm:
+        result = runner.invoke(
+            aihead_app, ["--setup", "--defaults", "--no-attach", "--config", str(cfg)]
+        )
+    assert result.exit_code == 0, result.output
+    confirm.assert_called_once()
+    assert not cfg.exists()
+
+
+@pytest.mark.parametrize(
+    "extra",
+    [["--ergo", "task"], ["--harness", "pi"], ["--model", "model"], ["--effort", "high"]],
+)
+def test_aihead_defaults_setup_keeps_launch_validation(tmp_path: Path, extra):
+    cfg = tmp_path / "config.toml"
+    with patch("herdr_master.cli.main.run_aihead_setup") as setup:
+        result = runner.invoke(
+            aihead_app, ["--setup", "--defaults", "--yes", "--config", str(cfg), *extra]
+        )
+    assert result.exit_code != 0
+    setup.assert_not_called()
+    assert not cfg.exists()
 
 
 def test_defaults_writes_expected_role_models(tmp_path: Path):

@@ -9,13 +9,13 @@ metadata:
 
 # /ergo — Scout → Architect → Parallel Specialist Coders → Reviewer Loop
 
-Launch with `aihead --ergo "<intent>"`; `herdm` is deprecated.
+Launch with `aihead ergo "<intent>"` (or `aihead --ergo "<intent>"`); `herdm` is deprecated.
 
 Run an Ergo pipeline for: `${@:-$ARGUMENTS}` (if no intent or spec path was supplied, ask what to build and stop).
 
 You are the orchestrator. **Never implement code directly in the main conversation.**
 
-**Dependencies:** `herdm` is always required, and Herdr is required for the default mode (`--native` runs on the host's own subagents and needs no Herdr). If either is missing, STOP and report it — never substitute an embedded model table or a degraded single-context pipeline.
+**Dependencies:** `aihead` is always required (legacy `herdm` remains supported), and Herdr is required for the default mode (`--native` runs on the host's own subagents and needs no Herdr). If either is missing, STOP and report it — never substitute an embedded model table or a degraded single-context pipeline.
 
 - **Default Mode (Herdr Cross-Harness)**: Plain `/ergo` defaults to Herdr mode. The mixed agy/Pi product default squad cannot run through a single host's native subagent tool, so every pipeline role runs as an interactive Herdr agent tab inside one Herdr workspace. `--herdr` is an explicit alias for this default.
 - **Explicit `--native` Mode**: When `--native` is explicitly passed (e.g. `/ergo --native ...`), the pipeline runs using the parent harness's native subagent tool (`invoke_subagent` in `agy`, `subagent` in `pi`/`opencode`, `Agent` in `claude`). There is no alternate native default squad; `--native` requires explicit compatible role/worker overrides or a compatible run snapshot, and any inherited product binding incompatible with the native host is rejected by the resolver.
@@ -24,12 +24,12 @@ You are the orchestrator. **Never implement code directly in the main conversati
 
 ## Coordinator identity (in-session vs delegated launch)
 
-- Running `/ergo` inside an already-open harness session: that session IS the Ergo coordinator. Never launch a coordinator pane and never call `aihead --ergo` / `herdm ergo` just to obtain a coordinator; the `[ergo] coordinator` binding does not apply.
-- A coordinator pane is created only for a new pane/session launch (`herdm ergo`, `aihead --ergo`); that launch uses `[ergo] coordinator` or `--coordinator`, and falls back to the Scout binding when unset.
+- Running `/ergo` inside an already-open harness session: that session IS the Ergo coordinator. Never launch a coordinator pane and never call `aihead ergo` / `herdm ergo` just to obtain a coordinator; the `[ergo] coordinator` binding does not apply.
+- A coordinator pane is created only for a new pane/session launch (`aihead ergo`, `aihead --ergo`); that launch uses `[ergo] coordinator` or `--coordinator`, and falls back to the Scout binding when unset.
 
 ---
 
-## 0. Configuration Hierarchy & Squad Resolution via `herdm catalog`
+## 0. Configuration Hierarchy & Squad Resolution via `aihead catalog`
 
 When resolving squad role models and worker pool bindings, follow this strict priority order:
 1. **Inline CLI / Prompt Overrides (`--models`, `--scout`, `--architect`, `--workers`, `--reviewer`)**: Explicit arguments passed in the invocation command take highest priority.
@@ -40,19 +40,20 @@ When resolving squad role models and worker pool bindings, follow this strict pr
 An AiHead automode run supplies the composition as `--models` or a run squad snapshot, which already outrank the project squad.
 
 ### Authoritative Squad Resolution (No Hand-Maintained Fallback Tables)
-Do NOT maintain or consult hardcoded default model tables. The single authority for squad configuration, roles, and allowed coder models is `herdm catalog`:
+Do NOT maintain or consult hardcoded default model tables. The single authority for squad configuration, roles, and allowed coder models is `aihead catalog`:
 
 1. **Resolve Effective Squad**:
    Execute:
    ```bash
-   herdm catalog squad [--mode herdr|native] [--harness <native-host>] [--project .herdr-master.toml] [--models "<spec>"] [--run-squad <path>] --json
+   aihead catalog squad [--mode herdr|native] [--harness <native-host>] [--project .herdr-master.toml] [--models "<spec>"] [--run-squad <path>] --json
    ```
    - Default mode is `--mode herdr` (unless `--native` was explicitly passed).
    - If `--native` is passed, supply `--harness <active-harness>`.
    - Forward any user-specified overrides (`--models`, `--scout`, `--architect`, `--workers`, `--reviewer`).
-   - If `herdm` is not found in the environment, **STOP and report an actionable installation prerequisite error** (e.g. install `herdm` via `uv` or activate a virtualenv containing `herdr-master`). Never fall back to an embedded table.
+   - **`--models` spec grammar**: role entries are WHITESPACE-separated and each is `role:binding` with COLONS — e.g. `scout:agy:gemini-3.8-flash-medium:medium architect:opencode:openai/gpt-6.1-sol reviewer:agy:gemini-4-argon-high:high`. `workers`/`coders` bindings are COMMA-separated with no spaces (e.g. `workers:agy:gemini-3.8-flash,opencode:openai/gpt-6.1-sol`). The resolver rejects `role=binding` with `Unknown role '<role>=<kind>'` — do not copy `role=...` examples from docs. Validate the whole spec BEFORE launching with `aihead catalog squad --mode herdr --models "<spec>" --json` and confirm every overridden role reports `sources: override` and the payload reports `advisories: []`.
+   - If `aihead` is not found in the environment, **STOP and report an actionable installation prerequisite error** (e.g. install `aihead` via `uv` or activate a virtualenv containing `herdr-master`). Never fall back to an embedded table.
 
-2. **Authoritative Product Default Squad (returned by `herdm catalog squad`)**:
+2. **Authoritative Product Default Squad (returned by `aihead catalog squad`)**:
    - **Scout**: `agy:gemini-3.8-flash-medium`, effort `medium` (Herdr argv: `--model gemini-3.8-flash-medium --effort medium --dangerously-skip-permissions`)
    - **Architect**: `pi:openai-codex/gpt-6.1-sol:max` (Herdr argv: `--provider openai-codex --model gpt-6.1-sol --thinking max`)
    - **Reviewer**: `pi:xai/grok-4.7:high` (Herdr argv: `--provider xai --model grok-4.7 --thinking high`)
@@ -62,22 +63,37 @@ Do NOT maintain or consult hardcoded default model tables. The single authority 
    *Note*: `claude:claude-3-opus` and `agy:gemini-4-argon-high` are NOT defaults anywhere.
 
 3. **`ALLOWED CODER MODELS` Block**:
-   Extract `.allowed_coder_models` directly from the `herdm catalog squad --json` output. Paste this block verbatim into the Architect prompt. Do not craft your own model list.
+   Extract `.allowed_coder_models` directly from the `aihead catalog squad --json` output. Paste this block verbatim into the Architect prompt. Do not craft your own model list.
 
 4. **Resolving Agent Launch Descriptors**:
    For each role/task launch, resolve the exact launch arguments or native tool call from:
    ```bash
-   herdm catalog agent --mode <mode> [--harness <native-host>] --binding <binding> --role <role> --json
+   aihead catalog agent --mode <mode> [--harness <native-host>] --binding <binding> --role <role> --json
    ```
-   - In Herdr mode, the returned `argv` array is used verbatim in `herdr agent start <name> --kind <kind> --pane <pane-id> -- <argv...>`. Scope Hermes catalog checks strictly to when a Hermes child route is selected: when a Hermes child binding is requested, verify Hermes is present in the active catalog (via `herdm catalog show --json`). If the active catalog lacks `hermes`, report that Hermes catalog support is not yet integrated into the active environment and STOP for that Hermes route rather than fabricating launch arguments. Standard non-Hermes roles (e.g. default agy/pi roles) do not require Hermes in the catalog and proceed normally. When Hermes is supported and selected, child sessions use `--kind hermes -- --provider <provider> --model <model> --reasoning <effort>` (`--yolo` is passed by default to skip tool prompt confirmations; use `--no-skip-permissions` to require interactive confirmation). Disclose this security bypass: `--yolo` skips tool prompts inside the child pane, but does NOT approve the Plan Approval Gate, Reviewer verdict, or landing. Provider/model splits on the first slash; do not use `--thinking`, `--resume`, or `--continue`.
+   - In Herdr mode, the returned `argv` array is used verbatim in `herdr agent start <name> --kind <kind> --pane <pane-id> -- <argv...>`. Scope Hermes catalog checks strictly to when a Hermes child route is selected: when a Hermes child binding is requested, verify Hermes is present in the active catalog (via `aihead catalog show --json`). If the active catalog lacks `hermes`, report that Hermes catalog support is not yet integrated into the active environment and STOP for that Hermes route rather than fabricating launch arguments. Standard non-Hermes roles (e.g. default agy/pi roles) do not require Hermes in the catalog and proceed normally. When Hermes is supported and selected, child sessions use `--kind hermes -- --provider <provider> --model <model> --reasoning <effort>` (`--yolo` is passed by default to skip tool prompt confirmations; use `--no-skip-permissions` to require interactive confirmation). Disclose this security bypass: `--yolo` skips tool prompts inside the child pane, but does NOT approve the Plan Approval Gate, Reviewer verdict, or landing. Provider/model splits on the first slash; do not use `--thinking`, `--resume`, or `--continue`.
    - In Native mode, the returned descriptor contains `tool`, `kwargs`, `setup`, `prompt_param`, and optional `effort_prefix`. Use these verbatim.
+
+### Route preflight — smoke-test every distinct route before spawning
+
+The catalog proves a binding RESOLVES, not that it WORKS: a product default squad can carry routes that no longer authenticate or have no quota left. Round-trip each distinct harness/provider/model route once before spawning any role:
+
+```bash
+agy --model <model> [--effort <level>] --dangerously-skip-permissions -p="Reply with exactly: PONG"
+pi -p --provider <p> --model <m> [--thinking <level>] --no-tools --no-session "Reply with exactly: PONG"
+opencode run --model <provider/model> "Reply with exactly: PONG"
+pi auth check --provider <p> --json    # ready | not_ready | invalid  (exit 0 | 1 | 2)
+```
+
+- **Put every flag BEFORE the prompt.** `agy -p` consumes the next argv token as its prompt, so `-p "x" --model y` silently drops `--model` and runs the default model — the run looks healthy and is wrong.
+- Treat a failed route as a ROUTING decision, not an auth incident to debug mid-run: substitute only bindings the catalog resolves, and re-verify the substitution with `aihead catalog squad --models "<spec>" --json`. If no catalog-resolvable route works for a role, STOP and ask instead of inventing a binding.
+- Report discovery and live smoke results separately; a resolving catalog entry is not a working route.
 
 ---
 
 ## 1. Native Subagent Execution (`--native` Mode Only)
 
 When `--native` is explicitly passed:
-- Native execution uses the active host's subagent tool as described by `herdm catalog agent --mode native --harness <host> ...`.
+- Native execution uses the active host's subagent tool as described by `aihead catalog agent --mode native --harness <host> ...`.
 - Native adapters preserve specific tool contracts:
   - **Antigravity (`agy`)**: `invoke_subagent` accepts tier IDs (`flash_lite`, `flash`, `pro`) and effort phrases (`think`, `think hard`, `think harder`, `ultrathink`) on line 1 of `Prompt`. Exact CLI slugs (e.g. `gemini-3.8-flash-medium`) are rejected in native mode; run via default Herdr mode to use exact CLI slugs.
   - **Pi (`pi`)**: uses `subagent({ agent, model, task })` with model effort suffixes (e.g. `xai/grok-4.7:high`).
@@ -106,13 +122,13 @@ Plain `/ergo` and master-forwarded Ergo jobs execute in Herdr mode.
     - Adopted workspaces (`owns_workspace == false`) are NEVER closed.
     - Never close unrelated workspaces or tabs.
   - **No Recursive Coordinator Kickoff**:
-    Do NOT recursively invoke `herdm ergo` to start another coordinator. The current session IS the orchestrator.
+    Do NOT recursively invoke `aihead ergo` to start another coordinator. The current session IS the orchestrator.
 
 ### Spawning Role Tabs (Non-Blocking & Strict One-Level-Up Hierarchy)
 1. Ensure the Herdr server is accessible (`herdr status server`).
 2. Create one tab per role in the workspace, forwarding the Ergo Orchestrator's own pane ID (`$HERDR_PANE_ID` as `ORCHESTRATOR_PANE_ID`) via `--env`:
    `herdr tab create --workspace <WS_ID> --cwd "$WORKTREE" --label <role> --env "HERDR_PARENT_PANE_ID=$HERDR_PANE_ID" --no-focus` → record `<PANE_ID>`.
-3. Start the agent using the exact argv resolved from `herdm catalog agent`:
+3. Start the agent using the exact argv resolved from `aihead catalog agent`:
    `herdr agent start <name> --kind <kind> --pane <PANE_ID> -- <resolved_argv...>`
 4. Send the prompt with `herdr agent prompt <PANE_ID> "<prompt>"`.
 5. **Non-Blocking Parent Rule**: Parent sessions (including the Ergo Orchestrator) NEVER block or wait in polling loops after spawning/prompting children — return immediately after spawning/prompting a role tab (or arm a non-blocking async watcher if supported) and resume when the child sends its `herdr agent prompt <ORCHESTRATOR_PANE_ID> "..."` notification. For parallel `INDEPENDENT` tasks, start and prompt all coder tabs in the same turn and return immediately; verify completion via `herdr agent get/read` plus expected summary files when notified.
@@ -209,10 +225,10 @@ Track one checklist item per step and complete in order:
        `git worktree add "$WORKTREE" -b "ergo/<run-id>"`
      - Create `RUN_DIR=<WORKTREE>/.orchestration/ergo-<run-id>/` as an absolute path.
 2. **Resolve Squad and Write Frozen Snapshot**:
-   - Resolve the squad via `herdm catalog squad [--mode herdr|native] ... --json`.
+   - Resolve the squad via `aihead catalog squad [--mode herdr|native] ... --json`.
    - Write the frozen snapshot to `$RUN_DIR/squad.toml`:
      ```bash
-     herdm catalog squad --from-json - --write-snapshot "$RUN_DIR/squad.toml" --json <<EOF
+     aihead catalog squad --from-json - --write-snapshot "$RUN_DIR/squad.toml" --json <<EOF
      <resolved-squad-json>
      EOF
      ```

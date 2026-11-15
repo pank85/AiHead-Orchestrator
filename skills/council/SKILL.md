@@ -22,7 +22,7 @@ The AI Council coordinates multiple specialized agent members to independently d
 ## 1. Council Roster & Agent Roles
 
 The Council operates with a strictly partitioned roster:
-- **1 Coordinator**: Hosts this canonical skill session (Level 2). Initializes the run, orchestrates state transitions via `herdr-master council-state`, tasks the Scout, distributes context and candidate plans to Council Members, compiles unified feedback, enforces cycle caps, conducts votes when needed, and finalizes the chosen plan. The Coordinator is a neutral facilitator and **never votes**.
+- **1 Coordinator**: Hosts this canonical skill session (Level 2). Initializes the run, orchestrates state transitions via `aihead council-state`, tasks the Scout, distributes context and candidate plans to Council Members, compiles unified feedback, enforces cycle caps, conducts votes when needed, and finalizes the chosen plan. The Coordinator is a neutral facilitator and **never votes**.
 - **1 Scout**: Fast codebase discovery specialist (Level 3). Operates in read-only mode to inspect existing code patterns, project guidelines, dependencies, interfaces, and constraints. Produces `RUN_DIR/context.md`. The Scout **never votes**.
 - **Dynamic Council Members (> 1)**: Two or more diverse, capable planning agents (Level 3, e.g. `member-1`, `member-2`, `member-3`). Each member drafts an independent plan, reviews peer proposals, contributes constructive feedback, revises plans toward consensus, and casts exactly one ballot if deliberation reaches a tie-breaking vote. In Herdr mode, members run as isolated tabs across supported harnesses (`agy`, `pi`, `claude`, `opencode`, and `hermes` when Hermes catalog support is integrated into the active catalog, via `--kind hermes -- --provider <provider> --model <model> --reasoning <level>` with `--yolo` enabled by default to bypass tool confirmation prompts; pass `--no-skip-permissions` to require interactive prompt approvals). Note: Hermes has no catalog native adapter (`supports_native=False`); council runs involving Hermes members route through Herdr tabs rather than a catalog native adapter. Scope this catalog check strictly to requested Hermes member routes: if a Hermes member is requested and the active catalog lacks `hermes`, report that Hermes catalog support is not yet integrated into the active environment and STOP for that Hermes member route. Standard non-Hermes members (e.g. agy, pi, claude, opencode) do not require Hermes in the catalog and proceed normally. (Within a standalone Hermes host session, `delegate_task` is an internal tool, not a catalog native mode).
 
@@ -31,7 +31,7 @@ The Council operates with a strictly partitioned roster:
 2. **Spawning Level 3 Role Tabs (`Scout` and `Council Members`)**:
    - Create each tab in the adopted workspace (`$HERDR_WORKSPACE_ID`) with `--no-focus`, passing the Coordinator's own pane ID (`$HERDR_PANE_ID` as `COORDINATOR_PANE_ID`) via `--env`:
      `herdr tab create --workspace "$HERDR_WORKSPACE_ID" --cwd "$ORIGIN_CWD" --label "<role-or-member>" --env "HERDR_PARENT_PANE_ID=$HERDR_PANE_ID" --no-focus`
-   - Start the agent using the exact argv resolved from `herdm catalog agent`:
+   - Start the agent using the exact argv resolved from `aihead catalog agent`:
      `herdr agent start <name> --kind <kind> --pane <PANE_ID> -- <resolved_argv...>`
    - Prompt the agent with `herdr agent prompt <PANE_ID> "<prompt>"` and **return immediately without polling**.
 3. **Strict One-Level-Up Hierarchy (NEVER Skip Levels!)**:
@@ -53,38 +53,38 @@ A spawn succeeded only when `herdr agent get <pane>` reports `agent_status: work
 
 ## 2. State-Gate Coordination Commands (`council-state`)
 
-All protocol transitions are validated, run-scoped, and enforced atomically by the `herdr-master council-state` CLI. The Coordinator **MUST** execute and receive a successful transition before dispatching each round or action, and **MUST stop immediately on gate refusal**.
+All protocol transitions are validated, run-scoped, and enforced atomically by the `aihead council-state` CLI. The Coordinator **MUST** execute and receive a successful transition before dispatching each round or action, and **MUST stop immediately on gate refusal**.
 
 The state gate enforces:
-1. `herdr-master council-state init --run-dir <RUN_DIR> --roster <MEMBER_LIST> [--coordinator <ID>] [--scout <ID>]`
+1. `aihead council-state init --run-dir <RUN_DIR> --roster <MEMBER_LIST> [--coordinator <ID>] [--scout <ID>]`
    - Initializes run state and locks the roster.
    - Rejects missing run directories, empty rosters, or rosters with fewer than 2 members.
-2. `herdr-master council-state record-scout --run-dir <RUN_DIR> --context <CONTEXT_PATH>`
+2. `aihead council-state record-scout --run-dir <RUN_DIR> --context <CONTEXT_PATH>`
    - Records Scout codebase discovery context prerequisite. Must be executed before opening Round 0.
-3. `herdr-master council-state open-round --run-dir <RUN_DIR> --round <N>`
+3. `aihead council-state open-round --run-dir <RUN_DIR> --round <N>`
    - Opens drafting (`round 0`) or feedback/revision cycles (`round 1` through `5`).
    - Strictly rejects `round 6`: the maximum number of feedback cycles is 5.
    - Rejects premature round opening before previous round submissions are complete (and requires Scout context before opening Round 0).
-4. `herdr-master council-state submit-plan --run-dir <RUN_DIR> --member <MEMBER_ID> --plan <PLAN_PATH> --revision <REV>`
+4. `aihead council-state submit-plan --run-dir <RUN_DIR> --member <MEMBER_ID> --plan <PLAN_PATH> --revision <REV>`
    - Records an independently drafted (revision 0) or revised (revisions 1–5) plan for a registered member.
    - Validates path containment within `RUN_DIR` and rejects duplicate or stale submissions.
-5. `herdr-master council-state submit-feedback --run-dir <RUN_DIR> --round <N> --member <MEMBER_ID> --feedback <FEEDBACK_PATH> --selected-plan <PLAN_ID>`
+5. `aihead council-state submit-feedback --run-dir <RUN_DIR> --round <N> --member <MEMBER_ID> --feedback <FEEDBACK_PATH> --selected-plan <PLAN_ID>`
    - Records member feedback on peer plans along with an explicit preferred plan identifier/revision for the round.
    - Validates that the selected plan ID corresponds to a valid candidate in the active round.
-6. `herdr-master council-state consensus --run-dir <RUN_DIR> --round <N>`
+6. `aihead council-state consensus --run-dir <RUN_DIR> --round <N>`
    - Verifies whether all council members explicitly support the exact same plan revision in round N.
    - If unanimous consensus is achieved, transitions state to ready for finalization.
    - Rejects false consensus: similar prose or coordinator preference is not consensus.
-7. `herdr-master council-state submit-unified-feedback --run-dir <RUN_DIR> --round <N> --feedback <FEEDBACK_PATH>`
+7. `aihead council-state submit-unified-feedback --run-dir <RUN_DIR> --round <N> --feedback <FEEDBACK_PATH>`
    - Records coordinator unified feedback synthesizing member reviews for round N. Prerequisite before members submit round N revisions.
-8. `herdr-master council-state vote --run-dir <RUN_DIR> --member <MEMBER_ID> --ballot <CANDIDATE_PLAN_ID>`
+8. `aihead council-state vote --run-dir <RUN_DIR> --member <MEMBER_ID> --ballot <CANDIDATE_PLAN_ID>`
    - Conducts a 1-round fallback vote if cycle 5 completes without consensus and all round 5 revisions have been submitted.
    - Council members cast exactly one ballot each. Coordinator and Scout ballots are rejected.
    - Calculates highest tally; breaks ties deterministically using configured candidate/member ordering recorded transparently.
-9. `herdr-master council-state finalize --run-dir <RUN_DIR>`
+9. `aihead council-state finalize --run-dir <RUN_DIR>`
    - Assembles and writes `RUN_DIR/final_plan.md` documenting the chosen plan, complete deliberation history, cycle count, consensus/vote tallies, and provenance.
    - Seals the state; any subsequent mutation attempts are rejected.
-10. `herdr-master council-state status --run-dir <RUN_DIR>`
+10. `aihead council-state status --run-dir <RUN_DIR>`
     - Inspects current run status, active round, submitted artifacts, and transition readiness.
 
 ---
@@ -97,33 +97,33 @@ Track and execute the deliberation through the following disciplined sequence:
 1. Create a unique, isolated run directory: `RUN_DIR=.orchestration/council-<run-id>/`.
 2. Initialize run state:
    ```bash
-   herdr-master council-state init --run-dir "$RUN_DIR" --roster "member-1,member-2,member-3"
+   aihead council-state init --run-dir "$RUN_DIR" --roster "member-1,member-2,member-3"
    ```
 3. Spawn the **Scout** tab (`--env "HERDR_PARENT_PANE_ID=$HERDR_PANE_ID" --no-focus`) and direct it to investigate repository structure, existing conventions (`AGENTS.md`, `CLAUDE.md`, `.ai/*.md`), APIs, schemas, and test harnesses. Instruct the Scout to notify **ONLY** the Council Coordinator (`herdr agent prompt <COORDINATOR_PANE_ID> ...`, NEVER AiHead directly) both when `RUN_DIR/context.md` is complete and if any blocker/question arises; return immediately after prompting without polling.
 4. Scout produces `RUN_DIR/context.md` detailing verified facts, module paths, interfaces, and architectural constraints, and notifies `<COORDINATOR_PANE_ID>`. Once notified, close the Scout tab immediately (`herdr tab close <scout-tab-id>`).
 5. Record Scout codebase discovery context prerequisite (required before Round 0 can be opened):
    ```bash
-   herdr-master council-state record-scout --run-dir "$RUN_DIR" --context "$RUN_DIR/context.md"
+   aihead council-state record-scout --run-dir "$RUN_DIR" --context "$RUN_DIR/context.md"
    ```
 
 ### Step 2: Independent Plan Drafting (Round 0)
 1. Open the drafting round:
    ```bash
-   herdr-master council-state open-round --run-dir "$RUN_DIR" --round 0
+   aihead council-state open-round --run-dir "$RUN_DIR" --round 0
    ```
 2. Spawn/prompt all Council Member tabs (`--env "HERDR_PARENT_PANE_ID=$HERDR_PANE_ID" --no-focus`), distributing the user's specification/intent and `RUN_DIR/context.md` identically to each council member. Instruct each member to notify **ONLY** `<COORDINATOR_PANE_ID>` (NEVER AiHead directly) upon saving `RUN_DIR/plans/<member>_v0.md` or if blocked/needing a decision; return immediately after prompting all members in the turn without polling.
 3. Each member independently drafts a comprehensive technical plan without visibility into other members' work.
 4. Members save their drafts to `RUN_DIR/plans/<member>_v0.md` and notify `<COORDINATOR_PANE_ID>`.
 5. Register each draft:
    ```bash
-   herdr-master council-state submit-plan --run-dir "$RUN_DIR" --member "<member>" --plan "$RUN_DIR/plans/<member>_v0.md" --revision 0
+   aihead council-state submit-plan --run-dir "$RUN_DIR" --member "<member>" --plan "$RUN_DIR/plans/<member>_v0.md" --revision 0
    ```
 
 ### Step 3: Cross-Review & Iterative Synthesis Feedback Loop (Max 5 Cycles: Rounds 1 to 5)
 For feedback cycles 1 through 5:
 1. Open the feedback round:
    ```bash
-   herdr-master council-state open-round --run-dir "$RUN_DIR" --round "$CYCLE"
+   aihead council-state open-round --run-dir "$RUN_DIR" --round "$CYCLE"
    ```
 2. **Cross-Review Distribution**:
    - Coordinator distributes every other member's current plan snapshot to each member and returns immediately without polling.
@@ -131,12 +131,12 @@ For feedback cycles 1 through 5:
    - Each member writes `RUN_DIR/feedback/<member>_round_<CYCLE>.md`, selects an explicit preferred plan, and notifies **ONLY** `<COORDINATOR_PANE_ID>` (`herdr agent prompt <COORDINATOR_PANE_ID> "Member <member> round <CYCLE> feedback finished: preferred <preferred_plan_id>"`, or reports a blocker).
    - Submit feedback:
      ```bash
-     herdr-master council-state submit-feedback --run-dir "$RUN_DIR" --round "$CYCLE" --member "<member>" --feedback "$RUN_DIR/feedback/<member>_round_<CYCLE>.md" --selected-plan "<preferred_plan_id>"
+     aihead council-state submit-feedback --run-dir "$RUN_DIR" --round "$CYCLE" --member "<member>" --feedback "$RUN_DIR/feedback/<member>_round_<CYCLE>.md" --selected-plan "<preferred_plan_id>"
      ```
 3. **Consensus Check**:
    - Coordinator checks consensus:
      ```bash
-     herdr-master council-state consensus --run-dir "$RUN_DIR" --round "$CYCLE"
+     aihead council-state consensus --run-dir "$RUN_DIR" --round "$CYCLE"
      ```
    - **Immediate Stop on Consensus**: If all members explicitly agree on the same canonical plan revision, the deliberation succeeds immediately! Proceed directly to **Step 5 (Finalize)**.
 4. **Unified Feedback & Revision**:
@@ -144,13 +144,13 @@ For feedback cycles 1 through 5:
      - Coordinator synthesizes member reviews into a single unified feedback artifact: `RUN_DIR/feedback/unified_round_<CYCLE>.md`.
      - Coordinator records unified feedback (required by state gate before member revisions are accepted):
        ```bash
-       herdr-master council-state submit-unified-feedback --run-dir "$RUN_DIR" --round "$CYCLE" --feedback "$RUN_DIR/feedback/unified_round_<CYCLE>.md"
+       aihead council-state submit-unified-feedback --run-dir "$RUN_DIR" --round "$CYCLE" --feedback "$RUN_DIR/feedback/unified_round_<CYCLE>.md"
        ```
      - Coordinator sends this identical unified feedback document to all members and returns immediately without polling.
      - Each member revises its plan addressing the collective feedback, writes `RUN_DIR/plans/<member>_v<CYCLE>.md`, and notifies **ONLY** `<COORDINATOR_PANE_ID>` (`herdr agent prompt <COORDINATOR_PANE_ID> "Member <member> revision v<CYCLE> finished"`, or reports a blocker).
      - Register revised plans:
        ```bash
-       herdr-master council-state submit-plan --run-dir "$RUN_DIR" --member "<member>" --plan "$RUN_DIR/plans/<member>_v<CYCLE>.md" --revision "$CYCLE"
+       aihead council-state submit-plan --run-dir "$RUN_DIR" --member "<member>" --plan "$RUN_DIR/plans/<member>_v<CYCLE>.md" --revision "$CYCLE"
        ```
      - If `CYCLE < 5`, advance to the next cycle (`CYCLE + 1`).
      - If `CYCLE == 5` and unanimous consensus was not reached, all members must still complete and submit their Round 5 revised plans before deliberation transitions to **Step 4 (Fallback 1-Round Vote)**.
@@ -160,7 +160,7 @@ If 5 full feedback cycles conclude without unanimous agreement (and all Round 5 
 1. The Coordinator initiates a final single-round vote among candidate plans from the 5th cycle (prompting each member and returning immediately without polling; each member notifies **ONLY** `<COORDINATOR_PANE_ID>` with its ballot).
 2. Each council member casts one vote:
    ```bash
-   herdr-master council-state vote --run-dir "$RUN_DIR" --member "<member>" --ballot "<candidate_plan_id>"
+   aihead council-state vote --run-dir "$RUN_DIR" --member "<member>" --ballot "<candidate_plan_id>"
    ```
 3. **Voting Rules**:
    - Only registered Council Members may vote (1 ballot per member).
@@ -171,7 +171,7 @@ If 5 full feedback cycles conclude without unanimous agreement (and all Round 5 
 ### Step 5: Finalization & Plan Artifact
 1. Finalize the run (and close all Council Member tabs immediately once finalized):
    ```bash
-   herdr-master council-state finalize --run-dir "$RUN_DIR"
+   aihead council-state finalize --run-dir "$RUN_DIR"
    ```
 2. **Pane/Agent Lifecycle Ownership**: Only the direct parent closes a pane/agent — the Coordinator closes its own Scout and Council Member tabs, and no pane closes itself and no agent closes its own tab. AiHead (or the delegating parent) closes the Coordinator pane once the Council reports completion, and AiHead (or the level above) owns final integration of the selected plan; the Council lands no code.
 3. **Never leave completed work unmerged**: Finalize the plan and hand `RUN_DIR/final_plan.md` to the direct parent for integration **before** cleanup. If the run is genuinely blocked (missing requirements, failed consensus gates, missing authorization), preserve the work — the run directory and plan artifacts stay intact — report the blocker to the direct parent, and never discard it.
@@ -217,8 +217,8 @@ The Council protocol supports automated, intelligent decision consultation via A
 
 ## 5. Hard Protocol Rules
 
-- **Maximum 5 Cycles**: Deliberation never exceeds 5 feedback cycles. The `herdr-master council-state` gate strictly rejects any round 6 attempt.
+- **Maximum 5 Cycles**: Deliberation never exceeds 5 feedback cycles. The `aihead council-state` gate strictly rejects any round 6 attempt.
 - **Strict Consensus Definition**: Consensus requires all members to explicitly adopt the same canonical plan revision. Similar prose or coordinator preference is NOT consensus.
 - **Voting Neutrality**: Coordinator and Scout NEVER vote. Voting is strictly reserved for Council Members.
-- **Atomic State Transitions**: Every round opening, submission, consensus check, and vote must be validated through `herdr-master council-state`.
+- **Atomic State Transitions**: Every round opening, submission, consensus check, and vote must be validated through `aihead council-state`.
 - **Plans Only**: The Council produces planning artifacts only. It never modifies codebase source files, runs commits, or lands branches.

@@ -1,6 +1,6 @@
 # `/orchestration` — user guide
 
-The same phased pipeline as [`/ergo`](ergo.md), with **no Herdr and no `herdm`**: every role is
+The same phased pipeline as [`/ergo`](ergo.md), with **no Herdr and no `aihead`**: every role is
 spawned by the current harness's own subagent tool.
 
 Scout → Architect → plan you approve → parallel specialist Coders → blind Reviewer → single squash
@@ -21,7 +21,7 @@ commit.
 
 ## What it needs
 
-> **Herdr dependency: none.** No `herdr` CLI, no `HERDR_ENV`, no workspace, no `herdm`, no catalog.
+> **Herdr dependency: none.** No `herdr` CLI, no `HERDR_ENV`, no workspace, no `aihead`, no catalog.
 > This is the standalone pipeline — if you have Herdr and want cross-harness models per role, use
 > [`/ergo`](ergo.md) instead.
 
@@ -47,8 +47,8 @@ playing all the roles in one context, because the reviewer's value is that it ne
 Install it like the other skills:
 
 ```bash
-herdm skills install     # symlinks /orchestration into agy, pi, claude, opencode
-herdm skills list        # confirm each endpoint shows Active
+aihead skills install     # symlinks /orchestration into agy, pi, claude, opencode
+aihead skills list        # confirm each endpoint shows Active
 ```
 
 ## Model policy

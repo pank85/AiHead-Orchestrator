@@ -1,11 +1,11 @@
 # CLI & Terminal User Interface (TUI) Specification
 
-## 1. CLI Commands Specification (`herdm` / `herdr-master`)
+## 1. CLI Commands Specification (`aihead` / `herdm`)
 
-The `herdm` command-line utility provides rapid, scriptable control over multi-agent orchestration, worktrees, and Herdr panes.
+The `aihead` command-line utility provides rapid, scriptable control over multi-agent orchestration, worktrees, and Herdr panes. (Legacy `herdm` and `herdr-master` executables remain supported as backwards-compatible entry points.)
 
 ```text
-Usage: herdm [OPTIONS] COMMAND [ARGS]...
+Usage: aihead [OPTIONS] COMMAND [ARGS]...
 
 Universal multi-master, multi-worker cross-harness AI orchestrator built on Herdr.
 
@@ -19,10 +19,10 @@ Options:
 Commands:
   init                Initialize .herdr-master workspace configuration
   master              Manage master orchestrator sessions
-  worker              Spawn and coordinate worker agent sessions
+  worker              Spawn and coordinate worker agent sessions (Planned / Unimplemented)
   pipeline            Run and monitor multi-role agent pipelines
   worktree            Inspect and manage isolated Git worktrees
-  protocol            Inspect inter-harness mailbox messages and events
+  protocol            Inspect inter-harness mailbox messages and events (Planned / Unimplemented)
   status              Display current multi-agent topology and states
   tui                 Launch the interactive terminal management dashboard
 ```
@@ -31,29 +31,30 @@ Commands:
 
 ### Command Details
 
-#### `herdm init`
+#### `aihead init`
 Initializes `.herdr-master/` in the current git repository, creates default `config.toml`, sets up mailbox directories, and verifies `develop` branch existence.
 
 ```bash
-herdm init [--target-branch develop] [--session default]
+aihead init [--target-branch develop] [--session default]
 ```
 
-#### `herdm master start`
+#### `aihead master start`
 Registers or launches a Master Orchestrator session in a designated pane or background process.
 
 ```bash
-herdm master start \
+aihead master start \
   --kind agy \
   --model gemini-4-argon \
   --role root-orchestrator \
   [--task "Implement distributed caching"]
 ```
 
-#### `herdm worker start`
+#### `aihead worker start` (Planned / Unimplemented)
+*Note: The `worker` command group is planned/unimplemented in the current CLI release.*
 Spawns an isolated worker in a new Herdr tab with an independent Git worktree.
 
 ```bash
-herdm worker start <worker-name> \
+aihead worker start <worker-name> \
   --kind <agy|pi|claude|opencode|codex> \
   --model <model-slug> \
   --effort <low|medium|high|max> \
@@ -62,25 +63,27 @@ herdm worker start <worker-name> \
   [--auto-watch]
 ```
 
-#### `herdm worker prompt`
+#### `aihead worker prompt` (Planned / Unimplemented)
+*Note: The `worker` command group is planned/unimplemented in the current CLI release.*
 Submits instructions or follow-ups to an active worker tab using bracketed-paste safe injection.
 
 ```bash
-herdm worker prompt <worker-name> "Run unit tests and report failure logs" --wait
+aihead worker prompt <worker-name> "Run unit tests and report failure logs" --wait
 ```
 
-#### `herdm worker diff`
+#### `aihead worker diff` (Planned / Unimplemented)
+*Note: The `worker` command group is planned/unimplemented in the current CLI release.*
 Displays the real-time git diff of the worker's worktree against `develop`.
 
 ```bash
-herdm worker diff <worker-name> [--stat]
+aihead worker diff <worker-name> [--stat]
 ```
 
-#### `herdm pipeline run`
+#### `aihead pipeline run`
 Executes an end-to-end multi-role pipeline (such as Ergo) across heterogeneous harnesses.
 
 ```bash
-herdm pipeline run ergo \
+aihead pipeline run ergo \
   --intent "Migrate auth service to JWT tokens" \
   --scout agy:gemini-3.8-flash \
   --architect pi:openai-codex/gpt-6.1-sol \
@@ -89,7 +92,7 @@ herdm pipeline run ergo \
   --auto-approve=false
 ```
 
-#### `herdm status`
+#### `aihead status`
 Outputs a clean visual or JSON snapshot of all active masters, workers, panes, worktrees, and watcher states.
 
 ---
@@ -106,7 +109,7 @@ The TUI provides a visual command center inspired by Herdr's lean, high-density 
 +----------------------------------------------------------------------------------------------------+
 | [ New Master ]               [ New Ergo ]               [ Squad Settings ]                         |
 | [ Open in Herdr [o] ]  Workspace: project-a (default) · 2 panes                                    |
-| Open switches to Herdr; another-session/outside-Herdr attach replaces this cockpit. Run `herdm tui` |
+| Open switches to Herdr; another-session/outside-Herdr attach replaces this cockpit. Run `aihead tui` |
 | 2/2 sessions online · 3 workspaces · 4 agents · Click row to select; [o] to open                   |
 | ▼ ● running [Master] project-a · default · 2 panes                                                 |
 |   ├── ● running  Builder · Implement · w1:p1 · /projects/project-a                                 |
@@ -139,7 +142,7 @@ The TUI provides a visual command center inspired by Herdr's lean, high-density 
 ### 3. Open in Herdr Strip & Boundary Help
 - Visible button `#btn-open-herdr` labeled **Open in Herdr [o]**.
 - Live selection summary showing the currently highlighted workspace or pane.
-- Explicit handoff guidance: *Open switches to Herdr; another-session/outside-Herdr attach replaces this cockpit. Run `herdm tui` to return.*
+- Explicit handoff guidance: *Open switches to Herdr; another-session/outside-Herdr attach replaces this cockpit. Run `aihead tui` to return.*
 
 ### 4. Workspace Tree (`WorkspaceBrowser`)
 Interactive full-width tree displaying live Herdr sessions, workspaces, and panes:
