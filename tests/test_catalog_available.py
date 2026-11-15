@@ -1,4 +1,4 @@
-"""Tests for `herdm catalog available` command."""
+"""Tests for `aihead catalog available` command (legacy `herdm catalog available` remains a supported alias)."""
 
 import json
 from pathlib import Path

@@ -1,5 +1,6 @@
 The plan below is the build contract for turning the current stub (`herdm` init/status/tui printouts, partial models, IHCP envelope) into the Ergo cockpit. It is bound to Herdr **0.9.5 / Protocol 22 / schema_version 1** as shipped on this machine, and to the Ergo `--herdr` role contract in `/home/pank/projects/dotfiles/ergo/SKILL.md`.
 
+> **Historical document.** This plan was written while the CLI entry point was still `herdm`. References to `herdm` below describe that era's contract and are intentionally left unedited; today's entry point is `aihead`, with `herdm` kept as a deprecated backwards-compatible alias.
 # Herdr-Master Implementation Plan
 
 ## 0. Current baseline and non-negotiables

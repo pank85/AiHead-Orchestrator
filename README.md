@@ -110,7 +110,7 @@ When working inside a Herdr workspace, the plugin registers 6 actions accessible
 
 | Action ID | Title | Execution Command | Behavior |
 | :--- | :--- | :--- | :--- |
-| **`head`** | **AiHead** | `herdm head` (or `aihead`) | Launches an interactive AiHead session in a new tab. |
+| **`head`** | **AiHead** | `aihead` (or legacy `herdm head`) | Launches an interactive AiHead session in a new tab. |
 | **`master`** | **New Master** | `aihead --herdr-master` | Spawns a root Herdr-Master multi-job orchestrator in a new tab. |
 | **`ergo`** | **New Ergo** | `python3 src/herdr_master/menu.py ergo` | Prompts for an objective, attaches project config, and starts Ergo. |
 | **`orchestration`** | **Orchestrate** | `python3 src/herdr_master/menu.py orchestration` | Prompts for an objective, attaches project config, and starts Orchestration. |
