@@ -49,7 +49,7 @@ Upon receiving an objective, problem statement, or feature request, AiHead immed
 | Execution Path | Scope & Complexity | Execution Model | Sandboxing & Roles |
 | :--- | :--- | :--- | :--- |
 | **1. Simple Direct Agent** | Atomic mechanical change in 1 file (no design, no new behavior, no architectural risk). | 1 new Herdr workspace (`herdr workspace create ... --no-focus`). Optional background review pane. | Single worker pane adopting resolved worker binding from catalog. Sub-jobs stay in that workspace. |
-| **2. `/orchestration`** | Fast, cohesive, self-contained tasks within a single agent ecosystem (`agy`, `pi`, `claude`, `opencode`, `hermes`). | Native host subagents (100% Herdr-free). | Scout → Architect → Parallel Coders → Blind Reviewer. Worktree branch `orchestration/<run-id>`. |
+| **2. `/orchestration`** | Fast, cohesive, self-contained tasks within a single agent ecosystem (`agy`, `pi`, `claude`, `opencode`, `hermes`, `codex`, `kilo`). Ecosystem membership does not imply native adapter availability; `/orchestration` requires a host-native subagent tool and fails closed when absent. | Native host subagents (100% Herdr-free). | Scout → Architect → Parallel Coders → Blind Reviewer. Worktree branch `orchestration/<run-id>`. |
 | **3. `/ergo`** | Substantial feature work requiring best-of-breed models across different harnesses, strict isolation, and adversarial review. | Phased cross-harness Herdr pipeline (or explicit `--native`). | Scout → Architect → Parallel Specialist Coders → Reviewer loop. Worktree branch `ergo/<run-id>`. |
 | **4. `/council`** | Complex, ambiguous, or high-stakes architectural planning requiring multi-agent consensus before code is written. | Multi-member deliberation coordinated by `aihead council-state`. | Impartial Coordinator + Scout + $\ge$2 Council Members. Max 5 cycles. Produces `RUN_DIR/final_plan.md` only (no code/commits). |
 | **5. `/herdr-master`** | Multi-job coordination managing concurrent workstreams across parallel isolated worktrees. | Root multi-job orchestrator with async watchers. | Workspace-per-job delegation, native async watchers (`herdr agent wait`), serial squash-merge into `develop`. |
@@ -73,6 +73,8 @@ The allowlist distinguishes between `herdr` cross-harness mode and `native` suba
 agy = ["gemini-3.8-flash-medium", "gemini-3.8-pro"]
 pi = ["anthropic/claude-3-7-sonnet", "xai/grok-4.7"]
 opencode = ["opencode/beam-free", "openai/gpt-6.1-sol"]
+codex = ["gpt-6.1-sol"]
+kilo = ["opencode/gpt-6.1-terra"]
 
 [models.available.native]
 agy = ["flash", "pro"]
@@ -81,6 +83,7 @@ pi = ["anthropic/claude-3-7-sonnet", "xai/grok-4.7"]
 
 - If `[models.available]` is absent, model selection is unrestricted.
 - If a harness table is present, only explicitly listed models are available.
+- Illustrative `codex` and `kilo` entries under `[models.available.herdr]` are conditional on active catalog support in the runtime environment; they are not supported in `[models.available.native]` as they lack host-native subagent adapters.
 - Inspect current allowlists via `aihead catalog available [--project <path>] [--json]`.
 
 ### Squad Composition Transports
@@ -242,12 +245,29 @@ aihead [MODE_FLAG] [OPTIONS]
 - `--automode / --no-automode`: Launch-time override of `ai_head.automode` config in `.herdr-master.toml`.
 - `--config <path>`: Path to custom `.herdr-master.toml`.
 - `--cwd`, `--folder`, `-C <path>`: Initial working directory.
-- `--harness <str>`: Coordinator harness (`agy`, `pi`, `claude`, `opencode`, `hermes`).
+- `--harness <str>`: Coordinator harness (`agy`, `pi`, `claude`, `opencode`, `hermes`, `codex`, `kilo`). Subject to active runtime catalog support.
 - `--model <str>`: Coordinator model override.
-- `--effort <str>`: Reasoning effort (`low`, `medium`, `high`, `max`).
+- `--effort <str>`: Reasoning effort (`low`, `medium`, `high`, `max`). Harness-dependent: supported where the underlying harness exposes reasoning/thinking flags (e.g. Pi, Agy, Hermes); not supported as an interactive flag for Codex or Kilo.
 - `--attach / --no-attach`: Attach to Herdr session (default: `True`; automated scripts use `--no-attach`).
 - `--workspace`, `-w <str>`: Target Herdr workspace label or ID.
 - `--session <str>`: Target Herdr session name.
 - `--split / --no-split`: Split active Herdr screen so AiHead is primary.
 - `--secondary`: Enforce screen split with active pane becoming secondary.
 - `--skip-permissions / --no-skip-permissions`: Override tool prompt confirmation bypass (`--yolo` in Hermes / `--dangerously-skip-permissions` in agy).
+
+### Launcher Examples
+
+Launch an interactive AiHead coordinator session in a new Herdr pane with explicit harness and model:
+
+```bash
+# Codex coordinator example (conditional on active catalog support; no effort flag)
+aihead --task "<task>" --harness codex --model gpt-6.1-sol
+
+# Kilo coordinator example (conditional on active catalog support; no effort flag)
+aihead --task "<task>" --harness kilo --model opencode/gpt-6.1-terra
+```
+
+*Notes on Codex & Kilo launcher usage:*
+- **Catalog Preflight**: Codex and Kilo routing requires active catalog support in the environment. If the active catalog lacks integration for either harness, stop and report rather than attempting an unverified launch.
+- **Herdr vs. Native**: These launcher commands dispatch into Herdr panes. Neither harness provides a native subagent adapter for `/orchestration` (which fails closed).
+- **Flag Verification**: Neither harness accepts a generic interactive `--effort` flag. For Kilo, automated permission approval may be passed via `--auto`, but users must be aware that `--auto` bypasses interactive tool confirmation prompts and should only be used when permitted by project approval policy.

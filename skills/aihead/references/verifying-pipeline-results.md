@@ -17,7 +17,7 @@ git status --porcelain                      # only the run/report dir may be unt
 git log --oneline -3                        # confirm the squash commit actually landed
 env -u PYTHONPATH -u HERDR_PANE_ID -u HERDR_PARENT_PANE_ID \
     -u HERDR_WORKSPACE_ID -u HERDR_TAB_ID -u HERDR_SOCKET_PATH \
-    uv run --extra dev pytest -q --tb=short
+    /home/pank/projects/AiHead-Cockpit/.venv/bin/python3 -m pytest -q --tb=short
 ```
 
 Quote the summary line verbatim in your report (`3 failed, 646 passed, 1 skipped in
@@ -33,13 +33,16 @@ disposable worktree. Same failures at baseline ⇒ pre-existing, not a regressio
 ```bash
 git worktree add --detach /tmp/baseline-check <pre-change-sha>
 cd /tmp/baseline-check
-env -u PYTHONPATH uv run --extra dev pytest \
-  tests/path::test_name -q --tb=line        # compare error text AND line numbers
+env -u PYTHONPATH /home/pank/projects/AiHead-Cockpit/.venv/bin/python3 -m pytest \
+    tests/path::test_name -q --tb=line        # compare error text AND line numbers
 cd - && git worktree remove --force /tmp/baseline-check
 ```
 
 Compare the failure text and the source line numbers, not just the names — a matching
 diff on both proves the cause predates the change. Never leave the probe worktree behind.
+
+> [!NOTE]
+> **Import provenance caveat**: When using a shared editable virtualenv interpreter (such as `/home/pank/projects/AiHead-Cockpit/.venv/bin/python3`), verify that the test runner actually imports package code from the baseline worktree rather than the canonical repository checkout, or the comparison will not reflect genuine baseline behavior.
 
 ## 3. Environment experiment — change ONE variable
 
@@ -50,7 +53,7 @@ test with the single suspect variable changed. The classic: an assertion of
 `TMPDIR=/tmp`. The result tells you which of the two you are looking at:
 
 ```bash
-TMPDIR=/tmp env -u PYTHONPATH uv run --extra dev pytest tests/path::test_name -q --tb=line
+TMPDIR=/tmp env -u PYTHONPATH /home/pank/projects/AiHead-Cockpit/.venv/bin/python3 -m pytest tests/path::test_name -q --tb=line
 ```
 
 Rule: report the cause (`environment: TMPDIR under $HOME`), not merely "still failing".

@@ -1,7 +1,7 @@
 # Coordinator bindings — resolution order, code paths, verification
 
 Depth behind the "Coordinator bindings" section of SKILL.md. Applies to the
-`herdr-master` / AiHead-Orchestrator codebase that provides `aihead` and `herdm`.
+`herdr-master` / AiHead-Orchestrator codebase that provides `aihead`.
 
 ## Where the code lives
 
@@ -18,12 +18,12 @@ If the printed path is the project's `src/herdr_master`, the repo is the live so
 
 ## Resolution order (highest wins)
 
-1. Inline CLI override — `--coordinator <harness:model[:effort]>` (`herdm ergo`),
+1. Inline CLI override — `--coordinator <harness:model[:effort]>` (`aihead ergo`),
    `--models/--scout/--architect/--workers/--reviewer` for squad roles.
 2. Run snapshot — `--run-squad <path>` (pinned bindings for one run).
 3. Project `.herdr-master.toml` — found by searching upward from the cwd, so the
    file that governs a launch depends on where the command runs.
-4. Product catalog defaults (`herdm catalog squad --json` / the catalog's own binding).
+4. Product catalog defaults (`aihead catalog squad --json` / the catalog's own binding).
 
 Never maintain a hand-written fallback table; query the catalog.
 
@@ -34,15 +34,33 @@ Never maintain a hand-written fallback table; query the catalog.
 | Ergo pane host binding | `pipeline/launcher.py` → `launch_ergo()`; host = coordinator binding, fallback `squad.scout` |
 | Coordinator normalization | `pipeline/launcher.py` → `resolve_coordinator_binding()` (raises rather than inventing a model for a harness with no product binding) |
 | Master coordinator | `pipeline/launcher.py` → `resolve_master_binding()` (config `[master_coordinator]`) |
-| CLI entry points | `cli/main.py` → `run_ergo()` (`herdm ergo`) and `_launch_skill()` (`aihead --ergo` delegation) |
+| CLI entry points | `cli/main.py` → `run_ergo()` (`aihead ergo`) and `_launch_skill()` (`aihead --ergo` delegation) |
 | Per-skill wizard | `cli/aihead_setup.py` → `run_skill_setup()` (prompts per skill, validates, saves once) and `run_aihead_setup()` (squad roles only) |
 | Config models | `core/config.py` → `HerdrMasterConfig`, `CouncilConfig`, `AiHeadConfig`, `master_coordinator` |
 
-`HarnessBinding` values are written either as a slug string
-(`coordinator = "pi:openai/gpt-6.1-sol:high"`) or as a table. String form needs a
+`HarnessBinding` values are written either as a slug string or as a table. String form needs a
 `model_validator(mode="before")` on the section model that calls
 `HarnessBinding.from_slug(...)`, mirroring `CouncilConfig._coerce_fields`; without it the
 plain TOML string fails validation.
+
+Example binding string alternatives (configured separately; do not duplicate keys within a single TOML section):
+
+```toml
+# Pi coordinator with explicit provider, model, and reasoning effort
+coordinator = "pi:openai/gpt-6.1-sol:high"
+```
+
+```toml
+# Codex coordinator (conditional on active catalog/allowlist support; no effort flag)
+coordinator = "codex:gpt-6.1-sol"
+```
+
+```toml
+# Kilo coordinator (conditional on active catalog/allowlist support; no effort flag)
+coordinator = "kilo:opencode/gpt-6.1-terra"
+```
+
+*Note on Codex and Kilo bindings:* `codex` and `kilo` entries are conditional on active catalog and allowlist support in the runtime environment. Neither harness defines an invented default model, interactive effort flag, native adapter, or installed-skill path.
 
 Keep `HerdrMasterConfig` additions `Optional` so an unset section is dropped by
 `save_project_config()`'s `model_dump(exclude_none=True)` instead of writing an empty table.
