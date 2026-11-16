@@ -2,7 +2,7 @@
 
 Binding grammar:
   binding := kind ":" model_ref [ ":" effort ]
-  kind    := agy | pi | claude | opencode | codex | gemini
+  kind    := agy | pi | claude | opencode | codex | gemini | hermes | kilo
   effort  := low | medium | high | max | xhigh   # xhigh aliases to max in storage
   model_ref contains slashes, dots, dashes; no colon
 """

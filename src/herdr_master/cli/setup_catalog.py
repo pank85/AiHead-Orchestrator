@@ -52,6 +52,12 @@ _GEMINI_FALLBACK_MODELS: tuple[str, ...] = (
     "gemini-2.5-flash",
 )
 
+_KILO_FALLBACK_MODELS: tuple[str, ...] = (
+    "kilo/~anthropic/claude-sonnet-latest",
+    "kilo/~openai/gpt-sol-latest",
+    "kilo/~deepseek/deepseek-v4-flash-latest",
+)
+
 
 @dataclass(frozen=True)
 class ChoiceOption:
@@ -62,14 +68,22 @@ class ChoiceOption:
     detail: str = ""
 
 
-def _parse_opencode_models(stdout: str) -> List[ChoiceOption]:
+def _parse_line_models(stdout: str, detail: str) -> List[ChoiceOption]:
     options: List[ChoiceOption] = []
     for raw in stdout.splitlines():
         slug = raw.strip()
         if not slug:
             continue
-        options.append(ChoiceOption(value=slug, label=slug, detail="opencode live"))
+        options.append(ChoiceOption(value=slug, label=slug, detail=detail))
     return options
+
+
+def _parse_opencode_models(stdout: str) -> List[ChoiceOption]:
+    return _parse_line_models(stdout, "opencode live")
+
+
+def _parse_kilo_models(stdout: str) -> List[ChoiceOption]:
+    return _parse_line_models(stdout, "kilo live")
 
 
 def _parse_pi_models(stdout: str) -> List[ChoiceOption]:
@@ -210,6 +224,8 @@ def _catalog_herdr_models() -> Dict[str, List[ChoiceOption]]:
         add("codex", model, "codex catalog fallback")
     for model in _GEMINI_FALLBACK_MODELS:
         add("gemini", model, "gemini catalog fallback")
+    for model in _KILO_FALLBACK_MODELS:
+        add("kilo", model, "kilo catalog fallback")
 
     return by_kind
 
@@ -390,14 +406,16 @@ def discover_model_catalog(
 
     live_results: Dict[str, List[ChoiceOption]] = {}
     if probe_live:
-        with ThreadPoolExecutor(max_workers=3) as pool:
+        with ThreadPoolExecutor(max_workers=4) as pool:
             fut_oc = pool.submit(_run_probe, ["opencode", "models"])
             fut_pi = pool.submit(_run_probe, ["pi", "--list-models"])
             fut_agy = pool.submit(_run_probe, ["agy", "models"])
+            fut_kilo = pool.submit(_run_probe, ["kilo", "models"])
 
             oc_out = fut_oc.result()
             pi_out = fut_pi.result()
             agy_out = fut_agy.result()
+            kilo_out = fut_kilo.result()
 
         if oc_out:
             live_results["opencode"] = _parse_opencode_models(oc_out)
@@ -405,6 +423,8 @@ def discover_model_catalog(
             live_results["pi"] = _parse_pi_models(pi_out)
         if agy_out:
             live_results["agy"] = _parse_agy_models(agy_out)
+        if kilo_out:
+            live_results["kilo"] = _parse_kilo_models(kilo_out)
         hermes_cfg = _probe_hermes_config_models()
         if hermes_cfg:
             live_results["hermes"] = hermes_cfg

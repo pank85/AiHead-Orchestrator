@@ -581,7 +581,10 @@ def run_aihead(
     harness: Optional[str] = typer.Option(
         None,
         "--harness",
-        help="Interactive harness override (agy, pi, claude, opencode, hermes).",
+        help=(
+            "Interactive harness override "
+            "(agy, pi, claude, opencode, codex, gemini, hermes, kilo)."
+        ),
     ),
     model: Optional[str] = typer.Option(
         None,
@@ -1628,7 +1631,10 @@ def launch_standalone_aihead(
     harness: Optional[str] = typer.Option(
         None,
         "--harness",
-        help="Interactive harness override (agy, pi, claude, opencode, hermes).",
+        help=(
+            "Interactive harness override "
+            "(agy, pi, claude, opencode, codex, gemini, hermes, kilo)."
+        ),
     ),
     model: Optional[str] = typer.Option(
         None,

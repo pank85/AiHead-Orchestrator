@@ -51,6 +51,7 @@ class HarnessKind(str, Enum):
     CODEX = "codex"
     GEMINI = "gemini"
     HERMES = "hermes"
+    KILO = "kilo"
 
 
 @dataclass(frozen=True)
@@ -341,6 +342,17 @@ def _build_specs() -> dict[str, HarnessSpec]:
             supports_native=False,
             default_model=None,
             herdr=_herdr(),
+            native=None,
+            install_targets=(),
+        ),
+        HarnessSpec(
+            kind="kilo",
+            label="Kilo",
+            summary="Kilo CLI. Effort is a prompt phrase, not a CLI flag.",
+            supports_herdr=True,
+            supports_native=False,
+            default_model=None,
+            herdr=_herdr(prompt_effort=True),
             native=None,
             install_targets=(),
         ),
@@ -662,6 +674,8 @@ def build_agent_args(
         args = ["--model", _require_model(kind, model)]
     elif kind == "opencode":
         args = ["mini", "--model", _normalize_opencode_model(model)]
+    elif kind == "kilo":
+        args = ["--model", _require_model(kind, model)]
     elif kind in {"codex", "gemini"}:
         args = _passthrough_args(kind, model, effort_key)
     else:
@@ -952,7 +966,7 @@ def _allowed_efforts(kind: str, model: str, *, mode: str) -> list[str]:
         return list(_VALID_EFFORTS)
     if kind_key in {"pi", "hermes"}:
         return list(_VALID_EFFORTS)
-    if kind_key in {"claude", "opencode"}:
+    if kind_key in {"claude", "opencode", "kilo"}:
         return list(_VALID_EFFORTS)
     return []
 
@@ -1016,7 +1030,7 @@ def worker_route_note(
             "(think / think hard / think harder / ultrathink); "
             f"route: --model {model} --dangerously-skip-permissions"
         )
-    if kind_key == "opencode":
+    if kind_key in {"opencode", "kilo"}:
         return (
             "per-task efforts: low, medium, high, max via prompt prefix "
             "(think / think hard / think harder / ultrathink); "
