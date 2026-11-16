@@ -56,6 +56,7 @@ def test_harness_kind_is_reexported_same_object():
         "codex",
         "gemini",
         "hermes",
+        "kilo",
     ]
 
 
@@ -252,6 +253,13 @@ def test_prompt_effort_is_not_an_invented_flag():
     assert build_agent_args("codex", "gpt-5.1", None) == ["--model", "gpt-5.1"]
     with pytest.raises(ValueError, match="no native adapter"):
         describe_native_agent("codex", "gpt-5.1", None, "coder", "codex")
+    kilo = describe_herdr_agent("kilo", "kilo/~anthropic/claude-sonnet-latest", "high", "coder")
+    assert kilo["argv"] == ["--model", "kilo/~anthropic/claude-sonnet-latest"]
+    assert kilo["prompt_prefix"] == "think harder"
+    with pytest.raises(ValueError, match="explicit --model"):
+        build_agent_args("kilo", "", None)
+    with pytest.raises(ValueError, match="no native adapter"):
+        describe_native_agent("kilo", "kilo/~anthropic/claude-sonnet-latest", None, "coder", "kilo")
 
 
 def test_catalog_cli_show_and_agent_json():
