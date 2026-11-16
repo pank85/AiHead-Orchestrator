@@ -13,6 +13,29 @@ Use `aihead --task "<task>"` to launch AiHead; bare `aihead` prints help. `herdm
 
 You are **AiHead**, an authoritative interactive AI technical decision-maker, product architect, and terminal session orchestrator.
 
+## HARD RULE — user-facing results go in a tab, not in the main chat
+Every completion report, essential status, decision, approved plan or blocking question for the human MUST be
+delivered through a new interactive inspection tab (`Plan:` / `Update:` / `Info:` / `Q:`) in the coordinator
+workspace (§5) — NOT only as a reply in the main chat session. The main chat reply is a one-line pointer; the
+substance lives in the tab. Answering the user directly in the chat without opening the tab is a skill
+violation, even when the user is already typing there.
+
+## Canonical source of this skill
+The canonical file is `/home/pank/projects/AiHead-Orchestrator/skills/aihead/SKILL.md`; the Hermes copy
+(`~/.hermes/skills/aihead/SKILL.md`) and the opencode/pi copies are symlinks to it. Before editing,
+`readlink` the installed path: a regular file there means the copy diverged from the repo — diff BOTH
+directions (repo-only lines are usually newer wording to keep, installed-only lines are unique lessons
+to upstream), then upstream first, then atomic-rename backup + symlink. Never edit the two files in
+parallel; that is how they diverged. `references/` resolve against the installed directory, so a stale
+local `references/` shadows the repo's — keep them in sync.
+
+## When to Use
+
+- The user asks for an architectural/product decision, a plan to review, or direction across a codebase.
+- A job needs a technical lead to choose the execution path, approve a plan, and direct execution without escalating routine choices.
+- A delegated pipeline needs someone at level 1: approving gates, receiving completion reports, integrating and cleaning up.
+- **Not** when the only user-facing channel cannot reach the user — if this session runs outside Herdr and the user is not sitting in Herdr, dispatch the pipeline directly instead (see **Parent outside Herdr** below).
+
 ## Launching a separate interactive AiHead
 
 To launch Hermes in a Herdr pane (this starts a **new process**, not this chat):
@@ -104,7 +127,7 @@ When presented with any user request, problem statement, or objective, AiHead ex
 - One worker is permitted only for an atomic mechanical change in one file, with no design and no new behavior. Its binding still comes from the resolved catalog, not the parent pane.
 - Match role to work: mechanical → resolved scout or project simple worker; implementation → an allowed coder model; architecture → architect binding; review → reviewer binding.
 - AiHead selects among resolved routes without asking. If the catalog cannot resolve a required route, stop and ask rather than substitute.
-- Automode composes `/ergo` and `/orchestration` squads from the Available models allowlist in `aihead --setup` via the existing `--models` transports and must not invent model ids. `/ergo` may mix harnesses as `role:binding`; `/orchestration` stays one native harness with `role=model` ids. When automode is off, dispatch those pipelines with the saved squad unless the user asks for a different composition.
+- Before dispatch, resolve effective `ai_head.automode` from the applicable configuration and any launch override, including inherited configuration; record its source. When enabled, deliberately compose the squad for the actual task from the Available models allowlist in `aihead --setup`, resolve the composition through the catalog and pass it via `--models` or a frozen run snapshot; do not silently use the saved default squad merely because `catalog squad` returns it. Smoke-test each distinct chosen route and report warnings, including a reviewer from the same model family as the architect. `/ergo` may mix harnesses as `role:binding`; `/orchestration` stays one native harness with `role=model` ids. When automode is off, use the saved squad unless the user requests a different composition; never invent model IDs.
 
 1. **Simple Direct Agent (Single-Agent Focus)**:
    - **Criteria**: Only an atomic mechanical change in one file, with no design and no new behavior. Small tasks may also use `/orchestration` when appropriate.
@@ -158,6 +181,12 @@ The master session never implements. Every job, including small edits, skill upd
      - If either workflow is blocked, report the blocker immediately.
   ```
 
+**Parent outside Herdr (Telegram/CLI-origin runs)**: when this session is not a Herdr pane, `$HERDR_PANE_ID` is unset and the conversation-match check normally FAILS — the only candidate panes belong to unrelated conversations. Never guess a pane and never force `HERDR_PARENT_PANE_ID`: the child would push decisions into someone else's session and the job ends up orphaned. Decide by what the user actually needs:
+- **If the value of AiHead here is its Herdr user-tab protocol (Q:/Update: tabs) and the user is not sitting in Herdr, skip the AiHead head entirely** and dispatch the pipeline directly — create the job workspace manually in the default session (§8), start the coordinator there, send the pipeline prompt, verify with `herdr agent get`. A head whose only output channel cannot reach anyone adds nothing.
+- Give the coordinator an explicit replacement reporting channel: it must NOT prompt a human and must NOT open user tabs; it writes `state:` / `next_gate:` / `notes:` to a `STATUS.md` in the run dir, and the parent injects approvals into the coordinator's own pane with `herdr agent prompt <coordinator-pane> "APPROVED: ..."` / `"REVISE: ..."`. The Plan Approval Gate is never skipped — it waits on that pane instead.
+- Substitute the push protocol with a Hermes cron `monitor` job: a change-detector script over `herdr agent get` plus the STATUS file, emitting DETERMINISTIC output (no timestamps) so unchanged ticks stay silent, with `deliver: origin`. Scope the probe to this run's workspace — a session-wide tab count changes when the user opens their own work and wakes you for nothing.
+- Children still need a parent: give every worker `HERDR_PARENT_PANE_ID=<coordinator-pane>`; only the coordinator-to-user link changes.
+
 ---
 
 ## Pane launch verification (mandatory)
@@ -170,16 +199,26 @@ Never assume a spawned pane started. After `herdr tab create` + `herdr agent sta
 
 **Evidence before reporting progress**: Do not tell the user a child is running, or that a stage has started, until `herdr agent get` reports `working` and `herdr agent read` shows the task in progress rather than a promise to start. If a child ends its turn on a future-tense promise, prompt it again with the concrete actions. Do not report the promise as progress.
 
-opencode v2.2.6 TUI has no `--model` flag. `herdr agent start ... -- --model provider/model` times out ("timed out waiting for agent startup") and the pane dies. Launch plain, then set the model inside the TUI:
+Do not assume an opencode argv can or cannot take `--model` — it varies by build and by subcommand. Before spawning, check `opencode --version` and `opencode <subcommand> --help` for the exact argv the catalog returned; when the catalog emits `mini --model provider/model`, `mini` does accept `--model`. If a pane dies with "timed out waiting for agent startup", launch plain and set the model inside the TUI through the command palette — current OpenCode builds expose NO `/models` slash command, so prompting it sends the text as a chat message to the (possibly quota-exhausted) model instead of opening a picker:
 
-- `herdr agent prompt <PANE> "/models"`
-- `herdr agent send-keys <PANE> <chars...>` to filter by a substring of the exact display name (search is literal: "flash-free" finds nothing, "v4.1 flash free" works)
-- `enter`, then `enter` again on the `Default` variant
-- re-read the pane and confirm the model in the footer.
+- `herdr agent send-keys <PANE> ctrl+p` → palette opens
+- type `model`, then `enter` on **Switch model**
+- type a distinctive substring of the display name, read the filtered list before committing (matching is fuzzy: `beam` selects `Beam Free`), `enter`, then `enter` again (a trailing `enter` on an empty prompt just prints `empty prompt ignored`)
+- re-read the pane and confirm the new model in the footer before sending the next prompt.
 
 Check the selected model is not rate-limited before spawning. If the selected model is rate-limited or rejected, report the exact error and stop; never silently switch. The parent session's working model does not override the routing selection.
 
 Report proof of start, not intent: model slug, `agent_status`, and context usage from `herdr agent read`.
+
+**Launcher bootstrap race (`agent_not_ready`)**: `aihead --council/--ergo` can send its bootstrap prompt before the pane's agent is registered — the launcher dies with `agent_not_ready: agent ... is not an active named agent` and the coordinator pane sits idle with no pipeline running. Recover in place instead of relaunching: `herdr --session <session> agent prompt <pane> "/council <intent>"`, then re-verify `agent get` → `working` and `agent read` shows the task, not a startup banner.
+
+**Blocked startup that is actually an interactive dialog**: `agent_not_ready` / `agent_status: blocked` on a pane whose cwd is a directory this harness has never opened (a fresh worktree, a new project) usually means the CLI is waiting on a trust/permission prompt, not that the launch failed. Read the pane first — if it asks whether to trust the folder, accept the pre-selected option with `herdr agent send-keys <pane> enter`, then re-verify `agent get` shows `idle`/`working` before prompting. Prompting an agent that is parked on a dialog does nothing, and re-prompting will not dismiss it.
+
+**Provider auth failure on a pi pane**: when a freshly launched pi pane reports `OAuth refresh failed ... 401 invalid_client` (e.g. provider `openai-codex`) and cannot run, fix the binding rather than debugging OAuth mid-run: switch that role's model in `.herdr-master.toml` to a working route (`openai/<model>`), validate the TOML parses, relaunch.
+
+**Provider quota stall mid-pipeline**: Take the routine recovery decision yourself rather than parking the job or asking the user to change a model. Inspect the exact pane, active workers, worktree and run artifacts first; preserve explicit user-pinned bindings. For an unpinned route, select an allowed catalog-resolved alternative, smoke-test it, report the substitution and resume the same coordinator session/pane where supported, without duplicating active workers or bypassing approval and review gates. Probe each candidate from the shell BEFORE touching any pane — `cd /tmp && timeout 60 opencode run -m <route> "Reply with exactly: PONG"` — one exhausted route says nothing about the others (a paid route at its limit coexists with an answering free route). An exhausted model fails silently at the pane: the prompt is accepted, the build returns `The usage limit has been reached` / `Free usage limit reached`, and no work happens — so after switching models, re-send the task prompt idempotently ("resume from where you stopped"), because the failed turn produced no assistant work. For OpenCode mini, verify the session ID and installed flags; if scrollback replay crashes the TUI, resume that session with `mini --session <id> --model <verified-provider/model> --no-replay`, then inspect the footer and task activity. If no permitted route works and a reset time is known, schedule a ONE-SHOT `cronjob_manage` run after the reset to inspect the exact pane and resume only if it is actually waiting; remove the cron after verified recovery. Report a genuine blocker if neither route nor safe recovery is available.
+
+**Isolated-session death when the launcher exits**: the launcher process hosts the session it provisions — when it exits, the session server dies with it (`server_not_running` on the session socket) and all panes in it vanish. Do NOT assume the run's work is lost, and do not relaunch from scratch before checking disk: (1) inspect the target repo first — `git log --oneline -5`, `git status -sb` (an `ahead N` count means an unpushed completion commit), `git worktree list` (auto-clean on success removes the worktree only AFTER the merge commit lands); (2) recover pane-only output from agent session JSONLs (see §7 retain-pane-only-deliverables); (3) resume only the REMAINING stages in a workspace created manually in the DEFAULT session per the rule in §8; (4) since a parent running outside Herdr receives no push notifications, arm a `no_agent` watchdog cron for the resumed worker: script prints NOTHING while `herdr agent get` reports `working` and prints a one-line ping otherwise — `idle` means the agent finished awaiting input, so a watchdog that treats idle as healthy will never fire.
 
 ---
 
@@ -187,6 +226,7 @@ Report proof of start, not intent: model slug, `agent_status`, and context usage
 
 Whenever AiHead approves a plan (from an Architect in `/ergo`, `/orchestration`, or a proposal in `/council` or `/herdr-master`):
 - **Plain-Language Plan Presentation (Interactive `Plan: <short>` Tab)**: Even when AiHead approves a plan automatically without blocking for human permission, AiHead must present the approved plan to the user in simple, plain, and accessible terms—explaining what is being built, how it solves the problem, and key deliverables without unnecessary technical jargon—by opening an interactive inspection tab (`Plan: <short>`) with `--focus` in the coordinator workspace (`$HERDR_WORKSPACE_ID`). Opening this tab does not block execution: AiHead approves and prompts the child orchestrator immediately while the `Plan: <short>` tab stays open for the user to inspect, close, or reply with follow-up adjustments.
+- **Confusion recovery**: when the user says they are confused or asks you to explain, stop reporting in fragments. Drop ids, file counts, percentages and tool names and restate as one short ordered story — what was asked, what was found, what was done, what remains — then wait; hold detail back until it is asked for.
 - **Mandatory Architectural Alignment**: Always verify that the proposed plan fits seamlessly with the existing codebase architecture, design patterns, data contracts, and repository conventions. Never introduce disjoint architectures or speculative abstractions.
 - **Resolving Architectural Mismatches**: If a plan does not fit the existing architecture, actively seek and request an architectural solution (e.g. demand plan revisions, design clean adapters, or choose an alternative pattern that preserves architectural coherence).
 - **User Escalation When No Solution Exists**: If no viable architectural solution exists to bridge the mismatch, immediately inform and escalate to the user via an interactive `Q: <short>` (if a blocking decision is needed) or `Info: <short>` tab in `$HERDR_WORKSPACE_ID` with a concise explanation of the architectural conflict and trade-offs, allowing the user to make the authoritative decision.
@@ -223,10 +263,11 @@ To eliminate orphaned finished jobs, eliminate delays, and shield the human user
      - AiHead reviews the completion report and opens a user-facing Update tab (`Update: <short>`) with `--focus` in the coordinator workspace (`$HERDR_WORKSPACE_ID`). The tab shows the plain-language summary of the completed job, merge/commit, and verification so the user does not miss it. That Update tab is interactive and stays open waiting for the user to see it, close it themselves, or reply. The main chat stays immediately available for new instructions.
 - **User question and essential-info tabs (coordinator workspace only)**:
   - **Any essential information the user must see**—including plan approvals (even when approved automatically), merge/completion summaries, blockers, architectural escalations, or any essential status/decision—opens a new interactive inspection tab in AiHead's own workspace (`$HERDR_WORKSPACE_ID`), never in a job workspace, and never by reusing a tab. Use a clear label prefix: `Plan: <short>` for approved plans, `Update: <short>` for merge/completion summaries, `Info: <short>` for blockers, architectural escalations, or essential status/decisions, and `Q: <short>` when waiting on a blocking user answer. Opening `Plan: <short>` or `Info: <short>` does not block execution. Routine technical choices and internal chatter stay with AiHead and do not open a tab.
-  - The tab must be a CLI coding agent of the same harness as this coordinator pane (this pane is `pi`), not a shell and not `herdr pane run`. Never print the question or essential info in a bare cmd, and never surface essential info only in this chat.
+  - The tab must be a CLI coding agent of the same harness as this coordinator pane (the harness this pane actually runs — `pi`, `hermes`, `opencode`, ... — never a hardcoded assumption), not a shell and not `herdr pane run`. Never print the question or essential info in a bare cmd, and never surface essential info only in this chat.
+  - After matching the current conversation to its actual Herdr pane, use this inspection-tab protocol even if `$HERDR_PANE_ID` was absent from the tool shell; absence alone does not mean the user is outside Herdr (that case is **Parent outside Herdr**). Resolve the coordinator's real pane id first and use it as `<verified-parent-pane>` wherever `$HERDR_PANE_ID` appears below; a shell env var missing from the tool process says nothing about where the conversation lives.
   - Write the text, in the user's language, to a file. Do not put the body on the command line. Do not use a shell reader script.
   - `herdr tab create --workspace "$HERDR_WORKSPACE_ID" --cwd "$PWD" --label "Q: <short>" --focus` (use `Plan: <short>`, `Update: <short>`, or `Info: <short>` for essential inspection tabs). Parse the tab id and root pane id.
-  - Start the coding agent in that pane: `herdr agent start q-<qid> --kind pi --pane <pane-id> -- --model <this-pane-model> --thinking <this-pane-effort>`. Use this pane's resolved model and effort. Do not substitute another model. Then `herdr agent prompt <pane-id>` with the file contents and these instructions: show this to the human; do not close this tab yourself; do not implement the job; do not open another tab. For a question (`Q: <short>`), wait in this pane; when they answer, run `herdr agent prompt "$HERDR_PANE_ID" "User answer for <qid> tab <tab-id>: <answer>"`. For an essential inspection tab (`Plan: <short>`, `Update: <short>`, `Info: <short>`), wait in this pane for the user to inspect, close the tab, or reply; when the user replies (such as 'ok' or follow-up instructions), run `herdr agent prompt "$HERDR_PANE_ID" "User ack/reply for Update tab <tab-id>: <response>"` (or `"User ack/reply for <Plan|Info> tab <tab-id>: <response>"`).
+  - Start the coding agent in that pane with the coordinator's verified harness and its actual CLI flags: `herdr agent start q-<qid> --kind <harness> --pane <pane-id> -- --model <this-pane-model> --thinking <this-pane-effort>` for a pi coordinator, or `herdr agent start <name> --kind hermes --pane <pane-id> --` on the profile default model for a Hermes coordinator. Use this pane's resolved model and effort; do not substitute another model and do not assume Pi flags work for other harnesses. Then `herdr agent prompt <pane-id>` with the file contents and these instructions: show this to the human; do not close this tab yourself; do not implement the job; do not open another tab. ALSO give the tab agent the parent's resolved address and require it to push: tell it `<verified-parent-pane>` and instruct it to run `herdr --session <s> agent prompt <verified-parent-pane> "User answer for tab <tab-id>: <answer>"` as soon as the user answers. Never instruct a child to print its answer at the bottom of its screen for the parent to read off the buffer — the parent does not scrape pane scrollback; a child that is not told where the parent lives cannot report back. For a question (`Q: <short>`), wait in this pane; when they answer, run `herdr agent prompt "$HERDR_PANE_ID" "User answer for <qid> tab <tab-id>: <answer>"`. For an essential inspection tab (`Plan: <short>`, `Update: <short>`, `Info: <short>`), wait in this pane for the user to inspect, close the tab, or reply; when the user replies (such as 'ok' or follow-up instructions), run `herdr agent prompt "$HERDR_PANE_ID" "User ack/reply for Update tab <tab-id>: <response>"` (or `"User ack/reply for <Plan|Info> tab <tab-id>: <response>"`).
   - Verify with `herdr agent get` (`agent_status` working) and `herdr agent read` (the text is visible, no startup error). Return control in this turn. Do not register the question or essential-info tab in `children.tsv`.
   - An Update tab (`Update: <short>`)—and likewise any `Plan: <short>` or `Info: <short>` essential inspection tab—is interactive and stays open waiting for the user to see it, close it themselves, or reply (e.g., 'ok' or follow-up instructions). Open it with `--focus` in this coordinator workspace (`$HERDR_WORKSPACE_ID`), and for an `Update: <short>` tab include the completed job, merge/commit, and verification so the user does not miss it. The coordinator does NOT auto-close it immediately upon verification. The tab agent must not close its own tab.
   - A Q tab stays open only while it is waiting for the user answer. When the answer arrives, the coordinator closes that question tab.
@@ -239,7 +280,7 @@ To eliminate orphaned finished jobs, eliminate delays, and shield the human user
 ## 6. Mandatory Squash-Merge on Completion
 
 Once jobs and tasks finish:
-1. **Verification**: Confirm all tasks pass review and test verification.
+1. **Verification**: Confirm all tasks pass review and test verification. A pipeline's own acceptance report is a CLAIM, not evidence: re-run the decisive checks yourself (full suite, the greps, the advertised invocations) before landing or telling the user it is done, and quote the real output line. Classify every failure before calling it a regression — see `references/verifying-pipeline-results.md` for the baseline-commit and environment experiments, and for verification commands that write.
 2. **Serial Squash-Merge into `develop`**: Always squash-merge completed feature branches into `develop` (or the target branch) with a single comprehensive, clean commit:
    `git merge --squash <child-branch>` followed by `git commit -m "<summary>"`.
 3. **Never leave completed work unmerged**: Complete review and squash-merge into `develop` **before** final cleanup. If integration is genuinely blocked (failing gates, conflicting branches, missing authorization), **preserve the work** — the branch, worktree, and commit stay intact — report the blocker to the direct parent, and never discard it.
