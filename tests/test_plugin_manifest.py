@@ -123,7 +123,7 @@ def test_manifest_metadata():
     manifest = _load_manifest()
     assert manifest["id"] == "pank85.aihead-cockpit"
     assert manifest["name"] == "AiHead"
-    assert manifest["version"] == "0.1.0"
+    assert manifest["version"] == "0.2.0"
     assert manifest["min_herdr_version"] == "0.9.5"
     assert manifest["description"] == "AiHead orchestration actions for Herdr workspaces"
     assert manifest["platforms"] == ["linux", "macos"]
