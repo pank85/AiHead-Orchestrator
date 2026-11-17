@@ -438,8 +438,8 @@ async def _allocate_launch_target(
         parent_pane_id
         if parent_pane_id is not None
         else (
-            getattr(ctx, "pane_id", None)
-            or os.environ.get("HERDR_PANE_ID")
+            os.environ.get("HERDR_PANE_ID")
+            or getattr(ctx, "pane_id", None)
             or (os.environ.get("HERDR_PARENT_PANE_ID") if getattr(ctx, "is_inside_herdr", False) else None)
         )
     )

@@ -95,6 +95,30 @@ def test_herdm_ergo_warns_and_runs():
 
 
 @pytest.mark.asyncio
+@pytest.mark.parametrize("fresh_workspace", [True, False])
+async def test_delegated_launch_prefers_runtime_caller_over_stale_context(
+    monkeypatch, fresh_workspace
+):
+    monkeypatch.setenv("HERDR_PANE_ID", "caller:p1")
+    monkeypatch.setenv("HERDR_PARENT_PANE_ID", "ancestor:p1")
+    client = AsyncMock()
+    client.create_workspace.return_value = {"workspace": {"workspace_id": "new"}}
+    client.create_tab.return_value = {
+        "root_pane": {"pane_id": "new:p1"}, "tab": {"tab_id": "new:t1"}
+    }
+    ctx = HerdrContext(is_inside_herdr=True, session_name="default", socket_path=Path("/tmp/a"),
+                       workspace_id="caller", pane_id="stale:p1")
+    allocated = await _allocate_launch_target(
+        client, ctx, session=None, isolated_name="ergo", tab_label="ergo", workspace_label="ergo",
+        cwd="/tmp", fresh_workspace=fresh_workspace, focus=False, delegated=True,
+        parent_pane_id=None,
+    )
+    assert allocated.parent_pane_id == "caller:p1"
+    assert client.create_tab.await_args.kwargs["env"] == {"HERDR_PARENT_PANE_ID": "caller:p1"}
+    client.get_snapshot.assert_not_awaited()
+
+
+@pytest.mark.asyncio
 async def test_delegation_creates_background_workspace_and_forwards_parent(monkeypatch):
     monkeypatch.setenv("HERDR_PANE_ID", "caller:p1")
     client = AsyncMock()
