@@ -144,9 +144,7 @@ def test_aihead_defaults_setup_keeps_launch_validation(tmp_path: Path, extra):
 def test_defaults_writes_expected_role_models(tmp_path: Path):
     cfg = tmp_path / ".herdr-master.toml"
     with patch("herdr_master.cli.aihead_setup.run_setup_tui") as tui_mock:
-        result = runner.invoke(
-            app, ["aihead-setup", "--defaults", "--yes", "--config", str(cfg)]
-        )
+        result = runner.invoke(app, ["aihead-setup", "--defaults", "--yes", "--config", str(cfg)])
     assert result.exit_code == 0, result.output
     tui_mock.assert_not_called()
 
@@ -196,9 +194,7 @@ label = "ai-head"
     )
 
     with patch("herdr_master.cli.aihead_setup.run_setup_tui") as tui_mock:
-        result = runner.invoke(
-            app, ["--aihead-setup", "--defaults", "--yes", "--config", str(cfg)]
-        )
+        result = runner.invoke(app, ["--aihead-setup", "--defaults", "--yes", "--config", str(cfg)])
     assert result.exit_code == 0, result.output
     tui_mock.assert_not_called()
 
@@ -233,14 +229,9 @@ label = "ai-head"
 
 def test_root_flag_runs_the_same_wizard(tmp_path: Path):
     cfg = tmp_path / ".herdr-master.toml"
-    result = runner.invoke(
-        app, ["--aihead-setup", "--defaults", "--yes", "--config", str(cfg)]
-    )
+    result = runner.invoke(app, ["--aihead-setup", "--defaults", "--yes", "--config", str(cfg)])
     assert result.exit_code == 0, result.output
-    assert (
-        _load(cfg)["models"]["default_squad"]["scout"]
-        == "opencode:opencode/beam-free:medium"
-    )
+    assert _load(cfg)["models"]["default_squad"]["scout"] == "opencode:opencode/beam-free:medium"
 
 
 def test_bare_invocation_and_aihead_help_exit_zero():
@@ -328,14 +319,28 @@ def test_tui_driven_without_terminal_reaches_save_functions_via_herdm_aihead_set
     # Add a worker from Ergo, then press 's' to save once.
     keys = [
         "1",
-        "ENTER", *"pi", "ENTER",
-        "DOWN", "ENTER", *"xai/grok-4.7", "ENTER",
-        "DOWN", "ENTER", *"high", "ENTER",
-        "DOWN", "SPACE",  # Enabled -> true
+        "ENTER",
+        *"pi",
+        "ENTER",
+        "DOWN",
+        "ENTER",
+        *"xai/grok-4.7",
+        "ENTER",
+        "DOWN",
+        "ENTER",
+        *"high",
+        "ENTER",
+        "DOWN",
+        "SPACE",  # Enabled -> true
         "2",
         "DOWN",  # skip Coordinator mode -> Scout Harness
-        "ENTER", *"agy", "ENTER",
-        "DOWN", "ENTER", *"gemini-3.8-flash-low", "ENTER",
+        "ENTER",
+        *"agy",
+        "ENTER",
+        "DOWN",
+        "ENTER",
+        *"gemini-3.8-flash-low",
+        "ENTER",
         "a",  # add worker inside Ergo
         "s",  # save once
     ]
@@ -405,17 +410,36 @@ custom = "keep-opencode"
     keys = [
         # Section 3 (orchestration): switch native harness to opencode
         "3",
-        "ENTER", *"opencode", "ENTER",
+        "ENTER",
+        *"opencode",
+        "ENTER",
         # Section 4 (council): set coordinator to pi:xai/grok-4.7:high
         "4",
-        "ENTER", *"pi", "ENTER",
-        "DOWN", "ENTER", *"xai/grok-4.7", "ENTER",
-        "DOWN", "ENTER", *"high", "ENTER",
+        "ENTER",
+        *"pi",
+        "ENTER",
+        "DOWN",
+        "ENTER",
+        *"xai/grok-4.7",
+        "ENTER",
+        "DOWN",
+        "ENTER",
+        *"high",
+        "ENTER",
         # Section 5 (herdr-master): set custom coordinator pi:xai/grok-4.7:max
         "5",
-        "DOWN", "ENTER", *"pi", "ENTER",
-        "DOWN", "ENTER", *"xai/grok-4.7", "ENTER",
-        "DOWN", "ENTER", *"max", "ENTER",
+        "DOWN",
+        "ENTER",
+        *"pi",
+        "ENTER",
+        "DOWN",
+        "ENTER",
+        *"xai/grok-4.7",
+        "ENTER",
+        "DOWN",
+        "ENTER",
+        *"max",
+        "ENTER",
         # Save once
         "s",
     ]
@@ -591,10 +615,21 @@ def test_ergo_custom_coordinator_writes_and_clears(tmp_path: Path):
     tui.drive(
         [
             "2",
-            "ENTER", "DOWN", "ENTER",  # Coordinator -> Custom
-            "DOWN", "ENTER", *"pi", "ENTER",
-            "DOWN", "ENTER", *"xai/grok-4.7", "ENTER",
-            "DOWN", "ENTER", *"high", "ENTER",
+            "ENTER",
+            "DOWN",
+            "ENTER",  # Coordinator -> Custom
+            "DOWN",
+            "ENTER",
+            *"pi",
+            "ENTER",
+            "DOWN",
+            "ENTER",
+            *"xai/grok-4.7",
+            "ENTER",
+            "DOWN",
+            "ENTER",
+            *"high",
+            "ENTER",
             "s",
         ]
     )
@@ -676,7 +711,8 @@ def test_available_section_toggle_all_disables_and_enables(tmp_path: Path):
     discovered = [opt.value for opt in catalog.models("agy", mode="herdr", current=None)]
     assert len(discovered) >= 2
 
-    # Navigate to section 6, press ["DOWN", "DOWN"] to land cursor on "All" (available.all). Current value is True.
+    # Navigate to section 6 and press ["DOWN", "DOWN"] to select "All" (available.all).
+    # Its current value is True.
     tui.drive(["6", "DOWN", "DOWN"])
     assert tui.current_section == "models"
     rows = tui._current_rows()
@@ -689,7 +725,7 @@ def test_available_section_toggle_all_disables_and_enables(tmp_path: Path):
     tui.drive(["SPACE"])
     assert "Updated available.all" in tui.status_message
 
-    # Verify all individual model rows in _current_rows() now have current_value is False and value_text == "false".
+    # Verify model rows now have current_value is False and value_text == "false".
     rows = tui._current_rows()
     assert rows[2].current_value is False
     assert rows[2].value_text == "false"
@@ -758,7 +794,7 @@ def test_available_section_individual_toggle_syncs_all_state(tmp_path: Path):
     assert rows[3].key == "available.toggle.0"
     assert rows[3].current_value is True
 
-    # When all models are enabled, disabling one model turns "All" row value_text and current_value to False.
+    # Disabling one model changes the "All" row value_text and current_value to False.
     tui.drive(["SPACE"])
     rows = tui._current_rows()
     assert rows[3].current_value is False
@@ -841,9 +877,7 @@ def test_allowlist_hides_disabled_models_and_keeps_current(tmp_path: Path):
         return original_models(kind, mode=mode, current=current)
 
     tui.catalog.models = _models
-    filtered_claude, hint = tui._filtered_model_options(
-        "claude", mode="herdr", current="sonnet"
-    )
+    filtered_claude, hint = tui._filtered_model_options("claude", mode="herdr", current="sonnet")
     assert filtered_claude == [*sentinel, ADD_CUSTOM_OPTION]
     assert hint == ""
     tui.catalog.models = original_models
@@ -1021,9 +1055,7 @@ def test_encoded_agy_effort_row_is_hidden_and_not_persisted(tmp_path: Path, monk
         "herdr_master.cli.setup_tui._allowed_efforts",
         lambda kind, model, mode="herdr": [] if kind == "agy" else ["low", "medium", "high", "max"],
     )
-    encoded = HarnessBinding(
-        kind=HarnessKind.AGY, model="custom-agy-model", effort=EffortLevel.LOW
-    )
+    encoded = HarnessBinding(kind=HarnessKind.AGY, model="custom-agy-model", effort=EffortLevel.LOW)
     assert _herdr_effort_separate("agy", "custom-agy-model") is False
     hidden = tui._binding_rows("agy", "agy", encoded)
     assert all(not row.key.endswith(".effort") for row in hidden)
@@ -1047,6 +1079,12 @@ def test_live_model_parsers_and_catalog_modes():
     )
     pi_opts = _parse_pi_models(pi_out)
     assert [o.value for o in pi_opts] == ["deepseek/deepseek-flash", "openai/gpt-4.1"]
+    assert _parse_pi_models("No models available. Use /login to authenticate.") == []
+
+    from herdr_master.cli.setup_catalog import _parse_kilo_models
+
+    kilo_opts = _parse_kilo_models("Fetching models...\nkilo/openai/gpt-6.1-sol\n")
+    assert [o.value for o in kilo_opts] == ["kilo/openai/gpt-6.1-sol"]
 
     agy_out = (
         "Fetching available models...\n"
@@ -1083,9 +1121,7 @@ def test_master_binding_uses_config_and_explicit_override(tmp_path):
     from herdr_master.pipeline.launcher import resolve_master_binding
 
     cfg = tmp_path / "config.toml"
-    cfg.write_text(
-        '[master_coordinator]\nkind = "pi"\nmodel = "xai/grok-4.7"\neffort = "high"\n'
-    )
+    cfg.write_text('[master_coordinator]\nkind = "pi"\nmodel = "xai/grok-4.7"\neffort = "high"\n')
     assert resolve_master_binding(config_path=cfg)[1] == "xai/grok-4.7"
     assert resolve_master_binding(model="xai/grok-4.8", config_path=cfg)[1] == "xai/grok-4.8"
 

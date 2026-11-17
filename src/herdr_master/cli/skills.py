@@ -8,10 +8,10 @@ from pathlib import Path
 from typing import Dict, List, NamedTuple
 
 import typer
-from ruamel.yaml import YAML
-from ruamel.yaml.error import YAMLError
 from rich.console import Console
 from rich.table import Table
+from ruamel.yaml import YAML
+from ruamel.yaml.error import YAMLError
 
 from herdr_master.core.catalog import CANONICAL_SKILLS, HarnessKind, get_harness
 from herdr_master.core.skill_resources import SkillResourceError, get_skill_source
@@ -52,9 +52,7 @@ def get_skill_targets(home: Path | None = None) -> Dict[str, List[TargetLocation
         for kind in HarnessKind:
             spec = get_harness(kind.value)
             for target in spec.install_targets:
-                resolved_path = Path(
-                    target.path_template.format(home=str(base_home), skill=skill)
-                )
+                resolved_path = Path(target.path_template.format(home=str(base_home), skill=skill))
                 locs.append(
                     TargetLocation(
                         harness=f"{spec.label} ({spec.kind})",
@@ -146,8 +144,12 @@ def _hermes_collision(root: Path, target: Path, name: str) -> Path | None:
             if base.name == name:
                 return path
             # Previously installed canonical files are known inputs.
-            if (path.is_symlink() and base.parent == root and base.name in CANONICAL_SKILLS
-                    and path.resolve() == get_skill_source(base.name).resolve()):
+            if (
+                path.is_symlink()
+                and base.parent == root
+                and base.name in CANONICAL_SKILLS
+                and path.resolve() == get_skill_source(base.name).resolve()
+            ):
                 continue
             if _hermes_frontmatter_name(path) == name:
                 return path
@@ -160,7 +162,8 @@ def install_skills(
         True,
         "--force/--no-force",
         "-f",
-        help="Overwrite existing non-Hermes files or links; Hermes unowned targets are always protected",
+        help="Overwrite existing non-Hermes files or links; Hermes unowned targets are always "
+        "protected",
     ),
 ) -> None:
     """Install and symlink standalone skills and commands across all supported harnesses."""
@@ -190,19 +193,28 @@ def install_skills(
                     root = target.path.parent.parent
                     collision = _hermes_collision(root, target.path, skill_name)
                     if collision:
-                        console.print(f"[red]Hermes skill collision for {skill_name}: {collision}[/red]")
+                        console.print(
+                            f"[red]Hermes skill collision for {skill_name}: {collision}[/red]"
+                        )
                         has_error = True
                         continue
-                    if target.path.is_symlink() and target.path.resolve() == canonical_file.resolve():
+                    if (
+                        target.path.is_symlink()
+                        and target.path.resolve() == canonical_file.resolve()
+                    ):
                         console.print(f"[dim]Already installed: {target.path}[/dim]")
                         installed_count += 1
                         continue
                     if target.path.is_symlink() or target.path.exists():
-                        console.print(f"[red]Refusing to overwrite unowned Hermes target {target.path}[/red]")
+                        console.print(
+                            f"[red]Refusing to overwrite unowned Hermes target {target.path}[/red]"
+                        )
                         has_error = True
                         continue
                     if target.path.parent.is_symlink():
-                        raise OSError(f"Refusing symlinked Hermes skill directory: {target.path.parent}")
+                        raise OSError(
+                            f"Refusing symlinked Hermes skill directory: {target.path.parent}"
+                        )
                     target.path.parent.mkdir(parents=True, exist_ok=True)
                     # Exclusive creation: never unlink a Hermes user's file, even with --force.
                     target.path.symlink_to(canonical_file)

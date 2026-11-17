@@ -9,7 +9,6 @@ AiHead / parent pane.
 
 from __future__ import annotations
 
-import asyncio
 from pathlib import Path
 from types import SimpleNamespace
 from unittest.mock import AsyncMock, patch
@@ -20,17 +19,13 @@ from herdr_master.core.config import (
     AiHeadConfig,
     CouncilConfig,
     HerdrMasterConfig,
-    OrchestrationConfig,
 )
 from herdr_master.core.context import HerdrContext
-from herdr_master.core.models import EffortLevel, HarnessBinding, HarnessKind, Squad
+from herdr_master.core.models import HarnessKind, Squad
 from herdr_master.pipeline.ai_head import AiHeadDiscovery
 from herdr_master.pipeline.launcher import (
-    ORCHESTRATION_NAME,
-    ORCHESTRATOR_NAME,
-    COUNCIL_COORDINATOR_NAME,
-    _Allocated,
     _allocate_launch_target,
+    _Allocated,
     _resolve_and_wire_ai_head,
     launch_council,
     launch_ergo,
@@ -250,7 +245,9 @@ async def test_allocate_launch_target_outside_herdr_delegated_creates_owned_work
     ctx = _ctx(inside=False, pane_id=None)
 
     with (
-        patch("herdr_master.pipeline.launcher.ensure_herdr_server", new_callable=AsyncMock) as mock_srv,
+        patch(
+            "herdr_master.pipeline.launcher.ensure_herdr_server", new_callable=AsyncMock
+        ) as mock_srv,
         patch("herdr_master.pipeline.launcher.HerdrClient", return_value=client),
     ):
         allocated = await _allocate_launch_target(
@@ -303,7 +300,9 @@ async def test_resolve_and_wire_ai_head_delegated_skips_ensure_herdr_ai_head(tmp
     cfg = HerdrMasterConfig(ai_head=AiHeadConfig(enabled=False))
     with (
         patch("herdr_master.pipeline.launcher.load_project_config", return_value=cfg),
-        patch("herdr_master.pipeline.launcher.ensure_herdr_ai_head", new_callable=AsyncMock) as mock_ensure,
+        patch(
+            "herdr_master.pipeline.launcher.ensure_herdr_ai_head", new_callable=AsyncMock
+        ) as mock_ensure,
     ):
         discovery, config_path = await _resolve_and_wire_ai_head(
             allocated=allocated,
@@ -321,7 +320,7 @@ async def test_resolve_and_wire_ai_head_delegated_skips_ensure_herdr_ai_head(tmp
 
 @pytest.mark.asyncio
 async def test_resolve_and_wire_ai_head_parent_pane_and_owns_workspace_skips_ensure(tmp_path: Path):
-    """When parent_pane_id is set and owns_workspace is True, ensure_herdr_ai_head is NEVER called."""
+    """An owned workspace with a parent never calls ensure_herdr_ai_head."""
     client = _mock_client("ws-wire-2")
     allocated = _Allocated(
         client=client,
@@ -332,13 +331,16 @@ async def test_resolve_and_wire_ai_head_parent_pane_and_owns_workspace_skips_ens
         tab_id="ws-wire-2:t2",
         owns_workspace=True,
         parent_pane_id="caller-owned-parent-p2",
-        delegated=False,  # even if delegated flag was false, parent_pane_id + owns_workspace triggers it
+        # parent_pane_id + owns_workspace triggers it even when delegated is false
+        delegated=False,
     )
 
     cfg = HerdrMasterConfig(ai_head=AiHeadConfig(enabled=True))
     with (
         patch("herdr_master.pipeline.launcher.load_project_config", return_value=cfg),
-        patch("herdr_master.pipeline.launcher.ensure_herdr_ai_head", new_callable=AsyncMock) as mock_ensure,
+        patch(
+            "herdr_master.pipeline.launcher.ensure_herdr_ai_head", new_callable=AsyncMock
+        ) as mock_ensure,
     ):
         discovery, config_path = await _resolve_and_wire_ai_head(
             allocated=allocated,
@@ -380,7 +382,9 @@ async def test_resolve_and_wire_ai_head_non_delegated_without_parent_calls_ensur
     }
     with (
         patch("herdr_master.pipeline.launcher.load_project_config", return_value=cfg),
-        patch("herdr_master.pipeline.launcher.ensure_herdr_ai_head", AsyncMock(return_value=head_info)) as mock_ensure,
+        patch(
+            "herdr_master.pipeline.launcher.ensure_herdr_ai_head", AsyncMock(return_value=head_info)
+        ) as mock_ensure,
     ):
         discovery, config_path = await _resolve_and_wire_ai_head(
             allocated=allocated,
@@ -410,8 +414,12 @@ async def test_resolve_and_wire_ai_head_returns_none_when_no_ai_head_config(tmp_
     )
 
     with (
-        patch("herdr_master.pipeline.launcher.load_project_config", side_effect=Exception("No config")),
-        patch("herdr_master.pipeline.launcher.ensure_herdr_ai_head", new_callable=AsyncMock) as mock_ensure,
+        patch(
+            "herdr_master.pipeline.launcher.load_project_config", side_effect=Exception("No config")
+        ),
+        patch(
+            "herdr_master.pipeline.launcher.ensure_herdr_ai_head", new_callable=AsyncMock
+        ) as mock_ensure,
     ):
         discovery, config_path = await _resolve_and_wire_ai_head(
             allocated=allocated,
@@ -444,7 +452,9 @@ async def test_launch_ergo_with_caller_pane(tmp_path: Path, monkeypatch):
     squad = Squad()
     with (
         patch("herdr_master.pipeline.launcher.resolve_launch_context", return_value=ctx),
-        patch("herdr_master.pipeline.launcher.ensure_herdr_ai_head", new_callable=AsyncMock) as mock_ensure,
+        patch(
+            "herdr_master.pipeline.launcher.ensure_herdr_ai_head", new_callable=AsyncMock
+        ) as mock_ensure,
     ):
         res = await launch_ergo(
             client=client,
@@ -468,7 +478,10 @@ async def test_launch_ergo_with_caller_pane(tmp_path: Path, monkeypatch):
     # 3. Prompt contains AiHead Parent Directive
     prompt = client.prompt_agent.await_args.args[1]
     assert "AiHead Parent Directive:" in prompt
-    assert f"AiHead is active at pane {caller_pane} as the authoritative technical decision-maker." in prompt
+    assert (
+        f"AiHead is active at pane {caller_pane} as the authoritative technical decision-maker."
+        in prompt
+    )
     assert f'herdr agent prompt {caller_pane} "<question / plan>"' in prompt
     assert f"herdr agent prompt {caller_pane}:" in prompt
 
@@ -492,7 +505,9 @@ async def test_launch_council_with_caller_pane(tmp_path: Path, monkeypatch):
     council_cfg = CouncilConfig()
     with (
         patch("herdr_master.pipeline.launcher.resolve_launch_context", return_value=ctx),
-        patch("herdr_master.pipeline.launcher.ensure_herdr_ai_head", new_callable=AsyncMock) as mock_ensure,
+        patch(
+            "herdr_master.pipeline.launcher.ensure_herdr_ai_head", new_callable=AsyncMock
+        ) as mock_ensure,
     ):
         res = await launch_council(
             client=client,
@@ -515,7 +530,10 @@ async def test_launch_council_with_caller_pane(tmp_path: Path, monkeypatch):
     # 3. Prompt contains AiHead Parent Directive
     prompt = client.prompt_agent.await_args.args[1]
     assert "AiHead Parent Directive:" in prompt
-    assert f"AiHead is active at pane {caller_pane} as the authoritative technical decision-maker." in prompt
+    assert (
+        f"AiHead is active at pane {caller_pane} as the authoritative technical decision-maker."
+        in prompt
+    )
     assert f'herdr agent prompt {caller_pane} "<question / plan>"' in prompt
 
     # 4. create_tab passed HERDR_PARENT_PANE_ID in env
@@ -537,7 +555,9 @@ async def test_launch_orchestration_with_caller_pane(tmp_path: Path, monkeypatch
 
     with (
         patch("herdr_master.pipeline.launcher.resolve_launch_context", return_value=ctx),
-        patch("herdr_master.pipeline.launcher.ensure_herdr_ai_head", new_callable=AsyncMock) as mock_ensure,
+        patch(
+            "herdr_master.pipeline.launcher.ensure_herdr_ai_head", new_callable=AsyncMock
+        ) as mock_ensure,
     ):
         res = await launch_orchestration(
             client=client,
@@ -564,7 +584,10 @@ async def test_launch_orchestration_with_caller_pane(tmp_path: Path, monkeypatch
     # 3. Prompt contains AiHead Parent Directive
     prompt = client.prompt_agent.await_args.args[1]
     assert "AiHead Parent Directive:" in prompt
-    assert f"AiHead is active at pane {caller_pane} as the authoritative technical decision-maker." in prompt
+    assert (
+        f"AiHead is active at pane {caller_pane} as the authoritative technical decision-maker."
+        in prompt
+    )
     assert f'herdr agent prompt {caller_pane} "<question / plan>"' in prompt
 
     # 4. create_tab passed HERDR_PARENT_PANE_ID in env
@@ -586,7 +609,9 @@ async def test_launch_master_with_caller_pane(tmp_path: Path, monkeypatch):
 
     with (
         patch("herdr_master.pipeline.launcher.resolve_launch_context", return_value=ctx),
-        patch("herdr_master.pipeline.launcher.ensure_herdr_ai_head", new_callable=AsyncMock) as mock_ensure,
+        patch(
+            "herdr_master.pipeline.launcher.ensure_herdr_ai_head", new_callable=AsyncMock
+        ) as mock_ensure,
     ):
         res = await launch_master(
             client=client,
@@ -610,7 +635,10 @@ async def test_launch_master_with_caller_pane(tmp_path: Path, monkeypatch):
     # 3. Prompt contains AiHead Parent Directive
     prompt = client.prompt_agent.await_args.args[1]
     assert "AiHead Parent Directive:" in prompt
-    assert f"AiHead is active at pane {caller_pane} as the authoritative technical decision-maker." in prompt
+    assert (
+        f"AiHead is active at pane {caller_pane} as the authoritative technical decision-maker."
+        in prompt
+    )
     assert f'herdr agent prompt {caller_pane} "<question / plan>"' in prompt
 
     # 4. create_tab passed HERDR_PARENT_PANE_ID in env

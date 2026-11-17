@@ -183,9 +183,7 @@ def test_invalid_override_and_session_mismatch_skip_client(monkeypatch):
         patch("herdr_master.cli.main.launch_ergo") as launch,
     ):
         bad = runner.invoke(app, ["ergo", "ship it", "--scout", "nope", "--no-attach"])
-        mismatch = runner.invoke(
-            app, ["ergo", "ship it", "--session", "beta", "--no-attach"]
-        )
+        mismatch = runner.invoke(app, ["ergo", "ship it", "--session", "beta", "--no-attach"])
         missing = runner.invoke(
             app,
             ["ergo", "ship it", "--run-squad", "/tmp/missing-squad.toml", "--no-attach"],
@@ -248,8 +246,11 @@ def test_coder_alias_and_disagreement(monkeypatch, tmp_path):
 
 
 def test_tui_delegates_to_aiheaddev():
-    with patch("shutil.which", return_value="/usr/local/bin/aiheaddev"), patch("os.execvp") as mock_execvp:
-        result = runner.invoke(app, ["tui", "--session", "test-sess"])
+    with (
+        patch("shutil.which", return_value="/usr/local/bin/aiheaddev"),
+        patch("os.execvp") as mock_execvp,
+    ):
+        runner.invoke(app, ["tui", "--session", "test-sess"])
         mock_execvp.assert_called_once_with(
             "/usr/local/bin/aiheaddev",
             ["/usr/local/bin/aiheaddev", "--tui", "--session", "test-sess"],
@@ -257,7 +258,10 @@ def test_tui_delegates_to_aiheaddev():
 
 
 def test_tui_not_installed_exits_with_help():
-    with patch("shutil.which", return_value=None), patch("importlib.util.find_spec", return_value=None):
+    with (
+        patch("shutil.which", return_value=None),
+        patch("importlib.util.find_spec", return_value=None),
+    ):
         result = runner.invoke(app, ["tui"])
         assert result.exit_code != 0
         assert "AiHead-Cockpit is not installed" in result.output
@@ -591,7 +595,14 @@ def test_cli_council_state_e2e(tmp_path):
     # 2. record-scout
     res_scout = runner.invoke(
         app,
-        ["council-state", "record-scout", "--run-dir", str(run_dir), "--context", str(context_file)],
+        [
+            "council-state",
+            "record-scout",
+            "--run-dir",
+            str(run_dir),
+            "--context",
+            str(context_file),
+        ],
     )
     assert res_scout.exit_code == 0, res_scout.output
 
@@ -610,12 +621,30 @@ def test_cli_council_state_e2e(tmp_path):
 
     res_p1 = runner.invoke(
         app,
-        ["council-state", "submit-initial-plan", "--run-dir", str(run_dir), "--member", "m1", "--plan", str(plan_m1)],
+        [
+            "council-state",
+            "submit-initial-plan",
+            "--run-dir",
+            str(run_dir),
+            "--member",
+            "m1",
+            "--plan",
+            str(plan_m1),
+        ],
     )
     assert res_p1.exit_code == 0, res_p1.output
     res_p2 = runner.invoke(
         app,
-        ["council-state", "submit-initial-plan", "--run-dir", str(run_dir), "--member", "m2", "--plan", str(plan_m2)],
+        [
+            "council-state",
+            "submit-initial-plan",
+            "--run-dir",
+            str(run_dir),
+            "--member",
+            "m2",
+            "--plan",
+            str(plan_m2),
+        ],
     )
     assert res_p2.exit_code == 0, res_p2.output
 
@@ -634,12 +663,38 @@ def test_cli_council_state_e2e(tmp_path):
 
     res_fb1 = runner.invoke(
         app,
-        ["council-state", "submit-feedback", "--run-dir", str(run_dir), "--round", "1", "--member", "m1", "--feedback", str(fb_m1), "--selected-plan", "m1_v0"],
+        [
+            "council-state",
+            "submit-feedback",
+            "--run-dir",
+            str(run_dir),
+            "--round",
+            "1",
+            "--member",
+            "m1",
+            "--feedback",
+            str(fb_m1),
+            "--selected-plan",
+            "m1_v0",
+        ],
     )
     assert res_fb1.exit_code == 0, res_fb1.output
     res_fb2 = runner.invoke(
         app,
-        ["council-state", "submit-feedback", "--run-dir", str(run_dir), "--round", "1", "--member", "m2", "--feedback", str(fb_m2), "--selected-plan", "m1_v0"],
+        [
+            "council-state",
+            "submit-feedback",
+            "--run-dir",
+            str(run_dir),
+            "--round",
+            "1",
+            "--member",
+            "m2",
+            "--feedback",
+            str(fb_m2),
+            "--selected-plan",
+            "m1_v0",
+        ],
     )
     assert res_fb2.exit_code == 0, res_fb2.output
 
@@ -685,7 +740,6 @@ def test_cli_config_command():
     assert "orchestration" in data
     assert "council" in data
     assert "ai_head" in data
-
 
 
 def test_ergo_coordinator_flag_forwards_binding_and_defaults_to_none(monkeypatch, tmp_path):

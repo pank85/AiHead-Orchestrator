@@ -114,9 +114,7 @@ async def _safe_await(fn: Any, *args: Any, **kwargs: Any) -> Any:
     return res
 
 
-async def _auto_confirm_trust(
-    client: HerdrClient, pane_id: str, stop_event: asyncio.Event
-) -> None:
+async def _auto_confirm_trust(client: HerdrClient, pane_id: str, stop_event: asyncio.Event) -> None:
     """Background watcher that presses Enter if an agent displays a trust prompt."""
     for _ in range(20):
         if stop_event.is_set():
@@ -247,9 +245,7 @@ def resolve_ergo_coordinator(
         if configured is None or configured.coordinator is None:
             return None
         binding = configured.coordinator
-    kind, model, effort = resolve_coordinator_binding(
-        binding.kind, binding.model, binding.effort
-    )
+    kind, model, effort = resolve_coordinator_binding(binding.kind, binding.model, binding.effort)
     return binding.model_copy(
         update={
             "kind": kind,
@@ -392,9 +388,15 @@ async def _create_owned_workspace(
             env={"HERDR_PARENT_PANE_ID": parent_pane_id} if parent_pane_id else None,
         )
         return _Allocated(
-            client=active, session_name=session_name, socket_path=socket_path,
-            workspace_id=workspace_id, pane_id=_pane_id(tab), tab_id=_tab_id(tab),
-            owns_workspace=True, parent_pane_id=parent_pane_id, delegated=True,
+            client=active,
+            session_name=session_name,
+            socket_path=socket_path,
+            workspace_id=workspace_id,
+            pane_id=_pane_id(tab),
+            tab_id=_tab_id(tab),
+            owns_workspace=True,
+            parent_pane_id=parent_pane_id,
+            delegated=True,
         )
     return _Allocated(
         client=active,
@@ -440,7 +442,11 @@ async def _allocate_launch_target(
         else (
             os.environ.get("HERDR_PANE_ID")
             or getattr(ctx, "pane_id", None)
-            or (os.environ.get("HERDR_PARENT_PANE_ID") if getattr(ctx, "is_inside_herdr", False) else None)
+            or (
+                os.environ.get("HERDR_PARENT_PANE_ID")
+                if getattr(ctx, "is_inside_herdr", False)
+                else None
+            )
         )
     )
     if delegated and not eff_parent_pane and ctx.is_inside_herdr:
@@ -461,7 +467,9 @@ async def _allocate_launch_target(
             focus=focus,
             cwd=cwd,
         )
-        pane_id = _pane_id(tab_res) or (tab_res.get("pane_id") if isinstance(tab_res, dict) else None)
+        pane_id = _pane_id(tab_res) or (
+            tab_res.get("pane_id") if isinstance(tab_res, dict) else None
+        )
         tab_id = _tab_id(tab_res) or (tab_res.get("tab_id") if isinstance(tab_res, dict) else None)
         return _Allocated(
             client=client,
@@ -1026,16 +1034,22 @@ async def launch_orchestration(
         HarnessBinding(
             kind=harness_kind,
             model=m,
-            label=f"worker-{i+1}" if len(worker_models) > 1 else "worker",
+            label=f"worker-{i + 1}" if len(worker_models) > 1 else "worker",
             order=i,
         )
         for i, m in enumerate(worker_models)
     ]
 
     squad = Squad(
-        scout=HarnessBinding(kind=harness_kind, model=scout_m, effort=scout_eff, label="scout", order=0),
-        architect=HarnessBinding(kind=harness_kind, model=arch_m, effort=arch_eff, label="architect", order=1),
-        reviewer=HarnessBinding(kind=harness_kind, model=rev_m, effort=rev_eff, label="reviewer", order=2),
+        scout=HarnessBinding(
+            kind=harness_kind, model=scout_m, effort=scout_eff, label="scout", order=0
+        ),
+        architect=HarnessBinding(
+            kind=harness_kind, model=arch_m, effort=arch_eff, label="architect", order=1
+        ),
+        reviewer=HarnessBinding(
+            kind=harness_kind, model=rev_m, effort=rev_eff, label="reviewer", order=2
+        ),
         worker_pool=worker_pool,
     )
 
@@ -1287,16 +1301,19 @@ async def launch_ai_head(
 
     Layout Management:
     - If split=True and inside Herdr (ctx.is_inside_herdr and active pane):
-      Calls client.split_pane(direction="right", target_pane_id=active_pane, cwd=target_cwd, focus=True).
+      Calls client.split_pane(direction="right", target_pane_id=active_pane, cwd=target_cwd,\
+ focus=True).
       Extracts newly created pane ID.
-      Calls client.swap_panes(source_pane_id=active_pane, target_pane_id=new_pane_id) so caller's pane
+      Calls client.swap_panes(source_pane_id=active_pane, target_pane_id=new_pane_id) so caller's\
+ pane
       moves to the right (secondary) and newly spawned AiHead pane becomes primary/main screen.
       Calls client.focus_pane(new_pane_id) if focus is True.
     - Else (split=False, workspace specified, or outside Herdr):
       Allocates standalone tab or workspace via _allocate_launch_target or workspace creation.
 
     Spawns interactive agent and delivers interactive bootstrap prompt.
-    Returns dict with keys: session, socket, workspace_id, pane_id, tab_id, agent_name, split, secondary_pane_id (if split).
+    Returns dict with keys: session, socket, workspace_id, pane_id, tab_id, agent_name, split,\
+ secondary_pane_id (if split).
     """
     initial_cwd = str(Path(cwd or os.getcwd()).resolve())
 
@@ -1330,16 +1347,10 @@ async def launch_ai_head(
     eff_skip = (
         dangerously_skip_permissions
         if dangerously_skip_permissions is not None
-        else (
-            head_config.dangerously_skip_permissions
-            if head_config is not None
-            else True
-        )
+        else (head_config.dangerously_skip_permissions if head_config is not None else True)
     )
     effective_split = (
-        split
-        if split is not None
-        else (head_config.split if head_config is not None else True)
+        split if split is not None else (head_config.split if head_config is not None else True)
     )
     if automode is not None:
         effective_automode = automode
@@ -1387,21 +1398,33 @@ async def launch_ai_head(
                 split_res.get("pane_id")
                 or split_res.get("new_pane_id")
                 or split_res.get("id")
-                or (split_res.get("pane") if isinstance(split_res.get("pane"), dict) else {}).get("pane_id")
-                or (split_res.get("root_pane") if isinstance(split_res.get("root_pane"), dict) else {}).get("pane_id")
+                or (split_res.get("pane") if isinstance(split_res.get("pane"), dict) else {}).get(
+                    "pane_id"
+                )
+                or (
+                    split_res.get("root_pane")
+                    if isinstance(split_res.get("root_pane"), dict)
+                    else {}
+                ).get("pane_id")
             )
         if not new_pane_id:
             snap = await _safe_await(client.get_snapshot)
             if hasattr(snap, "panes") and isinstance(snap.panes, list):
                 for p in snap.panes:
-                    p_id = getattr(p, "pane_id", None) or (p.get("pane_id") if isinstance(p, dict) else None)
-                    p_tab = getattr(p, "tab_id", None) or (p.get("tab_id") if isinstance(p, dict) else None)
+                    p_id = getattr(p, "pane_id", None) or (
+                        p.get("pane_id") if isinstance(p, dict) else None
+                    )
+                    p_tab = getattr(p, "tab_id", None) or (
+                        p.get("tab_id") if isinstance(p, dict) else None
+                    )
                     if p_tab == ctx.tab_id and p_id != active_pane:
                         new_pane_id = p_id
                         break
 
         if not new_pane_id:
-            raise RuntimeError(f"Could not determine new pane ID from split_pane result: {split_res}")
+            raise RuntimeError(
+                f"Could not determine new pane ID from split_pane result: {split_res}"
+            )
 
         await _safe_await(client.swap_panes, source_pane_id=active_pane, target_pane_id=new_pane_id)
         if focus:
@@ -1426,7 +1449,10 @@ async def launch_ai_head(
                 target_ws_id = None
                 if hasattr(snap, "workspaces"):
                     for ws in snap.workspaces:
-                        if getattr(ws, "workspace_id", None) == workspace or getattr(ws, "label", None) == workspace:
+                        if (
+                            getattr(ws, "workspace_id", None) == workspace
+                            or getattr(ws, "label", None) == workspace
+                        ):
                             target_ws_id = ws.workspace_id
                             break
                 if target_ws_id:
@@ -1464,7 +1490,10 @@ async def launch_ai_head(
                 target_ws_id = None
                 if hasattr(snap, "workspaces"):
                     for ws in snap.workspaces:
-                        if getattr(ws, "workspace_id", None) == workspace or getattr(ws, "label", None) == workspace:
+                        if (
+                            getattr(ws, "workspace_id", None) == workspace
+                            or getattr(ws, "label", None) == workspace
+                        ):
                             target_ws_id = ws.workspace_id
                             break
                 if target_ws_id:

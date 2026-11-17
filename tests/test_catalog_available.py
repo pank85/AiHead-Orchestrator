@@ -1,4 +1,4 @@
-"""Tests for `aihead catalog available` command (legacy `herdm catalog available` remains a supported alias)."""
+"""Tests for `aihead catalog available` and its legacy `herdm catalog available` alias."""
 
 import json
 from pathlib import Path
@@ -26,6 +26,41 @@ def test_catalog_show_unchanged_and_no_available_key():
     payload = _json(result)
     assert payload["default_squad"]["scout"]["model"] == "gemini-3.8-flash-medium"
     assert "available" not in payload
+
+
+def test_catalog_available_uses_live_project_catalog(tmp_path, monkeypatch):
+    from herdr_master.cli.setup_catalog import discover_model_catalog
+
+    path = tmp_path / ".herdr-master.toml"
+    path.write_text('[ai_head]\nmodel = "custom-model"\n', encoding="utf-8")
+    calls = []
+
+    def discovery(cfg):
+        calls.append(cfg)
+        catalog = discover_model_catalog(cfg, probe_live=False)
+        catalog.add_custom_model("kilo", "kilo/example/live")
+        catalog.live_counts["kilo"] = 1
+        return catalog
+
+    monkeypatch.setattr("herdr_master.cli.catalog.discover_model_catalog", discovery)
+    result = CliRunner().invoke(catalog_app, ["available", "--project", str(path), "--json"])
+    assert result.exit_code == 0, result.output
+    payload = _json(result)
+    assert calls[0] is not None
+    assert "kilo/example/live" in payload["modes"]["herdr"]["kilo"]["discovered"]
+    assert payload["live_counts"]["kilo"] == 1
+
+
+def test_saved_allowlist_models_remain_visible_without_live_discovery():
+    from herdr_master.cli.setup_catalog import discover_model_catalog
+
+    cfg = HerdrMasterConfig()
+    cfg.models.available = AvailableModels(
+        herdr={"kilo": ["custom/model"]}, native={"pi": ["custom/native"]}
+    )
+    catalog = discover_model_catalog(cfg, probe_live=False)
+    assert "custom/model" in [option.value for option in catalog.models("kilo")]
+    assert "custom/native" in [option.value for option in catalog.models("pi", mode="native")]
 
 
 def test_catalog_available_omitted_project():

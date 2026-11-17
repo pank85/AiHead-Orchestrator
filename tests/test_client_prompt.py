@@ -247,7 +247,8 @@ async def test_client_start_agent_agent_name_taken_clears_authority_and_retries(
     client = HerdrClient(socket_path="/tmp/fake.sock")
     taken_err = HerdrRPCError(
         "agent_name_taken",
-        "agent name ai-head is already used; candidates: terminal_id=t1 pane_id=wF:p99 workspace_id=wF status=Unknown",
+        "agent name ai-head is already used; candidates: terminal_id=t1 pane_id=wF:p99 "
+        "workspace_id=wF status=Unknown",
     )
     rpc_calls = []
 

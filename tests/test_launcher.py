@@ -90,6 +90,7 @@ def _client():
         "root_pane": {"pane_id": "w9:p2"},
         "tab": {"tab_id": "w9:t2"},
     }
+
     async def start_agent(**kwargs):
         # Mirror Herdr's RPC validation; a permissive AsyncMock hid invalid names.
         if re.fullmatch(r"[a-z][a-z0-9_-]{0,31}", kwargs["name"]) is None:
@@ -443,7 +444,7 @@ async def test_prompt_and_start_failures_do_not_delete_or_retry():
 @pytest.mark.asyncio
 async def test_launch_council_delivers_canonical_skill_and_bootstrap():
     from herdr_master.core.config import CouncilConfig
-    from herdr_master.pipeline.launcher import launch_council, COUNCIL_COORDINATOR_NAME
+    from herdr_master.pipeline.launcher import COUNCIL_COORDINATOR_NAME, launch_council
 
     client = _client()
     ctx = _inside()
@@ -526,7 +527,9 @@ async def test_launch_ergo_ai_head_tri_state():
         patch("herdr_master.pipeline.launcher.resolve_herdr_context", return_value=ctx),
         patch(
             "herdr_master.pipeline.launcher.ensure_herdr_ai_head",
-            AsyncMock(return_value={"tab_id": "w9:t_head", "pane_id": "w9:p_head", "enabled": True}),
+            AsyncMock(
+                return_value={"tab_id": "w9:t_head", "pane_id": "w9:p_head", "enabled": True}
+            ),
         ),
     ):
         # Enabled
@@ -592,7 +595,6 @@ async def test_launch_ergo_ai_head_busy_propagates_status_and_actual_model():
         assert discovery.status == "busy"
         assert discovery.reconciled is False
         assert discovery.model == "old-running-model"
-
 
 
 @pytest.mark.asyncio
@@ -795,9 +797,7 @@ async def test_launch_ergo_without_coordinator_keeps_scout_host():
 
 def test_resolve_ergo_coordinator_reads_config_and_override(tmp_path):
     config_file = tmp_path / ".herdr-master.toml"
-    config_file.write_text(
-        '[ergo]\ncoordinator = "pi:openai/gpt-6.1-sol:high"\n', encoding="utf-8"
-    )
+    config_file.write_text('[ergo]\ncoordinator = "pi:openai/gpt-6.1-sol:high"\n', encoding="utf-8")
     configured = resolve_ergo_coordinator(config_path=config_file)
     assert configured is not None
     assert configured.kind == HarnessKind.PI

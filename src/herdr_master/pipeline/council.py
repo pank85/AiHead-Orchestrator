@@ -13,21 +13,20 @@ Enforces the canonical multi-round Council protocol:
 
 from __future__ import annotations
 
+import fcntl
+import json
+import os
+import re
+import shutil
+import tempfile
 from collections import Counter
 from contextlib import contextmanager
 from datetime import datetime, timezone
 from enum import Enum
-import fcntl
-import json
-import os
 from pathlib import Path
-import re
-import shutil
-import tempfile
 from typing import Any, Iterator, Sequence
 
 from herdr_master.core.config import CouncilConfig, CouncilMember, HarnessBinding
-
 
 SCHEMA_VERSION = 1
 MAX_FEEDBACK_ROUNDS = 5
@@ -91,7 +90,9 @@ def _state_file(run_dir: Path) -> Path:
 def _load_state_unlocked(run_dir: Path) -> dict[str, Any]:
     path = _state_file(run_dir)
     if not path.is_file():
-        raise CouncilTransitionError(f"No active council run found at '{run_dir}'. Call init() first.")
+        raise CouncilTransitionError(
+            f"No active council run found at '{run_dir}'. Call init() first."
+        )
     try:
         with open(path, "r", encoding="utf-8") as f:
             return json.load(f)
@@ -146,13 +147,17 @@ def _validate_safe_id(label: str, role_name: str = "member") -> str:
 def _validate_file_path(path_str: str | Path, description: str) -> Path:
     p = Path(path_str).resolve()
     if not p.is_file():
-        raise CouncilValidationError(f"{description} file does not exist or is not a regular file: '{path_str}'.")
+        raise CouncilValidationError(
+            f"{description} file does not exist or is not a regular file: '{path_str}'."
+        )
     return p
 
 
 def _check_not_finalized(state: dict[str, Any], action: str) -> None:
     if state.get("phase") == CouncilPhase.FINALIZED.value:
-        raise CouncilTransitionError(f"Cannot {action}: Council run is finalized and sealed against mutations.")
+        raise CouncilTransitionError(
+            f"Cannot {action}: Council run is finalized and sealed against mutations."
+        )
 
 
 def _member_ids(state: dict[str, Any]) -> list[str]:
@@ -201,7 +206,11 @@ def _get_candidate_plans(state: dict[str, Any], round_number: int) -> list[str]:
 
 def init(
     run_dir: str | Path | None = None,
-    roster: CouncilConfig | Sequence[CouncilMember | HarnessBinding | dict[str, Any] | str] | str | dict[str, Any] | None = None,
+    roster: CouncilConfig
+    | Sequence[CouncilMember | HarnessBinding | dict[str, Any] | str]
+    | str
+    | dict[str, Any]
+    | None = None,
     specifications: str = "",
     coordinator: str | HarnessBinding | None = None,
     scout: str | HarnessBinding | None = None,
@@ -223,7 +232,8 @@ def init(
                 existing = _load_state_unlocked(target_dir)
                 if existing.get("phase"):
                     raise CouncilTransitionError(
-                        f"Council run at '{target_dir}' is already initialized (phase: {existing.get('phase')})."
+                        f"Council run at '{target_dir}' is already initialized (phase: "
+                        f"{existing.get('phase')})."
                     )
             except CouncilError:
                 raise
@@ -233,55 +243,96 @@ def init(
         # Parse coordinator
         coord_label = "coordinator"
         if coordinator is not None:
-            coord_label = getattr(coordinator, "label", None) or getattr(coordinator, "name", None) or str(coordinator)
+            coord_label = (
+                getattr(coordinator, "label", None)
+                or getattr(coordinator, "name", None)
+                or str(coordinator)
+            )
         coord_id = _validate_safe_id(coord_label, "coordinator")
 
         # Parse scout
         scout_label = "scout"
         if scout is not None:
-            scout_label = getattr(scout, "label", None) or getattr(scout, "name", None) or str(scout)
+            scout_label = (
+                getattr(scout, "label", None) or getattr(scout, "name", None) or str(scout)
+            )
         scout_id = _validate_safe_id(scout_label, "scout")
 
         # Parse members
         parsed_members: list[dict[str, Any]] = []
         if isinstance(roster, CouncilConfig):
             if coordinator is None and roster.coordinator:
-                coord_id = _validate_safe_id(roster.coordinator.label or "coordinator", "coordinator")
+                coord_id = _validate_safe_id(
+                    roster.coordinator.label or "coordinator", "coordinator"
+                )
             if scout is None and roster.scout:
                 scout_id = _validate_safe_id(roster.scout.label or "scout", "scout")
             for idx, m in enumerate(roster.members):
                 if m.enabled:
                     m_label = _validate_safe_id(m.label or f"member-{idx + 1}", "member")
-                    parsed_members.append({"id": m_label, "label": m_label, "order": m.order, "enabled": True})
+                    parsed_members.append(
+                        {"id": m_label, "label": m_label, "order": m.order, "enabled": True}
+                    )
         elif isinstance(roster, str):
             parts = [p.strip() for p in roster.split(",") if p.strip()]
             for idx, part in enumerate(parts):
                 m_label = _validate_safe_id(part, "member")
-                parsed_members.append({"id": m_label, "label": m_label, "order": idx, "enabled": True})
+                parsed_members.append(
+                    {"id": m_label, "label": m_label, "order": idx, "enabled": True}
+                )
         elif isinstance(roster, dict) and "members" in roster:
             if coordinator is None and "coordinator" in roster:
                 coord_id = _validate_safe_id(str(roster["coordinator"]), "coordinator")
             if scout is None and "scout" in roster:
                 scout_id = _validate_safe_id(str(roster["scout"]), "scout")
             for idx, item in enumerate(roster["members"]):
-                label = item.get("label") or item.get("id") or item.get("name") if isinstance(item, dict) else str(item)
+                label = (
+                    item.get("label") or item.get("id") or item.get("name")
+                    if isinstance(item, dict)
+                    else str(item)
+                )
                 m_label = _validate_safe_id(label, "member")
-                parsed_members.append({"id": m_label, "label": m_label, "order": idx, "enabled": True})
+                parsed_members.append(
+                    {"id": m_label, "label": m_label, "order": idx, "enabled": True}
+                )
         elif isinstance(roster, Sequence):
             for idx, item in enumerate(roster):
                 if isinstance(item, str):
                     m_label = _validate_safe_id(item, "member")
-                    parsed_members.append({"id": m_label, "label": m_label, "order": idx, "enabled": True})
+                    parsed_members.append(
+                        {"id": m_label, "label": m_label, "order": idx, "enabled": True}
+                    )
                 elif hasattr(item, "label"):
                     m_label = _validate_safe_id(item.label or f"member-{idx + 1}", "member")
-                    parsed_members.append({"id": m_label, "label": m_label, "order": getattr(item, "order", idx), "enabled": getattr(item, "enabled", True)})
+                    parsed_members.append(
+                        {
+                            "id": m_label,
+                            "label": m_label,
+                            "order": getattr(item, "order", idx),
+                            "enabled": getattr(item, "enabled", True),
+                        }
+                    )
                 elif isinstance(item, dict):
-                    label = item.get("label") or item.get("id") or item.get("name") or f"member-{idx + 1}"
+                    label = (
+                        item.get("label")
+                        or item.get("id")
+                        or item.get("name")
+                        or f"member-{idx + 1}"
+                    )
                     m_label = _validate_safe_id(label, "member")
-                    parsed_members.append({"id": m_label, "label": m_label, "order": item.get("order", idx), "enabled": item.get("enabled", True)})
+                    parsed_members.append(
+                        {
+                            "id": m_label,
+                            "label": m_label,
+                            "order": item.get("order", idx),
+                            "enabled": item.get("enabled", True),
+                        }
+                    )
                 else:
                     m_label = _validate_safe_id(str(item), "member")
-                    parsed_members.append({"id": m_label, "label": m_label, "order": idx, "enabled": True})
+                    parsed_members.append(
+                        {"id": m_label, "label": m_label, "order": idx, "enabled": True}
+                    )
         elif roster is None:
             # Default 2 members
             parsed_members = [
@@ -301,7 +352,9 @@ def init(
             if m_key in seen_labels:
                 raise CouncilValidationError(f"Duplicate member label '{m['id']}' in roster.")
             if m_key == coord_id.lower():
-                raise CouncilValidationError(f"Member label '{m['id']}' collides with coordinator label.")
+                raise CouncilValidationError(
+                    f"Member label '{m['id']}' collides with coordinator label."
+                )
             if m_key == scout_id.lower():
                 raise CouncilValidationError(f"Member label '{m['id']}' collides with Scout label.")
             seen_labels.add(m_key)
@@ -343,7 +396,12 @@ def init(
             "final_plan_file": None,
         }
         _save_state_unlocked(target_dir, state)
-        return {"ok": True, "run_dir": str(target_dir), "phase": state["phase"], "roster": state["roster"]}
+        return {
+            "ok": True,
+            "run_dir": str(target_dir),
+            "phase": state["phase"],
+            "roster": state["roster"],
+        }
 
 
 def record_scout_context(run_dir: str | Path, context_file: str | Path) -> dict[str, Any]:
@@ -371,7 +429,9 @@ def record_scout_context(run_dir: str | Path, context_file: str | Path) -> dict[
         return {"ok": True, "phase": state["phase"], "context_file": str(ctx_path)}
 
 
-def submit_initial_plan(run_dir: str | Path, member_id: str, plan_file: str | Path) -> dict[str, Any]:
+def submit_initial_plan(
+    run_dir: str | Path, member_id: str, plan_file: str | Path
+) -> dict[str, Any]:
     """Submit an independently drafted initial plan (Round 0) from a council member."""
     r_dir = Path(run_dir).resolve()
     with _lock_run(r_dir):
@@ -386,7 +446,8 @@ def submit_initial_plan(run_dir: str | Path, member_id: str, plan_file: str | Pa
 
         if state["phase"] not in {CouncilPhase.SCOUTED.value, CouncilPhase.DRAFTING.value}:
             raise CouncilTransitionError(
-                f"Cannot submit initial plan in phase '{state['phase']}'. Round 0 drafting has concluded."
+                f"Cannot submit initial plan in phase '{state['phase']}'. Round 0 drafting has "
+                f"concluded."
             )
 
         safe_m = _validate_safe_id(member_id, "member")
@@ -400,12 +461,15 @@ def submit_initial_plan(run_dir: str | Path, member_id: str, plan_file: str | Pa
         p_path = _validate_file_path(plan_file, f"Initial plan for {canonical_m}")
 
         # Round 0 tracking
-        r0 = state["rounds"].setdefault("0", {
-            "round": 0,
-            "type": "drafting",
-            "status": "in_progress",
-            "plans": {},
-        })
+        r0 = state["rounds"].setdefault(
+            "0",
+            {
+                "round": 0,
+                "type": "drafting",
+                "status": "in_progress",
+                "plans": {},
+            },
+        )
 
         if canonical_m in r0["plans"]:
             raise CouncilValidationError(
@@ -476,12 +540,15 @@ def open_round(run_dir: str | Path, round_number: int) -> dict[str, Any]:
                 )
             state["current_round"] = 0
             state["phase"] = CouncilPhase.DRAFTING.value
-            r0 = state["rounds"].setdefault("0", {
-                "round": 0,
-                "type": "drafting",
-                "status": "in_progress",
-                "plans": {},
-            })
+            r0 = state["rounds"].setdefault(
+                "0",
+                {
+                    "round": 0,
+                    "type": "drafting",
+                    "status": "in_progress",
+                    "plans": {},
+                },
+            )
             _save_state_unlocked(r_dir, state)
             return {"ok": True, "round": 0, "status": r0["status"]}
 
@@ -507,7 +574,8 @@ def open_round(run_dir: str | Path, round_number: int) -> dict[str, Any]:
             missing = [m for m in members if m not in revised]
             if missing:
                 raise CouncilTransitionError(
-                    f"Cannot open Round {round_number}: Round {round_number - 1} revisions are incomplete. "
+                    f"Cannot open Round {round_number}: Round {round_number - 1} revisions are "
+                    f"incomplete. "
                     f"Missing revised plans from: {', '.join(missing)}."
                 )
 
@@ -549,18 +617,22 @@ def submit_feedback(
 
         if state.get("current_round") != round_number:
             raise CouncilTransitionError(
-                f"Cannot submit feedback for Round {round_number}: Active round is {state.get('current_round')}."
+                f"Cannot submit feedback for Round {round_number}: Active round is "
+                f"{state.get('current_round')}."
             )
         if state["phase"] != CouncilPhase.ROUND_FEEDBACK.value:
             raise CouncilTransitionError(
-                f"Cannot submit feedback in phase '{state['phase']}'. Round is not open for feedback."
+                f"Cannot submit feedback in phase '{state['phase']}'. Round is not open for "
+                f"feedback."
             )
 
         safe_m = _validate_safe_id(member_id, "member")
         members = _member_ids(state)
         members_map = _member_labels_lower(state)
         if safe_m.lower() not in members_map:
-            raise CouncilValidationError(f"Unknown member '{member_id}'. Expected one of: {', '.join(members)}.")
+            raise CouncilValidationError(
+                f"Unknown member '{member_id}'. Expected one of: {', '.join(members)}."
+            )
         canonical_m = members_map[safe_m.lower()]
 
         f_path = _validate_file_path(feedback_file, f"Feedback from {canonical_m}")
@@ -653,7 +725,12 @@ def check_consensus(run_dir: str | Path, round_number: int) -> dict[str, Any]:
             state["winning_plan"] = winning_plan
             state["phase"] = CouncilPhase.CONSENSUS_REACHED.value
             _save_state_unlocked(r_dir, state)
-            return {"consensus": True, "round": round_number, "plan_id": winning_plan, "supported_by": list(members)}
+            return {
+                "consensus": True,
+                "round": round_number,
+                "plan_id": winning_plan,
+                "supported_by": list(members),
+            }
 
         # Consensus not achieved
         consensus_info = {
@@ -680,7 +757,8 @@ def submit_unified_feedback(
 
         if state.get("current_round") != round_number:
             raise CouncilTransitionError(
-                f"Cannot submit unified feedback for Round {round_number}: Active round is {state.get('current_round')}."
+                f"Cannot submit unified feedback for Round {round_number}: Active round is "
+                f"{state.get('current_round')}."
             )
 
         if (state.get("consensus") or {}).get("achieved") is True:
@@ -696,11 +774,14 @@ def submit_unified_feedback(
         missing_fb = [m for m in members if m not in round_data.get("feedback", {})]
         if missing_fb:
             raise CouncilTransitionError(
-                f"Cannot submit unified feedback: Member feedback incomplete for Round {round_number}. "
+                f"Cannot submit unified feedback: Member feedback incomplete for Round "
+                f"{round_number}. "
                 f"Missing from: {', '.join(missing_fb)}."
             )
 
-        u_path = _validate_file_path(unified_feedback_file, f"Unified feedback for Round {round_number}")
+        u_path = _validate_file_path(
+            unified_feedback_file, f"Unified feedback for Round {round_number}"
+        )
 
         dest = r_dir / "feedback" / f"unified_round_{round_number}.md"
         if u_path.resolve() != dest.resolve():
@@ -713,7 +794,12 @@ def submit_unified_feedback(
         }
         state["phase"] = CouncilPhase.ROUND_REVISION.value
         _save_state_unlocked(r_dir, state)
-        return {"ok": True, "round": round_number, "unified_feedback_file": str(u_path), "phase": state["phase"]}
+        return {
+            "ok": True,
+            "round": round_number,
+            "unified_feedback_file": str(u_path),
+            "phase": state["phase"],
+        }
 
 
 def submit_revised_plan(
@@ -731,7 +817,8 @@ def submit_revised_plan(
 
         if state.get("current_round") != round_number:
             raise CouncilTransitionError(
-                f"Cannot submit revised plan for Round {round_number}: Active round is {state.get('current_round')}."
+                f"Cannot submit revised plan for Round {round_number}: Active round is "
+                f"{state.get('current_round')}."
             )
 
         if state["phase"] != CouncilPhase.ROUND_REVISION.value:
@@ -744,7 +831,9 @@ def submit_revised_plan(
         members = _member_ids(state)
         members_map = _member_labels_lower(state)
         if safe_m.lower() not in members_map:
-            raise CouncilValidationError(f"Unknown member '{member_id}'. Expected one of: {', '.join(members)}.")
+            raise CouncilValidationError(
+                f"Unknown member '{member_id}'. Expected one of: {', '.join(members)}."
+            )
         canonical_m = members_map[safe_m.lower()]
 
         p_path = _validate_file_path(plan_file, f"Revised plan from {canonical_m}")
@@ -756,7 +845,8 @@ def submit_revised_plan(
         revised = round_data.setdefault("revised_plans", {})
         if canonical_m in revised:
             raise CouncilValidationError(
-                f"Member '{canonical_m}' has already submitted a revised plan for Round {round_number}."
+                f"Member '{canonical_m}' has already submitted a revised plan for Round "
+                f"{round_number}."
             )
 
         dest = r_dir / "plans" / f"{canonical_m}_v{round_number}.md"
@@ -800,7 +890,9 @@ def submit_plan(
     """Unified helper for initial (revision=0) or revised (revision>0) plan submissions."""
     if revision == 0:
         return submit_initial_plan(run_dir, member_id, plan_file)
-    return submit_revised_plan(run_dir, revision, member_id, plan_file, adopted_plan_id=adopted_plan_id)
+    return submit_revised_plan(
+        run_dir, revision, member_id, plan_file, adopted_plan_id=adopted_plan_id
+    )
 
 
 def submit_vote(run_dir: str | Path, member_id: str, voted_plan_id: str) -> dict[str, Any]:
@@ -817,7 +909,8 @@ def submit_vote(run_dir: str | Path, member_id: str, voted_plan_id: str) -> dict
         current_round = state.get("current_round") or 0
         if current_round < MAX_FEEDBACK_ROUNDS:
             raise CouncilTransitionError(
-                f"Voting is only permitted after {MAX_FEEDBACK_ROUNDS} feedback cycles without consensus "
+                f"Voting is only permitted after {MAX_FEEDBACK_ROUNDS} feedback cycles without "
+                f"consensus "
                 f"(currently at round {current_round})."
             )
 
@@ -842,7 +935,9 @@ def submit_vote(run_dir: str | Path, member_id: str, voted_plan_id: str) -> dict
 
         members_map = _member_labels_lower(state)
         if safe_m.lower() not in members_map:
-            raise CouncilValidationError(f"Unknown voter '{member_id}'. Expected one of: {', '.join(members)}.")
+            raise CouncilValidationError(
+                f"Unknown voter '{member_id}'. Expected one of: {', '.join(members)}."
+            )
         canonical_m = members_map[safe_m.lower()]
 
         votes = state.setdefault("votes", {})
@@ -855,7 +950,8 @@ def submit_vote(run_dir: str | Path, member_id: str, voted_plan_id: str) -> dict
         norm_voted = voted_plan_id.strip()
         if norm_voted.lower() not in valid_candidates:
             raise CouncilValidationError(
-                f"Invalid candidate '{voted_plan_id}' in ballot. Expected one of: {', '.join(sorted(set(candidates)))}."
+                f"Invalid candidate '{voted_plan_id}' in ballot. Expected one of: "
+                f"{', '.join(sorted(set(candidates)))}."
             )
 
         for cand in candidates:
@@ -931,7 +1027,9 @@ def finalize(run_dir: str | Path, output_file: str | Path | None = None) -> dict
                 "ok": True,
                 "finalized": True,
                 "winning_plan": state.get("winning_plan"),
-                "outcome": (state.get("consensus") or {}).get("achieved") and "UNANIMOUS_CONSENSUS" or "MAJORITY_VOTE",
+                "outcome": (state.get("consensus") or {}).get("achieved")
+                and "UNANIMOUS_CONSENSUS"
+                or "MAJORITY_VOTE",
                 "rounds_used": state.get("current_round", 0),
                 "final_plan_file": state.get("final_plan_file"),
             }
@@ -954,8 +1052,10 @@ def finalize(run_dir: str | Path, output_file: str | Path | None = None) -> dict
         # Locate plan body
         plan_content = ""
         # Search for file matching winning_plan
-        for r_num, r_data in state.get("rounds", {}).items():
-            for p_info in list(r_data.get("plans", {}).values()) + list(r_data.get("revised_plans", {}).values()):
+        for _r_num, r_data in state.get("rounds", {}).items():
+            for p_info in list(r_data.get("plans", {}).values()) + list(
+                r_data.get("revised_plans", {}).values()
+            ):
                 if p_info.get("plan_id") == winning_plan or p_info.get("member_id") == winning_plan:
                     f_path = Path(p_info.get("file", ""))
                     if f_path.is_file():

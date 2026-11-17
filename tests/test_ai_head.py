@@ -13,7 +13,6 @@ from herdr_master.cli.main import app
 from herdr_master.core.config import DEFAULT_AI_HEAD_SOUL, AiHeadConfig
 from herdr_master.core.models import EffortLevel, HarnessBinding, HarnessKind
 from herdr_master.herdr.client import HerdrClient
-from herdr_master.herdr.socket import HerdrRPCError
 from herdr_master.herdr.snapshot import (
     AgentSnapshot,
     PaneSnapshot,
@@ -21,6 +20,7 @@ from herdr_master.herdr.snapshot import (
     TabSnapshot,
     WorkspaceSnapshot,
 )
+from herdr_master.herdr.socket import HerdrRPCError
 from herdr_master.pipeline.ai_head import (
     CORE_WORKFLOWS,
     AiHeadDecisionReply,
@@ -187,7 +187,9 @@ def test_ai_head_workflow_selection_heuristics():
 
     # Rigorous feature development -> /ergo
     rec_ergo = assess_workflow_recommendation(
-        objective="Implement payment gateway with rigorous review and best-of-breed cross-harness models",
+        objective=(
+            "Implement payment gateway with rigorous review and best-of-breed cross-harness models"
+        ),
         scale="feature",
     )
     assert rec_ergo["workflow"] == "/ergo"
@@ -1381,7 +1383,7 @@ async def test_ensure_herdr_ai_head_reconciles_unknown_workspace_id():
 
 @pytest.mark.asyncio
 async def test_ensure_herdr_ai_head_falls_back_to_new_tab_on_stale_pane_failure():
-    """Verify that when start_agent fails on a stale dead pane, the stale tab is closed and a new one is created."""
+    """A failed start on a stale pane closes its tab and creates a new one."""
     client = MagicMock(spec=HerdrClient)
     cfg = AiHeadConfig(enabled=True)
 
@@ -1594,9 +1596,7 @@ async def test_ensure_restarts_when_saved_permission_changes_agent_args(tmp_path
             "kind": "agy",
             "model": "gemini-2.5-pro",
             "effort": "high",
-            "args": build_agent_args(
-                "agy", "gemini-2.5-pro", "high", skip_permissions=True
-            ),
+            "args": build_agent_args("agy", "gemini-2.5-pro", "high", skip_permissions=True),
             "soul": cfg.soul,
             "cwd": origin,
         },
