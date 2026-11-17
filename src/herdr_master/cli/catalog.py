@@ -243,24 +243,18 @@ def available_cmd(
             if path.is_dir():
                 candidate = path / ".herdr-master.toml"
                 if not candidate.is_file():
-                    raise FileNotFoundError(
-                        f"Project configuration file not found: {candidate}"
-                    )
+                    raise FileNotFoundError(f"Project configuration file not found: {candidate}")
                 path = candidate
             elif not path.is_file():
-                raise FileNotFoundError(
-                    f"Project configuration file not found: {path}"
-                )
+                raise FileNotFoundError(f"Project configuration file not found: {path}")
             cfg = load_project_config(path)
 
         available_obj = cfg.models.available if cfg is not None else None
         restricted = available_obj is not None
         automode = bool(cfg.ai_head.automode) if cfg is not None else False
-        available_data = (
-            available_obj.model_dump() if available_obj is not None else None
-        )
+        available_data = available_obj.model_dump() if available_obj is not None else None
 
-        catalog = discover_model_catalog(probe_live=False)
+        catalog = discover_model_catalog(cfg)
         modes = {}
         for mode in ("herdr", "native"):
             modes[mode] = {}
@@ -276,6 +270,7 @@ def available_cmd(
             "restricted": restricted,
             "automode": automode,
             "available": available_data,
+            "live_counts": catalog.live_counts,
             "modes": modes,
         }
         if json_output:
@@ -298,4 +293,3 @@ def available_cmd(
         sys.stdout.write("\n".join(lines) + "\n")
 
     _guard(run)
-

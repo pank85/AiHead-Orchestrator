@@ -64,9 +64,15 @@ class DeprecatedGroup(typer.core.TyperGroup):
     def main(self, args=None, *pos, **kwargs):
         arguments = list(sys.argv[1:] if args is None else args)
         mapping = {
-            "ergo": "--ergo", "council": "--council", "orchestration": "--orchestration",
-            "master": "--herdr-master", "aihead": "--task", "head": "--task",
-            "tui": "--tui", "aihead-setup": "--help", "--aihead-setup": "--help",
+            "ergo": "--ergo",
+            "council": "--council",
+            "orchestration": "--orchestration",
+            "master": "--herdr-master",
+            "aihead": "--task",
+            "head": "--task",
+            "tui": "--tui",
+            "aihead-setup": "--help",
+            "--aihead-setup": "--help",
             "--aihead": "--task",
         }
         replacement = next((mapping[arg] for arg in arguments if arg in mapping), "--help")
@@ -272,9 +278,7 @@ def master_start(
     )
 
     if not ctx.is_inside_herdr and attach:
-        console.print(
-            f"[yellow]Attaching to isolated Herdr session '{target_session}'...[/yellow]"
-        )
+        console.print(f"[yellow]Attaching to isolated Herdr session '{target_session}'...[/yellow]")
         os.execvp("herdr", ["herdr", "--session", target_session])
 
 
@@ -326,9 +330,7 @@ def run_ergo(
         None, "--architect", help="Architect binding override."
     ),
     workers: Optional[str] = typer.Option(None, "--workers", help="Worker-pool override."),
-    coder: Optional[str] = typer.Option(
-        None, "--coder", "--coders", help="Alias for --workers."
-    ),
+    coder: Optional[str] = typer.Option(None, "--coder", "--coders", help="Alias for --workers."),
     reviewer: Optional[str] = typer.Option(None, "--reviewer", help="Reviewer binding override."),
     coordinator: Optional[str] = typer.Option(
         None,
@@ -385,9 +387,7 @@ def run_ergo(
     )
 
     if not ctx.is_inside_herdr and attach:
-        console.print(
-            f"[yellow]Attaching to isolated Herdr session '{target_session}'...[/yellow]"
-        )
+        console.print(f"[yellow]Attaching to isolated Herdr session '{target_session}'...[/yellow]")
         os.execvp("herdr", ["herdr", "--session", target_session])
 
 
@@ -410,15 +410,11 @@ def run_orchestration(
         help="Compact role models, e.g. scout=...,architect=...,coder=...,reviewer=...",
     ),
     scout: Optional[str] = typer.Option(None, "--scout", help="Scout model override."),
-    architect: Optional[str] = typer.Option(
-        None, "--architect", help="Architect model override."
-    ),
+    architect: Optional[str] = typer.Option(None, "--architect", help="Architect model override."),
     workers: Optional[str] = typer.Option(
         None, "--workers", help="Worker models (pipe-separated)."
     ),
-    coder: Optional[str] = typer.Option(
-        None, "--coder", "--coders", help="Alias for --workers."
-    ),
+    coder: Optional[str] = typer.Option(None, "--coder", "--coders", help="Alias for --workers."),
     reviewer: Optional[str] = typer.Option(None, "--reviewer", help="Reviewer model override."),
     dangerously_skip_permissions: bool = typer.Option(
         True,
@@ -450,7 +446,9 @@ def run_orchestration(
 
         default_scout = orch_cfg.scout_model or "gemini-3.8-flash"
         default_arch = orch_cfg.architect_model or "gemini-3.8-flash"
-        default_coder = " | ".join(orch_cfg.worker_models) if orch_cfg.worker_models else "gemini-3.8-flash"
+        default_coder = (
+            " | ".join(orch_cfg.worker_models) if orch_cfg.worker_models else "gemini-3.8-flash"
+        )
         default_rev = orch_cfg.reviewer_model or "gemini-3.8-flash"
 
         eff_scout = scout or parsed_models.get("scout") or default_scout
@@ -501,9 +499,7 @@ def run_orchestration(
     )
 
     if not ctx.is_inside_herdr and attach:
-        console.print(
-            f"[yellow]Attaching to isolated Herdr session '{target_session}'...[/yellow]"
-        )
+        console.print(f"[yellow]Attaching to isolated Herdr session '{target_session}'...[/yellow]")
         os.execvp("herdr", ["herdr", "--session", target_session])
 
 
@@ -563,14 +559,13 @@ def run_council(
     pane_id = res.get("pane_id") or res.get("coordinator_pane_id")
     target_session = res.get("session", ctx.session_name)
     console.print(
-        f"[green]✓[/green] AI Council coordinator started in session [cyan]{target_session}[/cyan], "
+        f"[green]✓[/green] AI Council coordinator started in session "
+        f"[cyan]{target_session}[/cyan], "
         f"workspace [cyan]{ws_id}[/cyan], pane [cyan]{pane_id}[/cyan]"
     )
 
     if not ctx.is_inside_herdr and attach:
-        console.print(
-            f"[yellow]Attaching to isolated Herdr session '{target_session}'...[/yellow]"
-        )
+        console.print(f"[yellow]Attaching to isolated Herdr session '{target_session}'...[/yellow]")
         os.execvp("herdr", ["herdr", "--session", target_session])
 
 
@@ -582,8 +577,7 @@ def run_aihead(
         None,
         "--harness",
         help=(
-            "Interactive harness override "
-            "(agy, pi, claude, opencode, codex, gemini, hermes, kilo)."
+            "Interactive harness override (agy, pi, claude, opencode, codex, gemini, hermes, kilo)."
         ),
     ),
     model: Optional[str] = typer.Option(
@@ -604,7 +598,8 @@ def run_aihead(
     split: Optional[bool] = typer.Option(
         None,
         "--split/--no-split",
-        help="Split active Herdr terminal screen so AiHead becomes primary and active pane becomes secondary.",
+        help="Split active Herdr terminal screen so AiHead becomes primary and active pane "
+        "becomes secondary.",
     ),
     automode: Optional[bool] = typer.Option(
         None,
@@ -660,17 +655,21 @@ def run_aihead(
         eff_harness = (
             harness
             if harness is not None
-            else (head_cfg.binding.kind.value if head_cfg.binding and head_cfg.binding.kind else None)
+            else (
+                head_cfg.binding.kind.value if head_cfg.binding and head_cfg.binding.kind else None
+            )
         )
         eff_model = (
-            model
-            if model is not None
-            else (head_cfg.binding.model if head_cfg.binding else None)
+            model if model is not None else (head_cfg.binding.model if head_cfg.binding else None)
         )
         eff_effort = (
             effort
             if effort is not None
-            else (head_cfg.binding.effort.value if head_cfg.binding and head_cfg.binding.effort else None)
+            else (
+                head_cfg.binding.effort.value
+                if head_cfg.binding and head_cfg.binding.effort
+                else None
+            )
         )
 
         if secondary:
@@ -680,7 +679,9 @@ def run_aihead(
         else:
             effective_split = head_cfg.split if head_cfg is not None else True
 
-        kind, model_slug, effort_level = resolve_coordinator_binding(eff_harness, eff_model, eff_effort)
+        kind, model_slug, effort_level = resolve_coordinator_binding(
+            eff_harness, eff_model, eff_effort
+        )
     except _RESOLVE_ERRORS as err:
         _abort(str(err))
 
@@ -739,9 +740,7 @@ def run_aihead(
         )
 
     if not ctx.is_inside_herdr and attach:
-        console.print(
-            f"[yellow]Attaching to isolated Herdr session '{target_session}'...[/yellow]"
-        )
+        console.print(f"[yellow]Attaching to isolated Herdr session '{target_session}'...[/yellow]")
         os.execvp("herdr", ["herdr", "--session", target_session])
 
 
@@ -749,9 +748,7 @@ def run_aihead(
 @aihead_app.command("aihead-setup")
 @aihead_app.command("setup")
 def aihead_setup_cmd(
-    defaults: bool = typer.Option(
-        False, "--defaults", help="Apply defaults without prompting."
-    ),
+    defaults: bool = typer.Option(False, "--defaults", help="Apply defaults without prompting."),
     yes: bool = typer.Option(False, "--yes", "-y", help="Skip the confirmation prompt."),
     config: Optional[Path] = typer.Option(
         None, "--config", help="Target .herdr-master.toml (defaults to the project file)."
@@ -783,13 +780,12 @@ def aihead_cli_cmd(
     run_id: Optional[str] = typer.Option(None, "--run-id", help="Correlation run ID"),
     timeout: float = typer.Option(60.0, "--timeout", help="Execution timeout in seconds"),
     config_path: Optional[Path] = typer.Option(None, "--config", help="Project config file"),
-    discover: bool = typer.Option(
-        False, "--discover", help="Print AiHead discovery JSON and exit"
-    ),
+    discover: bool = typer.Option(False, "--discover", help="Print AiHead discovery JSON and exit"),
 ):
     """Execute real, bounded headless AiHead decisions directly (100% Herdr-free)."""
     import json
     import sys
+
     from herdr_master.pipeline.ai_head import (
         AiHeadDecisionRequest,
         build_ai_head_discovery,
@@ -891,6 +887,7 @@ def council_init_cmd(
 ):
     """Initialize a new Council deliberation run with pinned roster and specifications."""
     import json
+
     from herdr_master.pipeline import council
 
     parsed_roster = None
@@ -998,7 +995,9 @@ def council_submit_feedback_cmd(
     run_dir: Path = typer.Option(..., "--run-dir", help="Run directory"),
     round_number: int = typer.Option(..., "--round", "--round-number", help="Round number (1-5)"),
     member: str = typer.Option(..., "--member", "--member-id", help="Member ID"),
-    feedback: Path = typer.Option(..., "--feedback", "--feedback-file", help="Path to feedback file"),
+    feedback: Path = typer.Option(
+        ..., "--feedback", "--feedback-file", help="Path to feedback file"
+    ),
     selected_plan: str = typer.Option(
         ..., "--selected-plan", "--supported-plan-id", help="Supported candidate plan ID"
     ),
@@ -1065,7 +1064,8 @@ def council_check_consensus_cmd(
             )
         else:
             console.print(
-                f"[yellow]No consensus reached in round {round_number}. Deliberation continues.[/yellow]"
+                f"[yellow]No consensus reached in round {round_number}. Deliberation "
+                f"continues.[/yellow]"
             )
     except (council.CouncilError, ValueError, FileNotFoundError) as err:
         _abort(str(err))
@@ -1076,9 +1076,7 @@ def council_check_consensus_cmd(
 def council_submit_vote_cmd(
     run_dir: Path = typer.Option(..., "--run-dir", help="Run directory"),
     member: str = typer.Option(..., "--member", "--member-id", help="Member ID"),
-    ballot: str = typer.Option(
-        ..., "--ballot", "--voted-plan-id", help="Voted candidate plan ID"
-    ),
+    ballot: str = typer.Option(..., "--ballot", "--voted-plan-id", help="Voted candidate plan ID"),
 ):
     """Submit a ballot in the fallback 1-round vote after 5 cycles without consensus."""
     from herdr_master.pipeline import council
@@ -1107,7 +1105,8 @@ def council_finalize_cmd(
         winning = res.get("winning_plan") or res.get("winning_plan_id")
         console.print(
             f"[bold green]✓ Council deliberation finalized![/bold green] "
-            f"Outcome: [cyan]{outcome}[/cyan], Plan: [cyan]{winning}[/cyan], Output: [cyan]{out_path}[/cyan]"
+            f"Outcome: [cyan]{outcome}[/cyan], Plan: [cyan]{winning}[/cyan], Output: "
+            f"[cyan]{out_path}[/cyan]"
         )
     except (council.CouncilError, ValueError, FileNotFoundError) as err:
         _abort(str(err))
@@ -1120,6 +1119,7 @@ def council_status_cmd(
 ):
     """Inspect the current status and artifact provenance of a Council deliberation."""
     import json
+
     from herdr_master.pipeline import council
 
     try:
@@ -1130,7 +1130,8 @@ def council_status_cmd(
             phase = res.get("phase")
             active_round = res.get("active_round")
             console.print(
-                f"Council Run Phase: [cyan]{phase}[/cyan], Active Round: [cyan]{active_round}[/cyan]"
+                f"Council Run Phase: [cyan]{phase}[/cyan], Active Round: "
+                f"[cyan]{active_round}[/cyan]"
             )
     except (council.CouncilError, ValueError, FileNotFoundError) as err:
         _abort(str(err))
@@ -1155,7 +1156,6 @@ def config_cmd(
         _abort(str(err))
 
 
-
 @app.command()
 @aihead_app.command()
 def tui(
@@ -1168,6 +1168,7 @@ def tui(
 ):
     """Launch the interactive terminal management cockpit (AiHeadDev)."""
     import shutil
+
     # `aihead` is the herdr-master console script. Do not treat it as AiHeadDev.
     executable = shutil.which("aiheaddev")
     if executable:
@@ -1181,6 +1182,7 @@ def tui(
     # Check if module is importable via current python
     try:
         import importlib.util
+
         if importlib.util.find_spec("aiheaddev") is not None:
             cmd = [sys.executable, "-m", "aiheaddev.cli", "--tui"]
             if session:
@@ -1273,7 +1275,8 @@ def install_cmd(
         True,
         "--force/--no-force",
         "-f",
-        help="Overwrite existing non-Hermes files or links; Hermes unowned targets are always protected",
+        help="Overwrite existing non-Hermes files or links; Hermes unowned targets are always "
+        "protected",
     ),
 ) -> None:
     """Install canonical skills across all supported harnesses.
@@ -1474,9 +1477,7 @@ async def _dispatch_standalone_aihead(
         )
         adopted_workspace = _created_workspace_id(created)
         if not adopted_workspace:
-            _abort(
-                "Herdr workspace create returned no workspace_id. Refusing to launch AiHead."
-            )
+            _abort("Herdr workspace create returned no workspace_id. Refusing to launch AiHead.")
 
     if workspace is not None:
         launch_workspace: Optional[str] = workspace
@@ -1541,9 +1542,16 @@ def _print_standalone_launch_result(res: Any, fallback_session: str) -> str:
     return str(target_session)
 
 
-def _launch_skill(skill: str, intent: Optional[str], session: Optional[str], cwd: Optional[Path],
-                  config: Optional[Path], harness: Optional[str], model: Optional[str],
-                  effort: Optional[str]) -> None:
+def _launch_skill(
+    skill: str,
+    intent: Optional[str],
+    session: Optional[str],
+    cwd: Optional[Path],
+    config: Optional[Path],
+    harness: Optional[str],
+    model: Optional[str],
+    effort: Optional[str],
+) -> None:
     """Start a skill in a new Herdr workspace and switch to it or attach."""
     try:
         ctx = resolve_launch_context(session)
@@ -1563,17 +1571,30 @@ def _launch_skill(skill: str, intent: Optional[str], session: Optional[str], cwd
             parent_pane_id=caller_pane_id if is_delegated else None,
         )
         if skill == "ergo":
-            resolved = _resolve_ergo_once(models=None, scout=None, architect=None,
-                                          workers=None, coder=None, reviewer=None, run_squad=None,
-                                          project_path=config or cwd)
+            resolved = _resolve_ergo_once(
+                models=None,
+                scout=None,
+                architect=None,
+                workers=None,
+                coder=None,
+                reviewer=None,
+                run_squad=None,
+                project_path=config or cwd,
+            )
             operation = launch_ergo(
-                intent=intent or "", workspace_label=label, squad=resolved.squad,
+                intent=intent or "",
+                workspace_label=label,
+                squad=resolved.squad,
                 coordinator=resolve_ergo_coordinator(None, config_path=config or cwd),
                 **common,
             )
         elif skill == "council":
-            operation = launch_council(intent=intent or "", workspace_label=label,
-                                       council=load_project_config(config or cwd).council, **common)
+            operation = launch_council(
+                intent=intent or "",
+                workspace_label=label,
+                council=load_project_config(config or cwd).council,
+                **common,
+            )
         elif skill == "orchestration":
             orch = load_project_config(config or cwd).orchestration
             if harness and harness != orch.harness.value:
@@ -1581,22 +1602,32 @@ def _launch_skill(skill: str, intent: Optional[str], session: Optional[str], cwd
                 orch.sync_harness_to_active(harness)
             defaults = DEFAULT_ORCHESTRATION_MODELS.get(orch.harness.value, {})
             operation = launch_orchestration(
-                intent=intent or "", workspace_label=label, harness=harness or orch.harness,
+                intent=intent or "",
+                workspace_label=label,
+                harness=harness or orch.harness,
                 scout_model=orch.scout_model or defaults.get("scout", ""),
                 architect_model=orch.architect_model or defaults.get("architect", ""),
                 coder_model=" | ".join(orch.worker_models) or defaults.get("coder", ""),
                 reviewer_model=orch.reviewer_model or defaults.get("reviewer", ""),
-                scout_effort=orch.scout_effort, architect_effort=orch.architect_effort,
-                reviewer_effort=orch.reviewer_effort, **common,
+                scout_effort=orch.scout_effort,
+                architect_effort=orch.architect_effort,
+                reviewer_effort=orch.reviewer_effort,
+                **common,
             )
         else:
-            operation = launch_master(name=label, initial_task=intent, config_path=config,
-                                      harness=harness, model=model, effort=effort, **common)
+            operation = launch_master(
+                name=label,
+                initial_task=intent,
+                config_path=config,
+                harness=harness,
+                model=model,
+                effort=effort,
+                **common,
+            )
         result = asyncio.run(operation)
         target_session = str((result or {}).get("session") or ctx.session_name)
         typer.echo(
-            f"Started {skill}: workspace {result.get('workspace_id')}, "
-            f"pane {result.get('pane_id')}"
+            f"Started {skill}: workspace {result.get('workspace_id')}, pane {result.get('pane_id')}"
         )
         if not ctx.is_inside_herdr:
             os.execvp("herdr", ["herdr", "--session", target_session])
@@ -1616,9 +1647,7 @@ def launch_standalone_aihead(
     menu: bool = typer.Option(
         False, "--menu", help="Open the AiHead menu in a Herdr command pane."
     ),
-    ergo: Optional[str] = typer.Option(
-        None, "--ergo", help="Start Ergo in a new Herdr workspace."
-    ),
+    ergo: Optional[str] = typer.Option(None, "--ergo", help="Start Ergo in a new Herdr workspace."),
     council: Optional[str] = typer.Option(
         None, "--council", help="Start Council in a new Herdr workspace."
     ),
@@ -1632,8 +1661,7 @@ def launch_standalone_aihead(
         None,
         "--harness",
         help=(
-            "Interactive harness override "
-            "(agy, pi, claude, opencode, codex, gemini, hermes, kilo)."
+            "Interactive harness override (agy, pi, claude, opencode, codex, gemini, hermes, kilo)."
         ),
     ),
     model: Optional[str] = typer.Option(
@@ -1655,8 +1683,7 @@ def launch_standalone_aihead(
         None,
         "--split/--no-split",
         help=(
-            "Split the active Herdr screen so AiHead is primary "
-            "and the active pane is secondary."
+            "Split the active Herdr screen so AiHead is primary and the active pane is secondary."
         ),
     ),
     automode: Optional[bool] = typer.Option(
@@ -1797,9 +1824,7 @@ def launch_standalone_aihead(
             harness
             if harness is not None
             else (
-                head_cfg.binding.kind.value
-                if head_cfg.binding and head_cfg.binding.kind
-                else None
+                head_cfg.binding.kind.value if head_cfg.binding and head_cfg.binding.kind else None
             )
         )
         eff_model = (
@@ -1860,9 +1885,7 @@ def launch_standalone_aihead(
 
     target_session = _print_standalone_launch_result(res, ctx.session_name)
     if not ctx.is_inside_herdr and attach:
-        console.print(
-            f"[yellow]Attaching to isolated Herdr session '{target_session}'...[/yellow]"
-        )
+        console.print(f"[yellow]Attaching to isolated Herdr session '{target_session}'...[/yellow]")
         os.execvp("herdr", ["herdr", "--session", target_session])
 
 

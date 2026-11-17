@@ -6,7 +6,8 @@ Covers:
 3. Council launch, bootstrap generation, and pre-allocation roster guard linkage.
 4. Real Council state-machine: early consensus (round 1) vs 5-round disagreement and fallback vote
    with deterministic tie-breaking. Hard cycle limits (round 6 refusal) and neutrality guards.
-5. AiHead enable/disable/discovery and escalation across ergo, orchestration, council, and aihead-cli.
+5. AiHead enable/disable/discovery and escalation across ergo, orchestration, council,
+   and aihead-cli.
 """
 
 import json
@@ -26,15 +27,12 @@ from herdr_master.core.config import (
     ModelsConfig,
     OrchestrationConfig,
     ProjectsConfig,
-    is_folder_available,
     load_project_config,
     resolve_effective_folder,
-    resolve_folder_path,
     save_project_config,
 )
-from herdr_master.core.models import EffortLevel, HarnessBinding, HarnessKind, Squad
+from herdr_master.core.models import HarnessBinding, HarnessKind
 from herdr_master.pipeline.ai_head import (
-    AiHeadDecisionReply,
     AiHeadDecisionRequest,
     build_ai_head_discovery,
     build_headless_cli_argv,
@@ -42,14 +40,12 @@ from herdr_master.pipeline.ai_head import (
 )
 from herdr_master.pipeline.bootstrap import (
     BOOTSTRAP_SENTINEL,
-    build_bootstrap_prompt,
 )
 from herdr_master.pipeline.council import (
     CouncilTransitionError,
     CouncilValidationError,
     check_consensus,
     finalize,
-    get_status,
     init,
     open_round,
     record_scout_context,
@@ -62,8 +58,6 @@ from herdr_master.pipeline.council import (
 from herdr_master.pipeline.launcher import (
     COUNCIL_COORDINATOR_NAME,
     launch_council,
-    launch_ergo,
-    launch_orchestration,
 )
 
 runner = CliRunner()
@@ -118,7 +112,7 @@ def _fake_context(tmp_path: Path) -> FakeLaunchCtx:
 
 
 def test_integration_save_and_reload_all_five_settings_sections(tmp_path):
-    """Verify full fidelity roundtrip of projects, ergo squad, orchestration, council, and ai_head."""
+    """Verify a full fidelity roundtrip of all five settings sections."""
     toml_path = tmp_path / ".herdr-master.toml"
 
     config = HerdrMasterConfig(
@@ -147,28 +141,21 @@ def test_integration_save_and_reload_all_five_settings_sections(tmp_path):
             coordinator=HarnessBinding.from_slug(
                 "pi:openai-codex/gpt-6.1-sol:max", label="coordinator"
             ),
-            scout=HarnessBinding.from_slug(
-                "agy:gemini-3.8-flash-medium:medium", label="scout"
-            ),
+            scout=HarnessBinding.from_slug("agy:gemini-3.8-flash-medium:medium", label="scout"),
             members=[
-                CouncilMember.from_slug(
-                    "agy:gemini-3.8-flash", label="member-1", order=0
-                ),
-                CouncilMember.from_slug(
-                    "pi:xai/grok-4.7", label="member-2", order=1
-                ),
-                CouncilMember.from_slug(
-                    "claude:claude-sonnet-4-6", label="member-3", order=2
-                ),
+                CouncilMember.from_slug("agy:gemini-3.8-flash", label="member-1", order=0),
+                CouncilMember.from_slug("pi:xai/grok-4.7", label="member-2", order=1),
+                CouncilMember.from_slug("claude:claude-sonnet-4-6", label="member-3", order=2),
             ],
         ),
         ai_head=AiHeadConfig(
             enabled=True,
-            soul="Staff Systems Architect obsessed with UX, accessibility, and zero-leak abstractions",
-            mode="cli",
-            binding=HarnessBinding.from_slug(
-                "claude:claude-sonnet-4-6", label="ai-head"
+            soul=(
+                "Staff Systems Architect obsessed with UX, accessibility, and "
+                "zero-leak abstractions"
             ),
+            mode="cli",
+            binding=HarnessBinding.from_slug("claude:claude-sonnet-4-6", label="ai-head"),
         ),
     )
 
@@ -256,9 +243,7 @@ async def test_integration_named_folder_precedence_and_field_selection(tmp_path)
     assert eff_explicit == explicit_dir.resolve()
 
     # 2. Precedence: configured default wins when explicit is None
-    eff_default = resolve_effective_folder(
-        explicit_folder=None, config=cfg, anchor_dir=cwd_dir
-    )
+    eff_default = resolve_effective_folder(explicit_folder=None, config=cfg, anchor_dir=cwd_dir)
     assert eff_default == default_dir.resolve()
 
     # 3. Precedence: anchor/cwd wins when config has no default_folder
@@ -276,7 +261,7 @@ async def test_integration_named_folder_precedence_and_field_selection(tmp_path)
 
 @pytest.mark.asyncio
 async def test_integration_council_launch_bootstrap_and_guard_linkage(tmp_path):
-    """Verify launch_council constructs valid bootstrap payload and enforces roster pre-allocation."""
+    """Verify launch_council's bootstrap payload and roster pre-allocation guard."""
     client = _fake_client()
     ctx = _fake_context(tmp_path)
     repo_dir = tmp_path / "repo"
@@ -286,20 +271,14 @@ async def test_integration_council_launch_bootstrap_and_guard_linkage(tmp_path):
         coordinator=HarnessBinding.from_slug(
             "pi:openai-codex/gpt-6.1-sol:max", label="coordinator"
         ),
-        scout=HarnessBinding.from_slug(
-            "agy:gemini-3.8-flash-medium:medium", label="scout"
-        ),
+        scout=HarnessBinding.from_slug("agy:gemini-3.8-flash-medium:medium", label="scout"),
         members=[
-            CouncilMember.from_slug(
-                "agy:gemini-3.8-flash", label="m1", order=0
-            ),
-            CouncilMember.from_slug(
-                "pi:xai/grok-4.7", label="m2", order=1
-            ),
+            CouncilMember.from_slug("agy:gemini-3.8-flash", label="m1", order=0),
+            CouncilMember.from_slug("pi:xai/grok-4.7", label="m2", order=1),
         ],
     )
 
-    # A. Pre-allocation guard check: < 2 enabled members must raise ValueError BEFORE allocating pane
+    # A. Fewer than 2 enabled members must raise ValueError before allocating a pane.
     bad_cfg = CouncilConfig.model_construct(
         coordinator=council_cfg.coordinator,
         scout=council_cfg.scout,
@@ -313,9 +292,7 @@ async def test_integration_council_launch_bootstrap_and_guard_linkage(tmp_path):
         ],
     )
 
-    with patch(
-        "herdr_master.pipeline.launcher.resolve_herdr_context", return_value=ctx
-    ):
+    with patch("herdr_master.pipeline.launcher.resolve_herdr_context", return_value=ctx):
         with pytest.raises(ValueError, match="at least 2 enabled members"):
             await launch_council(
                 client=client,
@@ -327,9 +304,7 @@ async def test_integration_council_launch_bootstrap_and_guard_linkage(tmp_path):
         client.start_agent.assert_not_called()
 
     # B. Valid launch produces coordinator pane and verified bootstrap document
-    with patch(
-        "herdr_master.pipeline.launcher.resolve_herdr_context", return_value=ctx
-    ):
+    with patch("herdr_master.pipeline.launcher.resolve_herdr_context", return_value=ctx):
         result = await launch_council(
             client=client,
             intent="Architect resilient cross-region queue",
@@ -346,14 +321,17 @@ async def test_integration_council_launch_bootstrap_and_guard_linkage(tmp_path):
 
     # Verify coordinator was started and prompted with canonical bootstrap prompt
     coordinator_call = next(
-        c for c in client.start_agent.await_args_list if c.kwargs.get("name") == COUNCIL_COORDINATOR_NAME
+        c
+        for c in client.start_agent.await_args_list
+        if c.kwargs.get("name") == COUNCIL_COORDINATOR_NAME
     )
     assert coordinator_call.kwargs["pane_id"] == "w9:p2"
 
     client.prompt_agent.assert_awaited()
     # The prompt_agent call for coordinator delivers the bootstrap document
     prompt_args = [
-        c.args[1] for c in client.prompt_agent.await_args_list
+        c.args[1]
+        for c in client.prompt_agent.await_args_list
         if len(c.args) > 1 and "HERDR_MASTER_BOOTSTRAP_V1" in c.args[1]
     ]
     assert len(prompt_args) >= 1
@@ -383,7 +361,7 @@ async def test_integration_council_launch_bootstrap_and_guard_linkage(tmp_path):
 
 
 def test_integration_council_early_consensus_round_1(tmp_path):
-    """Verify early consensus in Round 1 stops cycles immediately and finalizes UNANIMOUS_CONSENSUS."""
+    """Early consensus in Round 1 stops cycles and finalizes UNANIMOUS_CONSENSUS."""
     run_dir = tmp_path / "council_consensus_run"
     context_file = tmp_path / "context.md"
     context_file.write_text("Discovered architecture: microservices with grpc.")
@@ -452,7 +430,7 @@ def test_integration_council_early_consensus_round_1(tmp_path):
 def test_integration_council_five_cycles_disagreement_and_deterministic_vote_tie_break(
     tmp_path,
 ):
-    """Verify 5 feedback cycles without consensus trigger 1-round vote with deterministic tie-break."""
+    """Five cycles without consensus trigger a vote with deterministic tie-break."""
     run_dir = tmp_path / "council_vote_run"
     context_file = tmp_path / "context.md"
     context_file.write_text("Context: high concurrency backend.")
@@ -479,7 +457,7 @@ def test_integration_council_five_cycles_disagreement_and_deterministic_vote_tie
         for mem in ("alpha", "beta", "gamma"):
             fb = tmp_path / f"fb_{mem}_r{r}.md"
             fb.write_text(f"Round {r} critique from {mem}")
-            prior_plan = f"{mem}_v{r-1}"
+            prior_plan = f"{mem}_v{r - 1}"
             submit_feedback(
                 run_dir=run_dir,
                 round_number=r,
@@ -494,9 +472,7 @@ def test_integration_council_five_cycles_disagreement_and_deterministic_vote_tie
         # Unified feedback and revisions
         uf = tmp_path / f"unified_r{r}.md"
         uf.write_text(f"Unified synthesis for round {r}")
-        submit_unified_feedback(
-            run_dir=run_dir, round_number=r, unified_feedback_file=uf
-        )
+        submit_unified_feedback(run_dir=run_dir, round_number=r, unified_feedback_file=uf)
 
         for mem in ("alpha", "beta", "gamma"):
             rev = tmp_path / f"rev_{mem}_r{r}.md"
@@ -510,27 +486,17 @@ def test_integration_council_five_cycles_disagreement_and_deterministic_vote_tie
             )
 
     # Hard Limit Invariant: Attempting round 6 must be rejected!
-    with pytest.raises(
-        CouncilValidationError, match="Maximum of 5 feedback cycles allowed"
-    ):
+    with pytest.raises(CouncilValidationError, match="Maximum of 5 feedback cycles allowed"):
         open_round(run_dir=run_dir, round_number=6)
 
     # Coordinator Neutrality Invariant: Coordinator cannot vote
     with pytest.raises(CouncilValidationError, match="Coordinator and Scout do not vote"):
-        submit_vote(
-            run_dir=run_dir, member_id="coordinator", voted_plan_id="alpha_v5"
-        )
+        submit_vote(run_dir=run_dir, member_id="coordinator", voted_plan_id="alpha_v5")
 
     # Fallback 1-round vote: 3-way split (1 vote for alpha, 1 for beta, 1 for gamma)
-    submit_vote(
-        run_dir=run_dir, member_id="alpha", voted_plan_id="alpha_v5"
-    )
-    submit_vote(
-        run_dir=run_dir, member_id="beta", voted_plan_id="beta_v5"
-    )
-    submit_vote(
-        run_dir=run_dir, member_id="gamma", voted_plan_id="gamma_v5"
-    )
+    submit_vote(run_dir=run_dir, member_id="alpha", voted_plan_id="alpha_v5")
+    submit_vote(run_dir=run_dir, member_id="beta", voted_plan_id="beta_v5")
+    submit_vote(run_dir=run_dir, member_id="gamma", voted_plan_id="gamma_v5")
 
     # Finalize: deterministic tie-break chooses 'alpha' because alpha is first in pinned roster
     final_res = finalize(run_dir=run_dir)
@@ -548,9 +514,7 @@ def test_integration_council_five_cycles_disagreement_and_deterministic_vote_tie
 
     # Mutation after finalization is sealed
     with pytest.raises(CouncilTransitionError, match="sealed"):
-        submit_vote(
-            run_dir=run_dir, member_id="alpha", voted_plan_id="beta_v5"
-        )
+        submit_vote(run_dir=run_dir, member_id="alpha", voted_plan_id="beta_v5")
 
     # Repeated finalize is idempotent
     repeat_res = finalize(run_dir=run_dir)
@@ -615,9 +579,7 @@ async def test_integration_aihead_discovery_and_cli_execution():
         )
         return reply_json, "", 0
 
-    reply = await execute_cli_decision(
-        head_config, request, runner=mock_decided_runner
-    )
+    reply = await execute_cli_decision(head_config, request, runner=mock_decided_runner)
     assert reply.is_decided is True
     assert reply.needs_user is False
     assert reply.decision == "UUIDv7"
@@ -636,9 +598,7 @@ async def test_integration_aihead_discovery_and_cli_execution():
         )
         return reply_json, "", 0
 
-    reply_esc = await execute_cli_decision(
-        head_config, request, runner=mock_ambiguous_runner
-    )
+    reply_esc = await execute_cli_decision(head_config, request, runner=mock_ambiguous_runner)
     assert reply_esc.is_decided is False
     assert reply_esc.needs_user is True
     assert "confirm truncating" in (reply_esc.question or "")
@@ -651,7 +611,7 @@ async def test_integration_aihead_discovery_and_cli_execution():
 
 
 def test_integration_cli_commands_aihead_and_state_gate_wiring():
-    """Verify CLI commands accept --ai-head/--no-ai-head and state gate subcommands execute cleanly."""
+    """Verify CLI commands accept AiHead flags and state gate subcommands execute cleanly."""
     # 1. aihead-cli --discover
     disc_res = runner.invoke(app, ["aihead-cli", "--discover"])
     assert disc_res.exit_code == 0
@@ -660,51 +620,39 @@ def test_integration_cli_commands_aihead_and_state_gate_wiring():
     assert "harness" in disc_data
 
     # 2. ergo, orchestration, council commands wire --ai-head flag
-    with patch(
-        "herdr_master.cli.main.launch_ergo", new_callable=AsyncMock
-    ) as m_ergo:
+    with patch("herdr_master.cli.main.launch_ergo", new_callable=AsyncMock) as m_ergo:
         m_ergo.return_value = {
             "session": "s",
             "workspace_id": "w",
             "pane_id": "p",
         }
-        res_ergo = runner.invoke(
-            app, ["ergo", "task", "--ai-head", "--no-attach"]
-        )
+        res_ergo = runner.invoke(app, ["ergo", "task", "--ai-head", "--no-attach"])
         assert res_ergo.exit_code == 0
         assert m_ergo.await_args.kwargs["ai_head"] is True
 
-    with patch(
-        "herdr_master.cli.main.launch_orchestration", new_callable=AsyncMock
-    ) as m_orch:
+    with patch("herdr_master.cli.main.launch_orchestration", new_callable=AsyncMock) as m_orch:
         m_orch.return_value = {
             "session": "s",
             "workspace_id": "w",
             "pane_id": "p",
         }
-        res_orch = runner.invoke(
-            app, ["orchestration", "task", "--no-ai-head", "--no-attach"]
-        )
+        res_orch = runner.invoke(app, ["orchestration", "task", "--no-ai-head", "--no-attach"])
         assert res_orch.exit_code == 0
         assert m_orch.await_args.kwargs["ai_head"] is False
 
-    with patch(
-        "herdr_master.cli.main.launch_council", new_callable=AsyncMock
-    ) as m_council:
+    with patch("herdr_master.cli.main.launch_council", new_callable=AsyncMock) as m_council:
         m_council.return_value = {
             "session": "s",
             "workspace_id": "w",
             "pane_id": "p",
         }
-        res_council = runner.invoke(
-            app, ["council", "task", "--ai-head", "--no-attach"]
-        )
+        res_council = runner.invoke(app, ["council", "task", "--ai-head", "--no-attach"])
         assert res_council.exit_code == 0
         assert m_council.await_args.kwargs["ai_head"] is True
 
 
 def test_integration_council_cli_documented_skill_commands_consensus_path(tmp_path: Path):
-    """Verify exact documented skill commands in skills/council/SKILL.md execute without errors for consensus path."""
+    """Verify documented council skill commands execute without errors for consensus."""
     run_dir = tmp_path / "council-run-consensus"
 
     # Step 1: Initialization & Scout Discovery
@@ -827,7 +775,7 @@ def test_integration_council_cli_documented_skill_commands_consensus_path(tmp_pa
 
 
 def test_integration_council_cli_documented_skill_commands_five_cycles_voting_path(tmp_path: Path):
-    """Verify exact documented skill commands execute without errors through 5 cycles and fallback vote."""
+    """Verify documented commands execute through 5 cycles and a fallback vote."""
     run_dir = tmp_path / "council-run-vote"
 
     # Step 1: Init & Scout Discovery

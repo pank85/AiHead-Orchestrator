@@ -2,8 +2,12 @@
 
 from __future__ import annotations
 
+import json
 import os
+import queue
 import subprocess
+import threading
+import time
 from concurrent.futures import ThreadPoolExecutor
 from dataclasses import dataclass, field
 from pathlib import Path
@@ -83,19 +87,23 @@ def _parse_opencode_models(stdout: str) -> List[ChoiceOption]:
 
 
 def _parse_kilo_models(stdout: str) -> List[ChoiceOption]:
-    return _parse_line_models(stdout, "kilo live")
+    return [
+        option
+        for option in _parse_line_models(stdout, "kilo live")
+        if "/" in option.value and not any(c.isspace() for c in option.value)
+    ]
 
 
 def _parse_pi_models(stdout: str) -> List[ChoiceOption]:
     options: List[ChoiceOption] = []
-    for idx, raw in enumerate(stdout.splitlines()):
+    for raw in stdout.splitlines():
         line = raw.strip()
         if not line:
             continue
         parts = line.split()
-        if idx == 0 and parts[0].lower() == "provider":
+        if parts[0].lower() == "provider":
             continue
-        if len(parts) < 2:
+        if len(parts) < 6 or parts[4].lower() not in ("yes", "no"):
             continue
         provider, model = parts[0], parts[1]
         # Catalog explicitly refuses litellm routes in favor of native providers.
@@ -146,6 +154,101 @@ def _run_probe(cmd: Sequence[str], timeout: float = _PROBE_TIMEOUT_SEC) -> Optio
     if proc.returncode != 0:
         return None
     return proc.stdout
+
+
+def _probe_codex_models(timeout: float = _PROBE_TIMEOUT_SEC) -> List[ChoiceOption]:
+    """Query the Codex app server, bounded by one deadline across all pages."""
+    deadline = time.monotonic() + timeout
+    try:
+        proc = subprocess.Popen(
+            ["codex", "app-server"],
+            stdin=subprocess.PIPE,
+            stdout=subprocess.PIPE,
+            stderr=subprocess.DEVNULL,
+            text=True,
+            encoding="utf-8",
+        )
+    except OSError:
+        return []
+
+    lines: queue.Queue[Optional[str]] = queue.Queue()
+
+    def read_lines() -> None:
+        try:
+            assert proc.stdout is not None
+            for line in proc.stdout:
+                lines.put(line)
+        except (OSError, UnicodeError, ValueError):
+            pass
+        finally:
+            lines.put(None)
+
+    threading.Thread(target=read_lines, daemon=True).start()
+    try:
+        assert proc.stdin is not None
+
+        def send(message: dict) -> None:
+            proc.stdin.write(json.dumps(message) + "\n")
+            proc.stdin.flush()
+
+        def response(request_id: int) -> dict:
+            while True:
+                remaining = deadline - time.monotonic()
+                if remaining <= 0:
+                    raise TimeoutError
+                line = lines.get(timeout=remaining)
+                if line is None:
+                    raise ValueError("Codex app server exited")
+                message = json.loads(line)
+                if not isinstance(message, dict):
+                    raise ValueError("Invalid Codex response")
+                if message.get("id") == request_id:
+                    result = message.get("result")
+                    if "error" in message or not isinstance(result, dict):
+                        raise ValueError("Codex request failed")
+                    return result
+
+        send(
+            {
+                "id": 1,
+                "method": "initialize",
+                "params": {"clientInfo": {"name": "herdr-master", "version": "1.0"}},
+            }
+        )
+        response(1)
+        send({"method": "initialized"})
+        options: List[ChoiceOption] = []
+        cursors: set[str] = set()
+        cursor: Optional[str] = None
+        request_id = 2
+        while True:
+            params = {"cursor": cursor} if cursor is not None else {}
+            send({"id": request_id, "method": "model/list", "params": params})
+            result = response(request_id)
+            data = result.get("data")
+            if not isinstance(data, list):
+                raise ValueError("Invalid Codex model list")
+            for model in data:
+                if isinstance(model, dict) and isinstance(model.get("model"), str):
+                    slug = model["model"].strip()
+                    if slug:
+                        options.append(ChoiceOption(value=slug, label=slug, detail="codex live"))
+            cursor = result.get("nextCursor")
+            if cursor is None:
+                return _dedupe_options(options)
+            if not isinstance(cursor, str) or not cursor or len(cursor) > 1024 or cursor in cursors:
+                raise ValueError("Invalid Codex pagination cursor")
+            cursors.add(cursor)
+            request_id += 1
+    except (OSError, ValueError, TypeError, queue.Empty, TimeoutError):
+        return []
+    finally:
+        proc.kill()
+        proc.wait()
+        if proc.stdin is not None:
+            proc.stdin.close()
+        if proc.stdout is not None:
+            proc.stdout.close()
 
 
 def _probe_hermes_config_models() -> List[ChoiceOption]:
@@ -233,8 +336,7 @@ def _catalog_herdr_models() -> Dict[str, List[ChoiceOption]]:
 def _catalog_native_models() -> Dict[str, List[ChoiceOption]]:
     by_kind: Dict[str, List[ChoiceOption]] = {
         "agy": [
-            ChoiceOption(value=tier, label=tier, detail="native agy tier ID")
-            for tier in _AGY_TIERS
+            ChoiceOption(value=tier, label=tier, detail="native agy tier ID") for tier in _AGY_TIERS
         ]
     }
     for kind, roles in DEFAULT_ORCHESTRATION_MODELS.items():
@@ -242,9 +344,7 @@ def _catalog_native_models() -> Dict[str, List[ChoiceOption]]:
             continue
         items = by_kind.setdefault(kind, [])
         for role, model in roles.items():
-            items.append(
-                ChoiceOption(value=model, label=model, detail=f"native {role} default")
-            )
+            items.append(ChoiceOption(value=model, label=model, detail=f"native {role} default"))
     for model in _CLAUDE_FALLBACK_MODELS:
         by_kind.setdefault("claude", []).append(
             ChoiceOption(value=model, label=model, detail="claude alias")
@@ -261,15 +361,20 @@ def _configured_models(
     def add_herdr(kind: str, model: Optional[str]) -> None:
         if model and model.strip():
             m = model.strip()
-            herdr.setdefault(kind, []).append(
-                ChoiceOption(value=m, label=m, detail="configured")
-            )
+            herdr.setdefault(kind, []).append(ChoiceOption(value=m, label=m, detail="configured"))
 
     if squad is not None:
         for binding in (squad.scout, squad.architect, squad.reviewer, *squad.worker_pool):
             add_herdr(binding.kind.value, binding.model)
 
     if cfg is not None:
+        if cfg.models.available is not None:
+            for mode, target in (("herdr", herdr), ("native", native)):
+                for kind, models in (getattr(cfg.models.available, mode) or {}).items():
+                    for model in models:
+                        target.setdefault(kind, []).append(
+                            ChoiceOption(value=model, label=model, detail="configured allowlist")
+                        )
         add_herdr(cfg.ai_head.binding.kind.value, cfg.ai_head.binding.model)
         if cfg.ergo and cfg.ergo.coordinator:
             add_herdr(cfg.ergo.coordinator.kind.value, cfg.ergo.coordinator.model)
@@ -335,9 +440,7 @@ class ModelCatalog:
             if not (mode_key == "native" and kind_key == "agy" and curr not in _AGY_TIERS):
                 if not (mode_key == "herdr" and kind_key == "agy" and curr in _AGY_TIERS):
                     if all(opt.value != curr for opt in items):
-                        items.insert(
-                            0, ChoiceOption(value=curr, label=curr, detail="current")
-                        )
+                        items.insert(0, ChoiceOption(value=curr, label=curr, detail="current"))
         return items
 
     def add_custom_model(
@@ -349,9 +452,7 @@ class ModelCatalog:
     ) -> None:
         """Add a custom model option to the specified harness and launch mode."""
         if not isinstance(model_id, str):
-            raise ValueError(
-                f"Model id must be a non-empty string, got {type(model_id).__name__}."
-            )
+            raise ValueError(f"Model id must be a non-empty string, got {type(model_id).__name__}.")
         cleaned = model_id.strip()
         if not cleaned:
             raise ValueError("Custom model ID must not be blank.")
@@ -379,9 +480,7 @@ class ModelCatalog:
             options.append(ChoiceOption(value=None, label="none", detail="unset / default"))
         for eff in allowed:
             phrase = effort_phrase(eff)
-            options.append(
-                ChoiceOption(value=eff, label=eff, detail=phrase or "")
-            )
+            options.append(ChoiceOption(value=eff, label=eff, detail=phrase or ""))
         return options
 
 
@@ -406,16 +505,18 @@ def discover_model_catalog(
 
     live_results: Dict[str, List[ChoiceOption]] = {}
     if probe_live:
-        with ThreadPoolExecutor(max_workers=4) as pool:
+        with ThreadPoolExecutor(max_workers=5) as pool:
             fut_oc = pool.submit(_run_probe, ["opencode", "models"])
             fut_pi = pool.submit(_run_probe, ["pi", "--list-models"])
             fut_agy = pool.submit(_run_probe, ["agy", "models"])
-            fut_kilo = pool.submit(_run_probe, ["kilo", "models"])
+            fut_kilo = pool.submit(_run_probe, ["kilo", "models"], 20.0)
+            fut_codex = pool.submit(_probe_codex_models)
 
             oc_out = fut_oc.result()
             pi_out = fut_pi.result()
             agy_out = fut_agy.result()
             kilo_out = fut_kilo.result()
+            codex_models = fut_codex.result()
 
         if oc_out:
             live_results["opencode"] = _parse_opencode_models(oc_out)
@@ -425,6 +526,8 @@ def discover_model_catalog(
             live_results["agy"] = _parse_agy_models(agy_out)
         if kilo_out:
             live_results["kilo"] = _parse_kilo_models(kilo_out)
+        if codex_models:
+            live_results["codex"] = codex_models
         hermes_cfg = _probe_hermes_config_models()
         if hermes_cfg:
             live_results["hermes"] = hermes_cfg

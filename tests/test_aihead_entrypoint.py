@@ -294,9 +294,7 @@ def test_creates_workspace_when_live_session_has_none(tmp_path: Path):
     client.get_snapshot = AsyncMock(
         return_value=SimpleNamespace(workspaces=[], focused_workspace_id=None)
     )
-    client.create_workspace = AsyncMock(
-        return_value={"workspace": {"workspace_id": "ws-created"}}
-    )
+    client.create_workspace = AsyncMock(return_value={"workspace": {"workspace_id": "ws-created"}})
     launch = AsyncMock(return_value=_launch_result("default", "ws-created"))
     with (
         patch("herdr_master.cli.main.resolve_launch_context", return_value=ctx),
@@ -637,15 +635,15 @@ def test_install_help_refers_to_canonical_skills_generically():
     assert "/herdr-master, /ergo, /orchestration, and /council" not in text
 
 
-def _permission_config(tmp_path: Path, *,
+def _permission_config(
+    tmp_path: Path,
+    *,
     skip: bool | None,
     effort: str | None = "high",
 ) -> Path:
     lines = ["[ai_head]", "enabled = true"]
     if skip is not None:
-        lines.append(
-            "dangerously_skip_permissions = " + ("true" if skip else "false")
-        )
+        lines.append("dangerously_skip_permissions = " + ("true" if skip else "false"))
     lines.extend(
         [
             "",
@@ -787,7 +785,7 @@ _SKILL_CLI_CASES = [
 def test_aihead_skill_cli_with_herdr_pane_id_env_passes_delegated_true(
     tmp_path: Path, monkeypatch, skill: str, flags: list[str], target_mock_name: str
 ):
-    """When HERDR_PANE_ID is set in environment, aihead --ergo/--council/--orchestration/--herdr-master
+    """When HERDR_PANE_ID is set, aihead --ergo/--council/--orchestration/--herdr-master
     delegates to the caller pane (delegated=True, parent_pane_id=HERDR_PANE_ID)."""
     caller_pane = "caller-env-pane-101"
     monkeypatch.setenv("HERDR_PANE_ID", caller_pane)
@@ -809,7 +807,9 @@ def test_aihead_skill_cli_with_herdr_pane_id_env_passes_delegated_true(
         patch("herdr_master.cli.main.launch_council", mocks["launch_council"]),
         patch("herdr_master.cli.main.launch_orchestration", mocks["launch_orchestration"]),
         patch("herdr_master.cli.main.launch_master", mocks["launch_master"]),
-        patch("herdr_master.cli.main._resolve_ergo_once", return_value=SimpleNamespace(squad=Squad())),
+        patch(
+            "herdr_master.cli.main._resolve_ergo_once", return_value=SimpleNamespace(squad=Squad())
+        ),
         patch("herdr_master.cli.main.resolve_ergo_coordinator", return_value=None),
         patch("herdr_master.cli.main.load_project_config", return_value=HerdrMasterConfig()),
         patch("herdr_master.cli.main._require_herdr_executable"),
@@ -851,7 +851,9 @@ def test_aihead_skill_cli_inside_herdr_with_ctx_pane_id_passes_delegated_true(
         patch("herdr_master.cli.main.launch_council", mocks["launch_council"]),
         patch("herdr_master.cli.main.launch_orchestration", mocks["launch_orchestration"]),
         patch("herdr_master.cli.main.launch_master", mocks["launch_master"]),
-        patch("herdr_master.cli.main._resolve_ergo_once", return_value=SimpleNamespace(squad=Squad())),
+        patch(
+            "herdr_master.cli.main._resolve_ergo_once", return_value=SimpleNamespace(squad=Squad())
+        ),
         patch("herdr_master.cli.main.resolve_ergo_coordinator", return_value=None),
         patch("herdr_master.cli.main.load_project_config", return_value=HerdrMasterConfig()),
         patch("herdr_master.cli.main._require_herdr_executable"),
@@ -892,7 +894,9 @@ def test_aihead_skill_cli_without_caller_pane_passes_delegated_false(
         patch("herdr_master.cli.main.launch_council", mocks["launch_council"]),
         patch("herdr_master.cli.main.launch_orchestration", mocks["launch_orchestration"]),
         patch("herdr_master.cli.main.launch_master", mocks["launch_master"]),
-        patch("herdr_master.cli.main._resolve_ergo_once", return_value=SimpleNamespace(squad=Squad())),
+        patch(
+            "herdr_master.cli.main._resolve_ergo_once", return_value=SimpleNamespace(squad=Squad())
+        ),
         patch("herdr_master.cli.main.resolve_ergo_coordinator", return_value=None),
         patch("herdr_master.cli.main.load_project_config", return_value=HerdrMasterConfig()),
         patch("herdr_master.cli.main._require_herdr_executable"),
@@ -933,7 +937,9 @@ def test_launch_skill_direct_delegation_behavior(
         patch("herdr_master.cli.main.resolve_launch_context", return_value=ctx_inside),
         patch("herdr_master.cli.main.HerdrClient", return_value=AsyncMock()),
         patch(f"herdr_master.cli.main.{target_mock_name}", mock_func_a),
-        patch("herdr_master.cli.main._resolve_ergo_once", return_value=SimpleNamespace(squad=Squad())),
+        patch(
+            "herdr_master.cli.main._resolve_ergo_once", return_value=SimpleNamespace(squad=Squad())
+        ),
         patch("herdr_master.cli.main.resolve_ergo_coordinator", return_value=None),
         patch("herdr_master.cli.main.load_project_config", return_value=HerdrMasterConfig()),
         patch("herdr_master.cli.main._require_herdr_executable"),
@@ -962,7 +968,9 @@ def test_launch_skill_direct_delegation_behavior(
         patch("herdr_master.cli.main.resolve_launch_context", return_value=ctx_outside),
         patch("herdr_master.cli.main.HerdrClient", return_value=AsyncMock()),
         patch(f"herdr_master.cli.main.{target_mock_name}", mock_func_b),
-        patch("herdr_master.cli.main._resolve_ergo_once", return_value=SimpleNamespace(squad=Squad())),
+        patch(
+            "herdr_master.cli.main._resolve_ergo_once", return_value=SimpleNamespace(squad=Squad())
+        ),
         patch("herdr_master.cli.main.resolve_ergo_coordinator", return_value=None),
         patch("herdr_master.cli.main.load_project_config", return_value=HerdrMasterConfig()),
         patch("herdr_master.cli.main._require_herdr_executable"),

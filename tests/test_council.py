@@ -1,12 +1,12 @@
 """Comprehensive test suite for AI Council protocol, state machine, and executable guard."""
 
 from pathlib import Path
+
 import pytest
 
 from herdr_master.core.config import CouncilConfig, CouncilMember, HarnessBinding
 from herdr_master.pipeline.council import (
     MAX_FEEDBACK_ROUNDS,
-    CouncilError,
     CouncilPhase,
     CouncilSecurityError,
     CouncilTransitionError,
@@ -69,7 +69,9 @@ def test_init_with_council_config(tmp_path: Path):
     """Verify initialization from a typed CouncilConfig object."""
     run_dir = tmp_path / "council_typed"
     config = CouncilConfig(
-        coordinator=HarnessBinding.from_slug("pi:openai-codex/gpt-6.1-sol:max", label="lead-architect"),
+        coordinator=HarnessBinding.from_slug(
+            "pi:openai-codex/gpt-6.1-sol:max", label="lead-architect"
+        ),
         scout=HarnessBinding.from_slug("agy:gemini-3.8-flash-medium:medium", label="code-scout"),
         members=[
             CouncilMember.from_slug("agy:gemini-3.8-flash", label="planner-1", order=0),
@@ -142,13 +144,19 @@ def test_early_consensus_round_2(tmp_path: Path):
 
     # Round 0
     open_round(run_dir, 0)
-    submit_initial_plan(run_dir, "alpha", _create_mock_file(tmp_path / "alpha_0.md", "Plan Alpha v0"))
+    submit_initial_plan(
+        run_dir, "alpha", _create_mock_file(tmp_path / "alpha_0.md", "Plan Alpha v0")
+    )
     submit_initial_plan(run_dir, "beta", _create_mock_file(tmp_path / "beta_0.md", "Plan Beta v0"))
 
     # Round 1: Disagreement
     open_round(run_dir, 1)
-    submit_feedback(run_dir, 1, "alpha", _create_mock_file(tmp_path / "a_fb.md"), supported_plan_id="alpha_v0")
-    submit_feedback(run_dir, 1, "beta", _create_mock_file(tmp_path / "b_fb.md"), supported_plan_id="beta_v0")
+    submit_feedback(
+        run_dir, 1, "alpha", _create_mock_file(tmp_path / "a_fb.md"), supported_plan_id="alpha_v0"
+    )
+    submit_feedback(
+        run_dir, 1, "beta", _create_mock_file(tmp_path / "b_fb.md"), supported_plan_id="beta_v0"
+    )
 
     cons1 = check_consensus(run_dir, 1)
     assert cons1["consensus"] is False
@@ -158,13 +166,21 @@ def test_early_consensus_round_2(tmp_path: Path):
     submit_unified_feedback(run_dir, 1, unified_1)
 
     # Members submit revised plans
-    submit_revised_plan(run_dir, 1, "alpha", _create_mock_file(tmp_path / "alpha_1.md", "Plan Alpha v1"))
-    submit_revised_plan(run_dir, 1, "beta", _create_mock_file(tmp_path / "beta_1.md", "Plan Beta v1"))
+    submit_revised_plan(
+        run_dir, 1, "alpha", _create_mock_file(tmp_path / "alpha_1.md", "Plan Alpha v1")
+    )
+    submit_revised_plan(
+        run_dir, 1, "beta", _create_mock_file(tmp_path / "beta_1.md", "Plan Beta v1")
+    )
 
     # Round 2: Consensus reached
     open_round(run_dir, 2)
-    submit_feedback(run_dir, 2, "alpha", _create_mock_file(tmp_path / "a2_fb.md"), supported_plan_id="beta_v1")
-    submit_feedback(run_dir, 2, "beta", _create_mock_file(tmp_path / "b2_fb.md"), supported_plan_id="beta_v1")
+    submit_feedback(
+        run_dir, 2, "alpha", _create_mock_file(tmp_path / "a2_fb.md"), supported_plan_id="beta_v1"
+    )
+    submit_feedback(
+        run_dir, 2, "beta", _create_mock_file(tmp_path / "b2_fb.md"), supported_plan_id="beta_v1"
+    )
 
     cons2 = check_consensus(run_dir, 2)
     assert cons2["consensus"] is True
@@ -193,9 +209,15 @@ def test_disagreement_through_5_cycles_then_fallback_vote(tmp_path: Path):
     for r in range(1, MAX_FEEDBACK_ROUNDS + 1):
         open_round(run_dir, r)
         prior = f"v{r - 1}"
-        submit_feedback(run_dir, r, "member-1", _create_mock_file(tmp_path / f"fb1_{r}.md"), f"member-1_{prior}")
-        submit_feedback(run_dir, r, "member-2", _create_mock_file(tmp_path / f"fb2_{r}.md"), f"member-2_{prior}")
-        submit_feedback(run_dir, r, "member-3", _create_mock_file(tmp_path / f"fb3_{r}.md"), f"member-2_{prior}")
+        submit_feedback(
+            run_dir, r, "member-1", _create_mock_file(tmp_path / f"fb1_{r}.md"), f"member-1_{prior}"
+        )
+        submit_feedback(
+            run_dir, r, "member-2", _create_mock_file(tmp_path / f"fb2_{r}.md"), f"member-2_{prior}"
+        )
+        submit_feedback(
+            run_dir, r, "member-3", _create_mock_file(tmp_path / f"fb3_{r}.md"), f"member-2_{prior}"
+        )
 
         cons = check_consensus(run_dir, r)
         assert cons["consensus"] is False
@@ -205,7 +227,12 @@ def test_disagreement_through_5_cycles_then_fallback_vote(tmp_path: Path):
         submit_unified_feedback(run_dir, r, unified)
         for m in ["member-1", "member-2", "member-3"]:
             # Test helper submit_plan as revised plan wrapper
-            submit_plan(run_dir, m, _create_mock_file(tmp_path / f"{m}_{r}.md", f"Plan {m} v{r}"), revision=r)
+            submit_plan(
+                run_dir,
+                m,
+                _create_mock_file(tmp_path / f"{m}_{r}.md", f"Plan {m} v{r}"),
+                revision=r,
+            )
 
     # Fallback voting after cycle 5
     # member-1 votes for member-2_v5
@@ -241,7 +268,9 @@ def test_round_6_refusal(tmp_path: Path):
     run_dir = tmp_path / "council_cap"
     init(run_dir=run_dir, roster=["alpha", "beta"])
 
-    with pytest.raises(CouncilValidationError, match="Maximum of 5 feedback cycles allowed. Round 6 is rejected."):
+    with pytest.raises(
+        CouncilValidationError, match="Maximum of 5 feedback cycles allowed. Round 6 is rejected."
+    ):
         open_round(run_dir, 6)
 
     with pytest.raises(CouncilValidationError, match="Maximum of 5 feedback cycles allowed"):
@@ -264,7 +293,9 @@ def test_tie_break_determinism(tmp_path: Path):
     for r in range(1, MAX_FEEDBACK_ROUNDS + 1):
         open_round(run_dir, r)
         for m in ["member-1", "member-2", "member-3"]:
-            submit_feedback(run_dir, r, m, _create_mock_file(tmp_path / f"fb_{m}_{r}.md"), f"{m}_v{r-1}")
+            submit_feedback(
+                run_dir, r, m, _create_mock_file(tmp_path / f"fb_{m}_{r}.md"), f"{m}_v{r - 1}"
+            )
         check_consensus(run_dir, r)
         submit_unified_feedback(run_dir, r, _create_mock_file(tmp_path / f"uni_{r}.md"))
         for m in ["member-1", "member-2", "member-3"]:
@@ -307,7 +338,13 @@ def test_stale_revisions_and_invalid_plan_references(tmp_path: Path):
 
     # Invalid supported plan candidate rejected
     with pytest.raises(CouncilValidationError, match="Invalid supported plan 'nonexistent_plan'"):
-        submit_feedback(run_dir, 1, "alpha", _create_mock_file(tmp_path / "fb.md"), supported_plan_id="nonexistent_plan")
+        submit_feedback(
+            run_dir,
+            1,
+            "alpha",
+            _create_mock_file(tmp_path / "fb.md"),
+            supported_plan_id="nonexistent_plan",
+        )
 
     fb_ok = _create_mock_file(tmp_path / "fb_ok.md")
     submit_feedback(run_dir, 1, "alpha", fb_ok, supported_plan_id="beta_v0")
@@ -356,11 +393,16 @@ def test_out_of_sequence_and_missing_prerequisites(tmp_path: Path):
         submit_revised_plan(run_dir, 1, "alpha", _create_mock_file(tmp_path / "rev.md"))
 
     # Voting prematurely (before round 5 finishes) rejected
-    with pytest.raises(CouncilTransitionError, match="Voting is only permitted after 5 feedback cycles"):
+    with pytest.raises(
+        CouncilTransitionError, match="Voting is only permitted after 5 feedback cycles"
+    ):
         submit_vote(run_dir, "alpha", "alpha_v0")
 
     # Finalizing before consensus or voting rejected
-    with pytest.raises(CouncilTransitionError, match="Deliberation must reach unanimous consensus or complete voting"):
+    with pytest.raises(
+        CouncilTransitionError,
+        match="Deliberation must reach unanimous consensus or complete voting",
+    ):
         finalize(run_dir)
 
 
@@ -376,8 +418,12 @@ def test_coordinator_and_scout_cannot_vote(tmp_path: Path):
 
     for r in range(1, MAX_FEEDBACK_ROUNDS + 1):
         open_round(run_dir, r)
-        submit_feedback(run_dir, r, "alpha", _create_mock_file(tmp_path / f"fa_{r}.md"), f"alpha_v{r-1}")
-        submit_feedback(run_dir, r, "beta", _create_mock_file(tmp_path / f"fb_{r}.md"), f"beta_v{r-1}")
+        submit_feedback(
+            run_dir, r, "alpha", _create_mock_file(tmp_path / f"fa_{r}.md"), f"alpha_v{r - 1}"
+        )
+        submit_feedback(
+            run_dir, r, "beta", _create_mock_file(tmp_path / f"fb_{r}.md"), f"beta_v{r - 1}"
+        )
         check_consensus(run_dir, r)
         submit_unified_feedback(run_dir, r, _create_mock_file(tmp_path / f"u_{r}.md"))
         submit_revised_plan(run_dir, r, "alpha", _create_mock_file(tmp_path / f"a_{r}.md"))

@@ -1,6 +1,5 @@
 """Comprehensive test suite for HerdrMaster settings configuration and safe persistence."""
 
-import os
 import sys
 import tempfile
 from pathlib import Path
@@ -14,24 +13,19 @@ else:
 import pytest
 from pydantic import ValidationError
 
-from herdr_master.core.catalog import CatalogError, HarnessKind
+from herdr_master.core.catalog import HarnessKind
 from herdr_master.core.config import (
     DEFAULT_AI_HEAD_SOUL,
-    DEFAULT_ORCHESTRATION_MODELS,
     AiHeadConfig,
-    default_ai_head_binding,
     CouncilConfig,
     CouncilMember,
     FavoriteProject,
-    GeneralConfig,
     HarnessOrchestrationSettings,
     HerdrMasterConfig,
-    ModelsConfig,
     OrchestrationConfig,
     ProjectFavorite,
     ProjectsConfig,
-    TUIConfig,
-    WorktreeConfig,
+    default_ai_head_binding,
     is_folder_available,
     load_project_config,
     resolve_effective_folder,
@@ -300,12 +294,8 @@ def test_council_config_members_may_share_model_but_not_identity():
     """Council members may use identical model bindings as long as identities are unique."""
     cfg = CouncilConfig(
         members=[
-            CouncilMember.from_slug(
-                "pi:openai-codex/gpt-6.1-sol:max", label="member-1"
-            ),
-            CouncilMember.from_slug(
-                "pi:openai-codex/gpt-6.1-sol:max", label="member-2"
-            ),
+            CouncilMember.from_slug("pi:openai-codex/gpt-6.1-sol:max", label="member-1"),
+            CouncilMember.from_slug("pi:openai-codex/gpt-6.1-sol:max", label="member-2"),
         ]
     )
     assert len(cfg.members) == 2
@@ -322,9 +312,7 @@ def test_council_invalid_roster_minimum_members():
     # 1 member
     with pytest.raises(ValidationError, match="at least 2 enabled members"):
         CouncilConfig(
-            members=[
-                CouncilMember.from_slug("pi:openai-codex/gpt-6.1-sol:max", label="solo")
-            ]
+            members=[CouncilMember.from_slug("pi:openai-codex/gpt-6.1-sol:max", label="solo")]
         )
 
     # 2 members, but one is disabled (1 enabled)
@@ -334,9 +322,7 @@ def test_council_invalid_roster_minimum_members():
                 CouncilMember.from_slug(
                     "pi:openai-codex/gpt-6.1-sol:max", label="m1", enabled=True
                 ),
-                CouncilMember.from_slug(
-                    "pi:xai/grok-4.7:high", label="m2", enabled=False
-                ),
+                CouncilMember.from_slug("pi:xai/grok-4.7:high", label="m2", enabled=False),
             ]
         )
 
@@ -347,9 +333,7 @@ def test_council_invalid_roster_duplicate_or_blank_identities():
     with pytest.raises(ValidationError, match="Duplicate Council member identity"):
         CouncilConfig(
             members=[
-                CouncilMember.from_slug(
-                    "pi:openai-codex/gpt-6.1-sol:max", label="lead"
-                ),
+                CouncilMember.from_slug("pi:openai-codex/gpt-6.1-sol:max", label="lead"),
                 CouncilMember.from_slug("pi:xai/grok-4.7:high", label="LEAD"),
             ]
         )
@@ -525,7 +509,7 @@ def test_malformed_file_raises_and_is_not_rewritten(tmp_path):
 
     # Syntax error
     config_file.write_text("this is completely invalid [[ TOML", encoding="utf-8")
-    with pytest.raises(Exception):
+    with pytest.raises(tomllib.TOMLDecodeError):
         load_project_config(config_file)
 
     # Schema error (e.g. invalid council members)
@@ -717,7 +701,7 @@ def test_orchestration_backward_compat_flat_keys():
 
 
 def test_orchestration_switch_harness_preserves_settings():
-    """switch_harness swaps active fields while preserving in-memory settings for other harnesses."""
+    """switch_harness swaps active fields while preserving other harness settings."""
     cfg = OrchestrationConfig(harness=HarnessKind.AGY)
     cfg.scout_model = "flash_lite_custom"
     cfg.architect_effort = "high"
@@ -870,9 +854,7 @@ def test_ai_head_legacy_flat_inputs_and_effort_consumption():
     assert not cfg_none.__pydantic_extra__ or "effort" not in cfg_none.__pydantic_extra__
 
     # 4. Mixed legacy input with explicit None
-    cfg_mixed_none = AiHeadConfig(
-        harness="pi", model="openai-codex/gpt-6.1-sol", effort=None
-    )
+    cfg_mixed_none = AiHeadConfig(harness="pi", model="openai-codex/gpt-6.1-sol", effort=None)
     assert cfg_mixed_none.effort is None
     assert cfg_mixed_none.binding.effort is None
 
@@ -882,9 +864,7 @@ def test_ai_head_legacy_flat_inputs_and_effort_consumption():
     assert cfg_missing.binding.effort == base.effort
 
     # 6. Authoritative explicit binding preserved
-    explicit_b = HarnessBinding(
-        kind=HarnessKind.PI, model="openai-codex/gpt-6.1-sol", effort=None
-    )
+    explicit_b = HarnessBinding(kind=HarnessKind.PI, model="openai-codex/gpt-6.1-sol", effort=None)
     cfg_explicit = AiHeadConfig(binding=explicit_b)
     assert cfg_explicit.effort is None
     assert cfg_explicit.binding.effort is None
@@ -1005,9 +985,7 @@ def test_ergo_coordinator_roundtrip_and_absent_default(tmp_path):
     assert HerdrMasterConfig().ergo is None
 
     config_file = tmp_path / ".herdr-master.toml"
-    config_file.write_text(
-        '[ergo]\ncoordinator = "pi:openai/gpt-6.1-sol:high"\n', encoding="utf-8"
-    )
+    config_file.write_text('[ergo]\ncoordinator = "pi:openai/gpt-6.1-sol:high"\n', encoding="utf-8")
     cfg = load_project_config(config_file)
     assert cfg.ergo is not None
     assert cfg.ergo.coordinator is not None

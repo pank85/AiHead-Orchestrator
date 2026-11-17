@@ -1,12 +1,16 @@
 """Offline Codex and Kilo contracts verified against CLI `--help` (no model calls)."""
 
+import subprocess
+import sys
+import time
 from unittest.mock import AsyncMock, patch
 
 import pytest
 from typer.testing import CliRunner
 
+from herdr_master.cli import setup_catalog
 from herdr_master.cli.main import app
-from herdr_master.cli.setup_catalog import discover_model_catalog
+from herdr_master.cli.setup_catalog import ChoiceOption, discover_model_catalog
 from herdr_master.core.catalog import (
     CatalogError,
     build_agent_args,
@@ -155,3 +159,85 @@ def test_setup_catalog_includes_codex_and_kilo():
     assert "kilo" in herdr_values
     assert [opt.value for opt in catalog.models("codex", mode="herdr")]
     assert [opt.value for opt in catalog.models("kilo", mode="herdr")]
+
+
+def test_codex_live_probe_paginates_and_cleans_up(monkeypatch):
+    script = """
+import json, sys
+def receive(): return json.loads(sys.stdin.readline())
+def send(value): print(json.dumps(value), flush=True)
+assert receive()["method"] == "initialize"
+send({"id": 1, "result": {}})
+assert receive()["method"] == "initialized"
+request = receive()
+assert request["method"] == "model/list" and request["params"] == {}
+send({"method": "notice", "params": {}})
+send({"id": request["id"], "result": {"data": [{"model": "live-one"}], "nextCursor": "next"}})
+request = receive()
+assert request["params"] == {"cursor": "next"}
+send({"id": request["id"], "result": {
+    "data": [{"model": "live-two"}, {"model": "live-one"}], "nextCursor": None}})
+sys.stdin.read()
+"""
+    real_popen = subprocess.Popen
+    processes = []
+
+    def spawn(*args, **kwargs):
+        proc = real_popen([sys.executable, "-u", "-c", script], **kwargs)
+        processes.append(proc)
+        return proc
+
+    monkeypatch.setattr(setup_catalog.subprocess, "Popen", spawn)
+    assert [option.value for option in setup_catalog._probe_codex_models()] == [
+        "live-one",
+        "live-two",
+    ]
+    assert processes[0].poll() is not None
+
+
+@pytest.mark.parametrize(
+    "script",
+    [
+        "import time; time.sleep(10)",
+        "print('not json', flush=True)",
+        "import json; print(json.dumps({'id': 1, 'error': {'message': 'failed'}}), flush=True)",
+    ],
+)
+def test_codex_live_probe_failures_are_bounded(monkeypatch, script):
+    real_popen = subprocess.Popen
+    processes = []
+
+    def spawn(*args, **kwargs):
+        proc = real_popen([sys.executable, "-u", "-c", script], **kwargs)
+        processes.append(proc)
+        return proc
+
+    monkeypatch.setattr(setup_catalog.subprocess, "Popen", spawn)
+    start = time.monotonic()
+    assert setup_catalog._probe_codex_models(timeout=0.3) == []
+    assert time.monotonic() - start < 2
+    assert processes[0].poll() is not None
+
+
+def test_codex_live_probe_missing_binary(monkeypatch):
+    def missing(*args, **kwargs):
+        raise FileNotFoundError
+
+    monkeypatch.setattr(setup_catalog.subprocess, "Popen", missing)
+    assert setup_catalog._probe_codex_models() == []
+
+
+def test_codex_live_models_are_in_catalog(monkeypatch):
+    monkeypatch.setattr(setup_catalog, "_run_probe", lambda *args: None)
+    monkeypatch.setattr(setup_catalog, "_probe_hermes_config_models", lambda: [])
+    monkeypatch.setattr(
+        setup_catalog,
+        "_probe_codex_models",
+        lambda: [
+            ChoiceOption(value="codex-live-test", label="codex-live-test", detail="codex live")
+        ],
+    )
+    catalog = discover_model_catalog()
+    assert catalog.live_counts["codex"] == 1
+    assert "codex-live-test" in [option.value for option in catalog.models("codex")]
+    assert "gpt-5.4" in [option.value for option in catalog.models("codex")]

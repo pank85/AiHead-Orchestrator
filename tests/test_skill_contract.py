@@ -305,6 +305,7 @@ def test_orchestration_skill_is_herdr_free_and_keeps_every_gate():
 
     # Precisely assert that any 'herdr agent' command is strictly a parent notification prompt
     import re
+
     prompt_targets = re.findall(r"herdr agent prompt\s+([^\s\"]+|\"[^\"]+\")", body)
     assert prompt_targets, "Expected delegated parent prompt notification"
     allowed_parent_targets = {'"$HERDR_PARENT_PANE_ID"'}
@@ -321,7 +322,14 @@ def test_orchestration_skill_is_herdr_free_and_keeps_every_gate():
     )
 
     # Negative assertions: ensure no arbitrary agent target, raw placeholder, or pane target exists
-    for bad_target in ('"$HERDR_PANE_ID"', '<child', '$child', '<worker', '<target>', '<PARENT_PANE_ID>'):
+    for bad_target in (
+        '"$HERDR_PANE_ID"',
+        "<child",
+        "$child",
+        "<worker",
+        "<target>",
+        "<PARENT_PANE_ID>",
+    ):
         assert f"herdr agent prompt {bad_target}" not in body, (
             f"Forbidden non-parent target in /orchestration: {bad_target}"
         )
@@ -356,7 +364,9 @@ def test_orchestration_can_run_as_a_delegated_job():
 
 def test_delegated_report_preserves_actual_results():
     body = load_skill_body("orchestration")
-    report = body.split("## 9. Report & Hierarchical Parent Notification", 1)[1].split("## Hard Rules", 1)[0]
+    report = body.split("## 9. Report & Hierarchical Parent Notification", 1)[1].split(
+        "## Hard Rules", 1
+    )[0]
     assert "actual assigned branch" in report
     assert "commit SHA (or say no commit was made)" in report
     assert "actual Reviewer verdict" in report
@@ -424,7 +434,10 @@ def test_council_skill_contract():
     assert "correlated requests" in body.lower() or "correlation id" in body.lower()
     assert "structured decision" in body.lower()
     assert "delegated scope" in body.lower()
-    assert "Destructive operations, security bypasses, or out-of-scope actions always require explicit user approval" in body
+    assert (
+        "Destructive operations, security bypasses, or out-of-scope actions always require "
+        "explicit user approval" in body
+    )
 
 
 def test_ergo_skill_ai_head_section():
@@ -440,7 +453,10 @@ def test_ergo_skill_ai_head_section():
     assert "correlation ID" in body
     assert "structured artifact" in body
     assert "delegated scope" in body.lower()
-    assert "Destructive operations, security bypasses, or out-of-scope actions always require explicit user approval" in body
+    assert (
+        "Destructive operations, security bypasses, or out-of-scope actions always require "
+        "explicit user approval" in body
+    )
 
 
 def test_orchestration_skill_ai_head_section():
@@ -455,7 +471,10 @@ def test_orchestration_skill_ai_head_section():
     assert "decision-only advisor" in body
     assert "CLI Mode (100% Herdr-free)" in body
     assert "correlation ID" in body
-    assert "Destructive operations, security bypasses, or out-of-scope actions always require explicit user approval" in body
+    assert (
+        "Destructive operations, security bypasses, or out-of-scope actions always require "
+        "explicit user approval" in body
+    )
 
     # Verify no Herdr surface was introduced in AiHead section
     for forbidden in (
@@ -510,10 +529,12 @@ def test_aihead_skill_contract():
 def test_aihead_delegation_limits_same_session_subagents_to_path_selection():
     body = load_skill_body("aihead")
     assert (
-        "Same-session asynchronous background subagents may only evaluate which skill to use" in body
+        "Same-session asynchronous background subagents may only evaluate which skill to use"
+        in body
     )
     assert (
-        "they must not edit files, do the job, execute the task, monitor children, or perform other delegated work" in body
+        "they must not edit files, do the job, execute the task, monitor children, "
+        "or perform other delegated work" in body
     )
     assert "launch its work in a new background Herdr pane" in body
     assert "Small tasks may also use `/orchestration` when appropriate" in body
@@ -542,11 +563,18 @@ def test_job_workspace_and_question_tab_contract():
         assert "User ack/reply for Update tab <tab-id>" in body
         assert "Update tab is interactive and stays open waiting for the user to see it" in body
         assert "does NOT auto-close it immediately upon verification" in body
-        assert "if the user only acknowledged (such as 'ok', 'ack', or 'thanks'), the coordinator closes that Update tab" in body
+        assert (
+            "if the user only acknowledged (such as 'ok', 'ack', or 'thanks'), "
+            "the coordinator closes that Update tab" in body
+        )
         assert "For an update, do not ask for a reply and do not wait." not in body
         assert "An Update tab does not wait for a reply." not in body
         assert "leave Update tabs open" not in body
         assert "job workspace" in body and "never in" in body
+        assert "effective project Scout" in body
+        assert "`none`" in body
+        assert "gemini-3.8-flash-medium" in body
+        assert "do not copy the coordinator binding" in body.lower()
 
     master = load_skill_body("herdr-master")
     assert "adopt that workspace directly" in master
@@ -592,10 +620,9 @@ def test_pane_lifecycle_and_unmerged_ownership_contract_all_skills():
         # Children registry: one small file, parent-owned, with stable fields
         assert "RUN_DIR/children.tsv" in body, skill
         assert "Only the parent writes it" in body, skill
-        assert (
-            "Remove a row only after that child is closed and its work is integrated"
-            in body
-        ), skill
+        assert "Remove a row only after that child is closed and its work is integrated" in body, (
+            skill
+        )
         assert "Open and close update the list" in body, skill
         for field in registry_fields:
             assert f"`{field}`" in body, (skill, field)
@@ -614,10 +641,10 @@ def test_pane_lifecycle_and_unmerged_ownership_contract_all_skills():
         assert "removes the child worktrees with `git worktree remove`" in body, skill
         assert "deletes the temporary branches with `git branch -D`" in body, skill
         assert "no dangling branches or worktrees" in body, skill
+        assert "no unmerged, unowned or ambiguous content would be lost" in body, skill
         assert (
-            "no unmerged, unowned or ambiguous content would be lost" in body
+            "preserve it and report the blocker to the direct parent instead of deleting" in body
         ), skill
-        assert "preserve it and report the blocker to the direct parent instead of deleting" in body, skill
 
     # Herdr-based parents run the 10-minute monitor and register it like a child
     for skill in ("aihead", "herdr-master", "ergo", "council"):
@@ -653,12 +680,20 @@ def test_aihead_initial_parent_directive_has_workflow_specific_completion():
     directive = body.split("  AiHead Parent Directive:\n", 1)[1].split("  ```", 1)[0]
 
     assert "herdr agent prompt $HERDR_PANE_ID" in directive
-    assert "For an implementation pipeline, upon completion of the assigned branch commit and review" in directive
+    assert (
+        "For an implementation pipeline, upon completion of the assigned branch commit and review"
+        in directive
+    )
     assert "report the commit, review, and actual verification" in directive
-    assert "For plan-only Council, upon finalization report the outcome and RUN_DIR/final_plan.md" in directive
+    assert (
+        "For plan-only Council, upon finalization report the outcome and RUN_DIR/final_plan.md"
+        in directive
+    )
     assert "do not wait for or make an implementation commit" in directive
     assert "If either workflow is blocked, report the blocker immediately" in directive
-    assert "Upon completion of the assigned branch commit and review (or if blocked)" not in directive
+    assert (
+        "Upon completion of the assigned branch commit and review (or if blocked)" not in directive
+    )
 
 
 def test_no_obsolete_dotfiles_or_hardcoded_paths():
@@ -693,7 +728,10 @@ def test_canonical_skills_hermes_support():
     aihead_body = load_skill_body("aihead")
     assert "aihead --harness hermes" in aihead_body
     assert "--provider openai-codex --model gpt-6.1-terra --reasoning high" in aihead_body
-    assert "Hermes has no catalog native-subagent adapter or direct headless AiHead runner" in aihead_body
+    assert (
+        "Hermes has no catalog native-subagent adapter or direct headless AiHead runner"
+        in aihead_body
+    )
     assert "--yolo" in aihead_body
     assert "--no-skip-permissions" in aihead_body
     assert 'aihead --orchestration "<intent>"' in aihead_body
@@ -703,7 +741,7 @@ def test_canonical_skills_hermes_support():
     hm_body = load_skill_body("herdr-master")
     assert "--kind hermes" in hm_body
     assert "supports_native=False" in hm_body
-    assert "terminal(command=\"herdr agent wait <target> --timeout <ms>\"" in hm_body
+    assert 'terminal(command="herdr agent wait <target> --timeout <ms>"' in hm_body
     assert "delegate_task" in hm_body
     assert "--reasoning" in hm_body
     assert "--yolo" in hm_body
@@ -745,7 +783,6 @@ def test_canonical_skills_hermes_support():
     assert "NEVER alter, rename, or delete user skills without explicit permission" in aihead_body
 
 
-
 def test_delegated_shared_session_parent_contract():
     """Static prose contracts; these do not prove runtime sender identity."""
     import re
@@ -758,7 +795,9 @@ def test_delegated_shared_session_parent_contract():
         assert "dispatching parent's own pane ID" in body
         assert "never its grandparent" in body
         assert "no-integration/no-cleanup restrictions" in body
-        assert "Only a genuinely standalone invocation may use standalone routing or landing" in body
+        assert (
+            "Only a genuinely standalone invocation may use standalone routing or landing" in body
+        )
         assert "A changed plan requires fresh approval" in body
         assert "no Coder starts before approval" in body
         assert "Destructive operations, security bypasses, and out-of-scope actions" in body
@@ -786,7 +825,7 @@ def test_delegated_shared_session_parent_contract():
 
 
 def test_strict_one_level_up_hierarchy_and_nonblocking_contract():
-    """Verify all 5 skills enforce non-blocking parents, both decision+completion notifications, and strict 1-level-up hierarchy."""
+    """Verify all 5 skills enforce non-blocking parents, notifications, and hierarchy."""
     aihead = load_skill_body("aihead")
     master = load_skill_body("herdr-master")
     ergo = load_skill_body("ergo")
@@ -814,7 +853,7 @@ def test_strict_one_level_up_hierarchy_and_nonblocking_contract():
     assert 'herdr agent prompt <ORCHESTRATOR_PANE_ID> "Reviewer blocked/decision needed:' in ergo
     assert "NEVER AiHead" in ergo
 
-    # Council Level 3 (Scout & Members) notify ONLY COORDINATOR_PANE_ID; Level 2 notifies HERDR_PARENT_PANE_ID
+    # Council Level 3 notifies only COORDINATOR_PANE_ID; Level 2 notifies HERDR_PARENT_PANE_ID.
     assert "COORDINATOR_PANE_ID" in council
     assert "herdr agent prompt <COORDINATOR_PANE_ID>" in council
     assert 'herdr agent prompt "$HERDR_PARENT_PANE_ID" "Council deliberation finished:' in council
@@ -846,10 +885,13 @@ def test_hermes_skill_discovery_production_lookup_in_sandbox(tmp_path):
     python = os.environ.get("HERMES_TEST_PYTHON")
     workspace = os.environ.get("HERMES_TEST_WORKSPACE")
     if not python and not workspace:
-        pytest.skip("Optional production discovery not run: set HERMES_TEST_PYTHON and HERMES_TEST_WORKSPACE")
+        pytest.skip(
+            "Optional production discovery not run: set HERMES_TEST_PYTHON and "
+            "HERMES_TEST_WORKSPACE"
+        )
     assert python and workspace, "Both HERMES_TEST_PYTHON and HERMES_TEST_WORKSPACE are required"
     assert Path(python).is_absolute() and Path(workspace).is_absolute()
-    script = r'''
+    script = r"""
 import sys
 import socket
 from pathlib import Path
@@ -883,12 +925,22 @@ for text in ('---\n"name": ergo\ndescription: user\n---\n',
     quoted.write_text(text, encoding="utf-8")
     found = _collect_skill_candidates("ergo", None, [root])
     assert {item[1] for item in found} == {canonical / "SKILL.md", quoted}
-'''
-    env = {"HOME": str(tmp_path), "HERMES_HOME": str(tmp_path / "hermes"),
-           "TMPDIR": str(tmp_path), "PYTHONDONTWRITEBYTECODE": "1",
-           "PATH": os.defpath}
-    result = subprocess.run([python, "-B", "-I", "-c", script, workspace, str(tmp_path)],
-                            cwd=tmp_path, env=env, capture_output=True, text=True, timeout=60)
+"""
+    env = {
+        "HOME": str(tmp_path),
+        "HERMES_HOME": str(tmp_path / "hermes"),
+        "TMPDIR": str(tmp_path),
+        "PYTHONDONTWRITEBYTECODE": "1",
+        "PATH": os.defpath,
+    }
+    result = subprocess.run(
+        [python, "-B", "-I", "-c", script, workspace, str(tmp_path)],
+        cwd=tmp_path,
+        env=env,
+        capture_output=True,
+        text=True,
+        timeout=60,
+    )
     assert result.returncode == 0, result.stdout + result.stderr
 
 
@@ -909,6 +961,6 @@ def test_ergo_and_aihead_readme_command_and_models_grammar():
     assert 'aihead orchestration "<intent>"' in aihead_readme
 
     # Ensure obsolete equal syntax is absent in both READMEs
-    for bad in ('scout=agy', 'architect=pi', 'workers=agy', 'reviewer=pi'):
+    for bad in ("scout=agy", "architect=pi", "workers=agy", "reviewer=pi"):
         assert bad not in ergo_readme
         assert bad not in aihead_readme

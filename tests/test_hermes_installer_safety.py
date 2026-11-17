@@ -13,8 +13,10 @@ from herdr_master.core.skill_resources import get_skill_source
 
 def targets(home: Path):
     all_targets = get_skill_targets(home=home)
-    return {name: [loc for loc in locations if loc.harness == "Hermes (hermes)"]
-            for name, locations in all_targets.items()}
+    return {
+        name: [loc for loc in locations if loc.harness == "Hermes (hermes)"]
+        for name, locations in all_targets.items()
+    }
 
 
 def invoke(home: Path, command: list[str]):
@@ -53,7 +55,11 @@ def test_unowned_target_survives(tmp_path: Path, command, kind):
 def test_nested_collision_prevents_install(tmp_path: Path, candidate):
     home = tmp_path / "home"
     root = home / ".hermes/skills"
-    path = {"nested": root / "group/ergo/SKILL.md", "declared": root / "group/other/SKILL.md", "flat": root / "group/ergo.md"}[candidate]
+    path = {
+        "nested": root / "group/ergo/SKILL.md",
+        "declared": root / "group/other/SKILL.md",
+        "flat": root / "group/ergo.md",
+    }[candidate]
     path.parent.mkdir(parents=True)
     path.write_text("---\nname: ergo\ndescription: user\n---\nuser content\n")
     result = invoke(home, ["skills", "install"])
@@ -67,22 +73,27 @@ def test_clean_install_and_reinstall(tmp_path: Path):
     for command in (["skills", "install"], ["install"]):
         result = invoke(home, command)
         assert result.exit_code == 0, result.output
-        assert "active profiles, project and external roots are not checked" in " ".join(result.output.split())
+        assert "active profiles, project and external roots are not checked" in " ".join(
+            result.output.split()
+        )
         for name, locations in targets(home).items():
             assert locations[0].path.is_symlink()
             assert locations[0].path.resolve() == get_skill_source(name).resolve()
 
 
 @pytest.mark.parametrize("command", [["install"], ["skills", "install"]])
-@pytest.mark.parametrize("content", [
-    '---\n"name": ergo\ndescription: user\n---\n',
-    "\ufeff---\n'name': ergo\ndescription: user\n---\n",
-    '---\n"na\\u006de": ergo\n---\n',
-    '---\n<<: *alias\n---\n',
-    '---\nname: [ergo\n---\n',
-    '---\ndescription: missing close\n',
-    '---\nname: other\nname: ergo\n---\n',
-])
+@pytest.mark.parametrize(
+    "content",
+    [
+        '---\n"name": ergo\ndescription: user\n---\n',
+        "\ufeff---\n'name': ergo\ndescription: user\n---\n",
+        '---\n"na\\u006de": ergo\n---\n',
+        "---\n<<: *alias\n---\n",
+        "---\nname: [ergo\n---\n",
+        "---\ndescription: missing close\n",
+        "---\nname: other\nname: ergo\n---\n",
+    ],
+)
 def test_metadata_collision_or_unsupported_fails_closed(tmp_path: Path, command, content):
     home = tmp_path / "home"
     candidate = home / ".hermes/skills/group/other/SKILL.md"
@@ -112,10 +123,13 @@ def test_realistic_nested_frontmatter_and_aliases_install(tmp_path: Path, comman
     assert (home / ".hermes/skills/ergo/SKILL.md").is_symlink()
 
 
-@pytest.mark.parametrize("content", [
-    "---\ndefaults: &defaults {name: ergo}\n<<: *defaults\n---\n",
-    "---\nalias_value: &alias ergo\nname: *alias\n---\n",
-])
+@pytest.mark.parametrize(
+    "content",
+    [
+        "---\ndefaults: &defaults {name: ergo}\n<<: *defaults\n---\n",
+        "---\nalias_value: &alias ergo\nname: *alias\n---\n",
+    ],
+)
 def test_alias_and_merge_names_are_detected(tmp_path: Path, content):
     home = tmp_path / "home"
     candidate = home / ".hermes/skills/group/other/SKILL.md"
@@ -126,14 +140,17 @@ def test_alias_and_merge_names_are_detected(tmp_path: Path, content):
     assert not (home / ".hermes/skills/ergo/SKILL.md").exists()
 
 
-@pytest.mark.parametrize("content", [
-    "---\nname: [ergo, council]\n---\n",
-    "---\nname: true\n---\n",
-    "---\nname: ' ergo '\n---\n",
-    "---\nmetadata: {a: 1, a: 2}\n---\n",
-    "---\nname: !!python/object:builtins.object {}\n---\n",
-    "---\nname: *undefined\n---\n",
-])
+@pytest.mark.parametrize(
+    "content",
+    [
+        "---\nname: [ergo, council]\n---\n",
+        "---\nname: true\n---\n",
+        "---\nname: ' ergo '\n---\n",
+        "---\nmetadata: {a: 1, a: 2}\n---\n",
+        "---\nname: !!python/object:builtins.object {}\n---\n",
+        "---\nname: *undefined\n---\n",
+    ],
+)
 def test_unsafe_or_ambiguous_yaml_blocks_all_installation(tmp_path: Path, content):
     home = tmp_path / "home"
     candidate = home / ".hermes/skills/group/other/SKILL.md"

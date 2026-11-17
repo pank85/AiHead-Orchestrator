@@ -1,4 +1,4 @@
-"""Comprehensive unit and integration tests for AiHead interactive terminal sessions & pane swapping.
+"""Unit and integration tests for AiHead interactive sessions and pane swapping.
 
 Covers:
 1. HerdrClient pane methods (split_pane, swap_panes, current_pane, get_pane_layout):
@@ -17,7 +17,8 @@ Covers:
    - Decision heuristics and safety guardrails.
    - Initial task section vs default greeting/readiness section.
 4. launch_ai_head:
-   - Inside Herdr split layout: current_pane -> split_pane -> swap_panes -> focus_pane -> prompt_agent.
+   - Inside Herdr split layout: current_pane -> split_pane -> swap_panes -> focus_pane
+     -> prompt_agent.
    - Inside Herdr split=False: standalone allocation, no split/swap.
    - Standalone workspace allocation.
    - Binding overrides (harness, model, effort).
@@ -30,11 +31,10 @@ Covers:
 import asyncio
 import inspect
 import json
-import os
 import tempfile
 from pathlib import Path
 from types import SimpleNamespace
-from typing import Any, Dict, List, Optional
+from typing import Any, List, Optional
 from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
@@ -45,14 +45,12 @@ from herdr_master.cli.main import app
 from herdr_master.core.config import (
     DEFAULT_AI_HEAD_SOUL,
     AiHeadConfig,
-    HerdrMasterConfig,
     load_project_config,
-    save_project_config,
 )
 from herdr_master.core.context import HerdrContext
-from herdr_master.core.models import EffortLevel, HarnessBinding, HarnessKind
+from herdr_master.core.models import EffortLevel, HarnessKind
 from herdr_master.herdr.client import HerdrClient
-from herdr_master.herdr.socket import HerdrConnectionError, HerdrRPCError
+from herdr_master.herdr.socket import HerdrRPCError
 from herdr_master.pipeline.ai_head import build_interactive_ai_head_prompt
 from herdr_master.pipeline.launcher import (
     _Allocated,
@@ -185,7 +183,7 @@ async def test_client_get_pane_layout_framing():
 
 @pytest.mark.asyncio
 async def test_client_pane_methods_unix_socket_roundtrip_and_errors():
-    """Integration test: real Unix domain socket server verifying Protocol 22 framing & error envelopes."""
+    """Verify Protocol 22 framing and errors with a real Unix socket server."""
     with tempfile.TemporaryDirectory() as tmpdir:
         sock_path = Path(tmpdir) / "test_herdr.sock"
 
@@ -413,7 +411,7 @@ def test_ai_head_config_split_invalid_rejected():
 
 
 def test_build_interactive_ai_head_prompt_defaults():
-    """Interactive prompt should contain default soul, workflows, heuristics, and safety guardrails."""
+    """Interactive prompt contains default soul, workflows, heuristics, and guardrails."""
     prompt = build_interactive_ai_head_prompt()
 
     # Persona & Soul
@@ -455,8 +453,14 @@ def test_build_interactive_ai_head_prompt_defaults():
     assert "Hierarchical Parent-Child Notification Protocol (One Level Up):" in prompt
     assert "HERDR_PARENT_PANE_ID" in prompt
     assert "herdr agent prompt <PARENT_PANE_ID>" in prompt
-    assert "Level 3 (Coders / Reviewer / Council Members) notify Level 2 (Ergo Orchestrator / Council Coordinator)" in prompt
-    assert "Level 2 (Ergo Orchestrator / Council Coordinator / Job Worker) notifies Level 1 (AiHead / Master Coordinator)" in prompt
+    assert (
+        "Level 3 (Coders / Reviewer / Council Members) notify Level 2 "
+        "(Ergo Orchestrator / Council Coordinator)" in prompt
+    )
+    assert (
+        "Level 2 (Ergo Orchestrator / Council Coordinator / Job Worker) notifies Level 1 "
+        "(AiHead / Master Coordinator)" in prompt
+    )
 
     assert "Update: <short>" in prompt
     assert "Plan: <short>" in prompt
@@ -596,7 +600,7 @@ async def test_launch_ai_head_inside_herdr_split_failure_raises_runtime_error():
 
 @pytest.mark.asyncio
 async def test_launch_ai_head_inside_herdr_split_applied():
-    """Inside Herdr with split=True: calls split_pane -> swap_panes -> focus_pane -> prompt_agent."""
+    """Inside Herdr with split=True, split, swap, focus, and prompt the pane."""
     client = AsyncMock(spec=HerdrClient)
     client.current_pane = AsyncMock(return_value={"pane_id": "orig-pane-1"})
     client.split_pane = AsyncMock(return_value={"pane_id": "new-pane-2"})
@@ -667,7 +671,7 @@ async def test_launch_ai_head_inside_herdr_split_applied():
 
 @pytest.mark.asyncio
 async def test_launch_ai_head_inside_herdr_split_discovers_active_pane_via_current_pane():
-    """When ctx.pane_id is None inside Herdr, active pane should be discovered via current_pane()."""
+    """When ctx.pane_id is None inside Herdr, discover the active pane via current_pane()."""
     client = AsyncMock(spec=HerdrClient)
     client.current_pane = AsyncMock(return_value={"pane_id": "discovered-pane-5"})
     client.split_pane = AsyncMock(return_value={"pane_id": "new-pane-9"})
@@ -741,7 +745,9 @@ async def test_launch_ai_head_inside_herdr_no_split():
             new_callable=AsyncMock,
             return_value=allocated_mock,
         ) as mock_alloc,
-        patch("herdr_master.pipeline.launcher._start_and_prompt", new_callable=AsyncMock) as mock_start,
+        patch(
+            "herdr_master.pipeline.launcher._start_and_prompt", new_callable=AsyncMock
+        ) as mock_start,
     ):
         res = await launch_ai_head(
             client=client,
@@ -760,7 +766,7 @@ async def test_launch_ai_head_inside_herdr_no_split():
 
 @pytest.mark.asyncio
 async def test_launch_ai_head_with_explicit_workspace():
-    """When an explicit workspace is passed, it should allocate standalone workspace without splitting."""
+    """An explicit workspace allocates a standalone workspace without splitting."""
     client = AsyncMock(spec=HerdrClient)
     snap = SimpleNamespace(
         workspaces=[
@@ -783,7 +789,7 @@ async def test_launch_ai_head_with_explicit_workspace():
 
     with (
         patch("herdr_master.pipeline.launcher.resolve_launch_context", return_value=ctx),
-        patch("herdr_master.pipeline.launcher._start_and_prompt", new_callable=AsyncMock) as mock_start,
+        patch("herdr_master.pipeline.launcher._start_and_prompt", new_callable=AsyncMock),
     ):
         res = await launch_ai_head(
             client=client,
@@ -850,8 +856,13 @@ async def test_launch_ai_head_binding_overrides(harness, model):
     assert client.start_agent.await_args.kwargs["kind"] == harness.value
     if harness is HarnessKind.HERMES:
         assert client.start_agent.await_args.kwargs["args"] == [
-            "--provider", "openai-codex", "--model", "gpt-6.1-terra",
-            "--reasoning", "high", "--yolo",
+            "--provider",
+            "openai-codex",
+            "--model",
+            "gpt-6.1-terra",
+            "--reasoning",
+            "high",
+            "--yolo",
         ]
         assert "You are AiHead" in client.prompt_agent.await_args.args[1]
 
@@ -1219,17 +1230,13 @@ async def test_launch_ai_head_permission_and_effort_precedence(tmp_path: Path):
     """Explicit false is an override. Missing config falls back to True."""
     saved_false = await _launch_args(
         tmp_path,
-        _ai_head_toml(
-            kind="agy", model="gemini-2.5-pro", effort="high", skip=False
-        ),
+        _ai_head_toml(kind="agy", model="gemini-2.5-pro", effort="high", skip=False),
     )
     assert saved_false == ["--model", "gemini-2.5-pro", "--effort", "high"]
 
     override_true = await _launch_args(
         tmp_path,
-        _ai_head_toml(
-            kind="agy", model="gemini-2.5-pro", effort="high", skip=False
-        ),
+        _ai_head_toml(kind="agy", model="gemini-2.5-pro", effort="high", skip=False),
         dangerously_skip_permissions=True,
     )
     assert override_true == [
@@ -1244,9 +1251,7 @@ async def test_launch_ai_head_permission_and_effort_precedence(tmp_path: Path):
 
     override_false = await _launch_args(
         tmp_path,
-        _ai_head_toml(
-            kind="claude", model="claude-opus-4-6", effort="max", skip=True
-        ),
+        _ai_head_toml(kind="claude", model="claude-opus-4-6", effort="max", skip=True),
         dangerously_skip_permissions=False,
         effort=EffortLevel.LOW,
     )
@@ -1339,9 +1344,7 @@ async def test_launch_ai_head_legacy_positional_order_and_permission_keyword(tmp
     """Appending permission preserves every pre-existing positional binding."""
     config_path = tmp_path / "ai-head.toml"
     config_path.write_text(
-        _ai_head_toml(
-            kind="agy", model="gemini-2.5-pro", effort=None, skip=False
-        ),
+        _ai_head_toml(kind="agy", model="gemini-2.5-pro", effort=None, skip=False),
         encoding="utf-8",
     )
     legacy_values = (
@@ -1483,9 +1486,7 @@ def test_cli_aihead_and_head_forward_permission_precedence(
 ):
     config_path = tmp_path / "ai-head.toml"
     config_path.write_text(
-        _ai_head_toml(
-            kind="agy", model="gemini-2.5-pro", effort="high", skip=skip
-        ),
+        _ai_head_toml(kind="agy", model="gemini-2.5-pro", effort="high", skip=skip),
         encoding="utf-8",
     )
     launch_mock = AsyncMock(
