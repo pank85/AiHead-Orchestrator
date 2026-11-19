@@ -1,0 +1,14 @@
+{
+  "w1:w1:p2": {
+    "kind": "opencode",
+    "model": "openai-codex/gpt-6.1-sol",
+    "effort": null,
+    "args": [
+      "mini",
+      "--model",
+      "openai/gpt-6.1-sol"
+    ],
+    "soul": "Software Architect obsessed with UX, best practices, accessibility, clear interaction design, and code reusability without speculative abstraction",
+    "cwd": "/home/pank"
+  }
+}

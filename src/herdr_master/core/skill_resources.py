@@ -86,3 +86,58 @@ def strip_yaml_front_matter(text: str) -> str:
 def load_skill_body(name: str) -> str:
     """Load a canonical skill body with YAML front matter removed."""
     return strip_yaml_front_matter(get_skill_source(name).read_text(encoding="utf-8"))
+
+
+def get_harness_overlay(name: str, harness: str) -> Path | None:
+    """Return the optional per-harness overlay markdown for a canonical skill."""
+    skill = _validate_skill_name(name)
+    harness_key = str(harness).strip().lower()
+    if not harness_key:
+        return None
+    overlay = _skills_root() / skill / "harnesses" / f"{harness_key}.md"
+    if overlay.is_file():
+        return overlay.resolve()
+    return None
+
+
+def render_skill_for_harness(name: str, harness: str) -> str:
+    """Compose a self-contained SKILL.md from the canonical base plus any harness overlay."""
+    base_text = get_skill_source(name).read_text(encoding="utf-8")
+    overlay_path = get_harness_overlay(name, harness)
+    if overlay_path is None:
+        return base_text
+    overlay_text = overlay_path.read_text(encoding="utf-8").strip()
+    if not overlay_text:
+        return base_text
+    return base_text.rstrip() + "\n\n" + overlay_text + "\n"
+
+
+def _default_composed_skills_root() -> Path:
+    return Path.home() / ".cache" / "herdr-master" / "skills"
+
+
+def materialize_skill_for_harness(
+    name: str,
+    harness: str,
+    *,
+    cache_root: Path | None = None,
+) -> Path:
+    """Return the skill file to symlink for a harness.
+
+    When no per-harness overlay exists, returns the canonical ``SKILL.md`` path
+    directly. When an overlay exists, writes the composed self-contained
+    ``SKILL.md`` under ``cache_root`` (default ``~/.cache/herdr-master/skills``)
+    and returns that path.
+    """
+    overlay_path = get_harness_overlay(name, harness)
+    if overlay_path is None:
+        return get_skill_source(name)
+    skill = _validate_skill_name(name)
+    harness_key = str(harness).strip().lower()
+    root = cache_root if cache_root is not None else _default_composed_skills_root()
+    out_path = root / harness_key / skill / "SKILL.md"
+    out_path.parent.mkdir(parents=True, exist_ok=True)
+    rendered = render_skill_for_harness(skill, harness_key)
+    if not out_path.is_file() or out_path.read_text(encoding="utf-8") != rendered:
+        out_path.write_text(rendered, encoding="utf-8")
+    return out_path.resolve()
