@@ -1438,3 +1438,52 @@ def test_custom_model_entry_cancel_preserves_current_value(tmp_path: Path):
     for _ in range(total_options + 2):
         tui.handle_key("LEFT")
         assert tui.cfg.ai_head.binding.model != ADD_CUSTOM_MODEL_VALUE
+
+
+def test_settings_uses_available_models_and_discovers_only_when_unrestricted(tmp_path: Path):
+    """Settings uses Available allowlist without discovery, and discovers when unset."""
+    from herdr_master.cli.setup_catalog import ChoiceOption
+
+    cfg_path = tmp_path / ".herdr-master.toml"
+    seeded = HerdrMasterConfig()
+    seeded.models.available = AvailableModels(herdr={"pi": ["pi/only-available"]})
+
+    discovered_calls: list[str] = []
+
+    def fake_discover(kind: str) -> list[ChoiceOption]:
+        discovered_calls.append(kind)
+        return [ChoiceOption(value=f"{kind}/live-discovered", label=f"{kind}/live-discovered")]
+
+    tui = SetupTuiApp(config_path=cfg_path, cfg=seeded, discover_harness_fn=fake_discover)
+    # Startup must not run live discovery upfront.
+    assert discovered_calls == []
+
+    # Harness with configured Available models uses them without running discovery.
+    pi_opts, _ = tui._filtered_model_options("pi", mode="herdr", current=None)
+    assert [opt.value for opt in pi_opts if opt.value != ADD_CUSTOM_MODEL_VALUE] == [
+        "pi/only-available"
+    ]
+    assert discovered_calls == []
+
+    # Switching a binding to 'pi' reconciles to the available model without discovery.
+    tui._apply_binding_change(tui.cfg.ai_head.binding, "kind", "pi")
+    assert tui.cfg.ai_head.binding.model == "pi/only-available"
+    assert discovered_calls == []
+
+    # Harness without Available models triggers discovery once and exposes live models.
+    oc_opts, _ = tui._filtered_model_options("opencode", mode="herdr", current=None)
+    assert "opencode/live-discovered" in [opt.value for opt in oc_opts]
+    assert discovered_calls == ["opencode"]
+
+    # Subsequent calls for the same harness reuse cached discovery.
+    tui._filtered_model_options("opencode", mode="herdr", current=None)
+    assert discovered_calls == ["opencode"]
+
+    # Visiting the Available tab for 'pi' triggers live discovery so all models can be toggled.
+    tui.available_view_mode = "herdr"
+    tui.available_view_harness = "pi"
+    rows = tui._available_rows()
+    assert discovered_calls == ["opencode", "pi"]
+    toggle_labels = [row.label for row in rows if row.key.startswith("available.toggle.")]
+    assert "pi/live-discovered" in toggle_labels
+

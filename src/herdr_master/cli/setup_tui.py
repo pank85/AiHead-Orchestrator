@@ -20,7 +20,12 @@ from rich.layout import Layout
 from rich.panel import Panel
 from rich.text import Text
 
-from herdr_master.cli.setup_catalog import ChoiceOption, ModelCatalog, discover_model_catalog
+from herdr_master.cli.setup_catalog import (
+    ChoiceOption,
+    ModelCatalog,
+    discover_harness_models,
+    discover_model_catalog,
+)
 from herdr_master.core.available_models import (
     enabled_model_ids,
     filter_model_ids,
@@ -157,6 +162,7 @@ class SetupTuiApp:
         squad: Optional[Squad] = None,
         save_project_fn: Optional[Callable[[HerdrMasterConfig, Optional[Path]], Path]] = None,
         save_squad_fn: Optional[Callable[[Squad, Optional[Path]], Path]] = None,
+        discover_harness_fn: Optional[Callable[[str], List[ChoiceOption]]] = None,
     ) -> None:
         self.config_path = config_path
         self._save_project_fn = (
@@ -166,7 +172,14 @@ class SetupTuiApp:
             save_squad_as_default if save_squad_fn is None else save_squad_fn
         )
         self._load_initial_state(cfg=cfg, squad=squad)
-        self.catalog = catalog or discover_model_catalog(self.cfg, self.squad)
+        if catalog is not None:
+            self.catalog = catalog
+            self._lazy_discovery_enabled = discover_harness_fn is not None
+        else:
+            self.catalog = discover_model_catalog(self.cfg, self.squad, probe_live=False)
+            self._lazy_discovery_enabled = True
+        self._discover_harness_fn = discover_harness_fn or discover_harness_models
+        self._discovered_harnesses: set[str] = set()
 
         self.section_index: int = 0
         self.focus_pane: str = "sections"  # "sections" | "options"
@@ -277,6 +290,17 @@ class SetupTuiApp:
         self.status_message = message
         self.status_is_error = error
 
+    def _ensure_harness_discovered(self, kind: str) -> None:
+        if not self._lazy_discovery_enabled:
+            return
+        kind_key = str(kind).strip().lower()
+        if not kind_key or kind_key in self._discovered_harnesses:
+            return
+        self._discovered_harnesses.add(kind_key)
+        live = self._discover_harness_fn(kind_key)
+        if live:
+            self.catalog.merge_live_models(kind_key, live)
+
     def _reconcile_binding(
         self,
         binding: HarnessBinding,
@@ -285,7 +309,8 @@ class SetupTuiApp:
         allow_none_effort: bool = True,
     ) -> None:
         kind = binding.kind.value
-        models = self.catalog.models(kind, mode="herdr")
+        model_opts, _ = self._filtered_model_options(kind, mode="herdr", current=None)
+        models = [opt for opt in model_opts if opt.value != ADD_CUSTOM_MODEL_VALUE]
         if models and all(opt.value != binding.model for opt in models):
             binding.model = str(models[0].value)
 
@@ -312,7 +337,8 @@ class SetupTuiApp:
     def _reconcile_orchestration(self) -> None:
         orch = self.cfg.orchestration
         host = orch.harness.value
-        models = self.catalog.models(host, mode="native")
+        model_opts, _ = self._filtered_model_options(host, mode="native", current=None)
+        models = [opt for opt in model_opts if opt.value != ADD_CUSTOM_MODEL_VALUE]
         valid_values = {str(opt.value) for opt in models}
         defaults = DEFAULT_ORCHESTRATION_MODELS.get(host, {})
 
@@ -352,6 +378,9 @@ class SetupTuiApp:
         scope keeps discovered order, then appends ``current`` when missing.
         An empty intersection sets the Available hint even if ``current`` remains.
         """
+        allowlist = enabled_model_ids(self.cfg.models.available, mode, kind)
+        if allowlist is None:
+            self._ensure_harness_discovered(kind)
         options = self.catalog.models(kind, mode=mode, current=current)
         discovered = [str(opt.value) for opt in options]
         filtered = filter_model_ids(
@@ -371,7 +400,6 @@ class SetupTuiApp:
             for model_id in filtered
         ]
         rebuilt.append(ADD_CUSTOM_OPTION)
-        allowlist = enabled_model_ids(self.cfg.models.available, mode, kind)
         intersection_empty = allowlist is not None and not any(
             model_id in set(allowlist) for model_id in discovered
         )
@@ -409,6 +437,8 @@ class SetupTuiApp:
         if not harness and harness_values:
             harness = harness_values[0]
         self.available_view_harness = harness or None
+        if harness:
+            self._ensure_harness_discovered(harness)
         models = self.catalog.models(harness, mode=mode, current=None) if harness else []
         ids = [str(opt.value) for opt in models]
         self._available_toggle_ids = ids
@@ -1112,7 +1142,8 @@ class SetupTuiApp:
         if action_key == "orch.worker_add":
             orch = self.cfg.orchestration
             host = orch.harness.value
-            models = self.catalog.models(host, mode="native")
+            model_opts, _ = self._filtered_model_options(host, mode="native", current=None)
+            models = [opt for opt in model_opts if opt.value != ADD_CUSTOM_MODEL_VALUE]
             existing = set(orch.worker_models)
             choice = next(
                 (str(opt.value) for opt in models if str(opt.value) not in existing),
@@ -1166,7 +1197,10 @@ class SetupTuiApp:
             found = False
             for h_opt in self.catalog.harnesses(mode="herdr"):
                 h_kind = str(h_opt.value)
-                for m_opt in self.catalog.models(h_kind, mode="herdr"):
+                model_opts, _ = self._filtered_model_options(h_kind, mode="herdr", current=None)
+                for m_opt in model_opts:
+                    if m_opt.value == ADD_CUSTOM_MODEL_VALUE:
+                        continue
                     if (h_kind, str(m_opt.value)) not in existing_pairs:
                         new_kind = HarnessKind(h_kind)
                         new_model = str(m_opt.value)
