@@ -1487,3 +1487,37 @@ def test_settings_uses_available_models_and_discovers_only_when_unrestricted(tmp
     toggle_labels = [row.label for row in rows if row.key.startswith("available.toggle.")]
     assert "pi/live-discovered" in toggle_labels
 
+
+def test_orchestration_agy_swarm_mode_exposes_exact_agy_models(tmp_path: Path):
+    """Switching agy orchestration to swarm mode uses exact agy models (and persists)."""
+    cfg_path = tmp_path / ".herdr-master.toml"
+    catalog = _offline_catalog()
+    tui = SetupTuiApp(config_path=cfg_path, catalog=catalog)
+    tui.cfg.orchestration.harness = HarnessKind.AGY
+    assert tui.cfg.orchestration.agy_mode == "subagents"
+
+    # In subagents mode, agy orchestration offers tier IDs only.
+    tui.handle_key("4")
+    rows = tui._section_rows("orchestration")
+    keys = [r.key for r in rows]
+    assert "orch.agy_mode" in keys
+    scout_row = next(r for r in rows if r.key == "orch.scout_model")
+    subagent_vals = [o.value for o in scout_row.options if o.value != ADD_CUSTOM_MODEL_VALUE]
+    assert set(subagent_vals) == {"flash_lite", "flash", "pro"}
+
+    # Switch agy_mode to swarm -> exact agy models are offered and roles reconcile.
+    tui._apply_field_value("orch.agy_mode", "swarm")
+    assert tui.cfg.orchestration.agy_mode == "swarm"
+    rows = tui._section_rows("orchestration")
+    scout_row = next(r for r in rows if r.key == "orch.scout_model")
+    swarm_vals = [o.value for o in scout_row.options if o.value != ADD_CUSTOM_MODEL_VALUE]
+    assert "flash" not in swarm_vals
+    assert any("gemini" in str(v) for v in swarm_vals)
+    assert tui.cfg.orchestration.scout_model in swarm_vals
+
+    # Save and verify agy_mode persists in TOML.
+    tui.drive(["s"])
+    data = _load(cfg_path)
+    assert data["orchestration"]["agy_mode"] == "swarm"
+
+

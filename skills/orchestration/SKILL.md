@@ -26,7 +26,8 @@ Resolve the subagent tool once at the start and use the same tool for every role
 | Harness | Tool | Prompt field | Read-only enforcement |
 | :--- | :--- | :--- | :--- |
 | Claude Code (`claude`) | `Agent` | `prompt` | Instruct read-only; persist its returned report yourself |
-| Antigravity (`agy`) | `invoke_subagent` | `Prompt` | `EnableWriteTools: false` on read-only roles; tier IDs only (`flash_lite`, `flash`, `pro`) — exact CLI slugs are rejected in native mode |
+| Antigravity (`agy`, `agy_mode = "subagents"`, default) | `invoke_subagent` | `Prompt` | `EnableWriteTools: false` on read-only roles; tier IDs only (`flash_lite`, `flash`, `pro`) — exact CLI slugs are rejected in subagents mode |
+| Antigravity (`agy`, `agy_mode = "swarm"`) | `swarm` (`action: "add"`) | `brief` | Exact `agy` model IDs via `model`; `workspace: "inherit"` for read-only roles (Scout, Architect, Reviewer) and `workspace: "share"` for parallel Coders; `swarm(action="kill", ...)` on cleanup |
 | Pi (`pi`) | `subagent` | `task` | Read-only agent for reviewer; `async: true` optional |
 | OpenCode (`opencode`) | `subagent` | `prompt` | `agent: "general"`; instruct read-only for review roles |
 | Hermes (`hermes`) | `delegate_task` | `tasks` array (`goal`, `context`) | Instruct read-only in `goal`/`context`; persist its returned report yourself |
