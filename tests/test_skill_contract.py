@@ -964,3 +964,28 @@ def test_ergo_and_aihead_readme_command_and_models_grammar():
     for bad in ("scout=agy", "architect=pi", "workers=agy", "reviewer=pi"):
         assert bad not in ergo_readme
         assert bad not in aihead_readme
+
+
+def test_per_harness_skill_composition_and_materialization(tmp_path):
+    """Per-harness overlays compose into self-contained SKILL.md; others stay canonical."""
+    from herdr_master.core.skill_resources import (
+        get_harness_overlay,
+        get_skill_source,
+        materialize_skill_for_harness,
+        render_skill_for_harness,
+    )
+
+    assert get_harness_overlay("orchestration", "agy") is not None
+    assert get_harness_overlay("orchestration", "claude") is None
+
+    rendered_agy = render_skill_for_harness("orchestration", "agy")
+    assert "## Antigravity (`agy`) Harness Notes" in rendered_agy
+    assert "# /orchestration" in rendered_agy
+
+    mat_agy = materialize_skill_for_harness("orchestration", "agy", cache_root=tmp_path)
+    assert mat_agy == (tmp_path / "agy" / "orchestration" / "SKILL.md").resolve()
+    assert mat_agy.read_text(encoding="utf-8") == rendered_agy
+
+    mat_claude = materialize_skill_for_harness("orchestration", "claude", cache_root=tmp_path)
+    assert mat_claude == get_skill_source("orchestration")
+

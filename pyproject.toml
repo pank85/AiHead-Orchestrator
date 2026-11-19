@@ -76,6 +76,7 @@ packages = ["src/herdr_master"]
 "skills/ergo/SKILL.md" = "herdr_master/_skills/ergo/SKILL.md"
 "skills/herdr-master/SKILL.md" = "herdr_master/_skills/herdr-master/SKILL.md"
 "skills/orchestration/SKILL.md" = "herdr_master/_skills/orchestration/SKILL.md"
+"skills/orchestration/harnesses/agy.md" = "herdr_master/_skills/orchestration/harnesses/agy.md"
 
 [tool.ruff]
 line-length = 100

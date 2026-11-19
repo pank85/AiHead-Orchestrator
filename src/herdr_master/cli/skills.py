@@ -14,7 +14,11 @@ from ruamel.yaml import YAML
 from ruamel.yaml.error import YAMLError
 
 from herdr_master.core.catalog import CANONICAL_SKILLS, HarnessKind, get_harness
-from herdr_master.core.skill_resources import SkillResourceError, get_skill_source
+from herdr_master.core.skill_resources import (
+    SkillResourceError,
+    get_skill_source,
+    materialize_skill_for_harness,
+)
 
 console = Console()
 skills_app = typer.Typer(
@@ -160,6 +164,11 @@ def _hermes_collision(root: Path, target: Path, name: str) -> Path | None:
     return None
 
 
+def _harness_kind_from_label(label: str) -> str:
+    match = re.search(r"\(([^)]+)\)\s*$", label)
+    return match.group(1).strip().lower() if match else label.strip().lower()
+
+
 @skills_app.command("install")
 def install_skills(
     force: bool = typer.Option(
@@ -194,7 +203,7 @@ def install_skills(
 
     for skill_name, targets in targets_map.items():
         try:
-            canonical_file = get_skill_source(skill_name)
+            get_skill_source(skill_name)
         except SkillResourceError as e:
             console.print(f"[red]Error locating canonical skill '{skill_name}':[/red] {e}")
             has_error = True
@@ -206,13 +215,15 @@ def install_skills(
 
         for target in targets:
             try:
+                harness_kind = _harness_kind_from_label(target.harness)
+                source_file = materialize_skill_for_harness(skill_name, harness_kind)
                 if target.harness == "Kilo (kilo)":
                     for parent in target.path.parents:
                         if parent.is_symlink():
                             raise OSError(f"Refusing symlinked Kilo parent: {parent}")
                     if (
                         target.path.is_symlink()
-                        and target.path.resolve() == canonical_file.resolve()
+                        and target.path.resolve() == source_file.resolve()
                     ):
                         console.print(f"[dim]Already installed: {target.path}[/dim]")
                         installed_count += 1
@@ -220,14 +231,14 @@ def install_skills(
                     if target.path.is_symlink() or target.path.exists():
                         raise OSError(f"Refusing to overwrite unowned Kilo target: {target.path}")
                     target.path.parent.mkdir(parents=True, exist_ok=True)
-                    target.path.symlink_to(canonical_file)
+                    target.path.symlink_to(source_file)
                     console.print(f"[green]✓[/green] {target.harness}: {target.path}")
                     installed_count += 1
                     continue
                 if target.harness == "Codex (codex)":
                     directory = target.path.parent
                     if directory.is_symlink():
-                        if directory.resolve() == canonical_file.parent.resolve():
+                        if directory.resolve() == source_file.parent.resolve():
                             console.print(f"[dim]Already installed: {directory}[/dim]")
                             installed_count += 1
                             continue
@@ -235,7 +246,7 @@ def install_skills(
                     if directory.exists():
                         if (
                             target.path.is_symlink()
-                            and target.path.resolve() == canonical_file.resolve()
+                            and target.path.resolve() == source_file.resolve()
                             and list(directory.iterdir()) == [target.path]
                         ):
                             target.path.unlink()
@@ -243,7 +254,7 @@ def install_skills(
                         else:
                             raise OSError(f"Refusing to overwrite Codex directory: {directory}")
                     directory.parent.mkdir(parents=True, exist_ok=True)
-                    directory.symlink_to(canonical_file.parent, target_is_directory=True)
+                    directory.symlink_to(source_file.parent, target_is_directory=True)
                     console.print(f"[green]✓[/green] Codex: {directory}")
                     installed_count += 1
                     continue
@@ -258,7 +269,7 @@ def install_skills(
                         continue
                     if (
                         target.path.is_symlink()
-                        and target.path.resolve() == canonical_file.resolve()
+                        and target.path.resolve() == source_file.resolve()
                     ):
                         console.print(f"[dim]Already installed: {target.path}[/dim]")
                         installed_count += 1
@@ -275,7 +286,7 @@ def install_skills(
                         )
                     target.path.parent.mkdir(parents=True, exist_ok=True)
                     # Exclusive creation: never unlink a Hermes user's file, even with --force.
-                    target.path.symlink_to(canonical_file)
+                    target.path.symlink_to(source_file)
                     console.print(f"[green]✓[/green] {target.harness}: {target.path}")
                     installed_count += 1
                     continue
@@ -299,7 +310,7 @@ def install_skills(
                         console.print(f"[dim]Skipping existing file {target.path}[/dim]")
                         continue
 
-                target.path.symlink_to(canonical_file)
+                target.path.symlink_to(source_file)
                 console.print(
                     f"[green]✓[/green] [bold]{target.harness}[/bold] ({target.kind}): "
                     f"[cyan]{target.description}[/cyan] -> [dim]{target.path}[/dim]"
