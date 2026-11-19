@@ -9,6 +9,8 @@ metadata:
 
 # /ergo — Scout → Architect → Parallel Specialist Coders → Reviewer Loop
 
+**Core boundary:** If `HC_TERMINAL_ID` is set or `--backend core` is selected, STOP and report that Ergo is not yet supported in Herdr Core, even with `--native`. Do not launch agents or use legacy Herdr operations as a fallback. Native Ergo outside Core remains supported as described below.
+
 Launch with `aihead ergo "<intent>"` (or `aihead --ergo "<intent>"`); `herdm` is deprecated.
 
 Run an Ergo pipeline for: `${@:-$ARGUMENTS}` (if no intent or spec path was supplied, ask what to build and stop).
@@ -19,6 +21,7 @@ You are the orchestrator. **Never implement code directly in the main conversati
 
 - **Default Mode (Herdr Cross-Harness)**: Plain `/ergo` defaults to Herdr mode. The mixed agy/Pi product default squad cannot run through a single host's native subagent tool, so every pipeline role runs as an interactive Herdr agent tab inside one Herdr workspace. `--herdr` is an explicit alias for this default.
 - **Explicit `--native` Mode**: When `--native` is explicitly passed (e.g. `/ergo --native ...`), the pipeline runs using the parent harness's native subagent tool (`invoke_subagent` in `agy`, `subagent` in `pi`/`opencode`, `Agent` in `claude`). There is no alternate native default squad; `--native` requires explicit compatible role/worker overrides or a compatible run snapshot, and any inherited product binding incompatible with the native host is rejected by the resolver.
+- **Herdr Core (`--backend core`)**: Ergo is not yet supported in Core, including with `--native`; follow the Core boundary above.
 - **`--models` Inline Role & Worker Overrides**: Overrides any role (`scout`, `architect`, `reviewer`) or worker pool (`workers` / `coders`). Works in both default Herdr mode and `--native` mode.
 - **`--ai-head` / `--no-ai-head` AiHead Consultation**: Configures autonomous technical decision consultation via AiHead (see §3).
 
@@ -195,6 +198,7 @@ Every agent prompt must be assembled in this order:
 >   `herdr agent prompt <ORCHESTRATOR_PANE_ID> "<Role> finished: <brief outcome/artifact path/verdict>"`.
 > - **Decision / Question / Blocker Needed:** If you encounter an unresolvable blocker, ambiguity, or fatal error requiring a decision, notify your direct parent orchestrator immediately:
 >   `herdr agent prompt <ORCHESTRATOR_PANE_ID> "<Role> blocked/decision needed: <reason or question>"`.
+> - **Herdr Core (`--backend core`)**: Ergo workflows are not yet Core-compatible; use legacy Herdr TUI or CLI mode.
 
 ---
 

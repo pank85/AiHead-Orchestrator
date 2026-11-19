@@ -101,9 +101,11 @@ aihead catalog available --json --project /path/to/project
 
 ---
 
-## 🔌 Herdr Plugin & Interactive Cockpit (`pank85.aihead-cockpit`)
+## 🔌 Herdr Integrations
 
-AiHead integrates natively into the **[Herdr](https://herdr.dev)** terminal manager via `herdr-plugin.toml` (`min_herdr_version = "0.9.5"`).
+### Legacy Herdr TUI Plugin (`pank85.aihead-cockpit`)
+
+The existing `herdr-plugin.toml` (`min_herdr_version = "0.9.5"`) targets the legacy **[Herdr](https://herdr.dev)** terminal UI, not the separate Herdr desktop app and core.
 
 ### 1. Six Workspace Actions
 When working inside a Herdr workspace, the plugin registers 6 actions accessible directly through the Herdr UI or command palette:
@@ -122,6 +124,16 @@ Executing `aihead --menu` inside Herdr opens an interactive terminal menu:
 - Displays actions `[0] AiHead`, `[1] New Master`, `[2] New Ergo`, `[3] Orchestrate`, `[4] AI Council`, and `[5] Settings`.
 - **Objective Handling:** When selecting Ergo, Orchestration, or Council, it prompts `Objective: ` directly in the pane.
 - **Config Auto-Discovery:** Discovers the active workspace's project directory and automatically appends `--config <path>` to ensure the session inherits local allowlists and squad configurations.
+
+### Herdr Desktop App and Core
+
+The separate Herdr app/core integration is experimental. `aihead --backend core --harness pi` finds or starts an AiHead terminal in the selected Core session and attaches with `hc attach`; add `--no-attach` to leave it running. Starting a new Core AiHead head currently supports only Pi; the initial Core-specific prompt is passed in its argv, visible in Core terminal metadata. A successful spawn does not prove the prompt was processed. Reusing a head with `--task` is rejected rather than silently dropping or resending it. `aihead core terminals` lists Core terminals. Existing Ergo, Council and Herdr-Master workflows still target the separate TUI and are not yet ported to Core; Core selection rejects their launch commands rather than silently using the legacy backend.
+
+`herdr-app/mods/aihead-cockpit/` contains an initial native agent monitor that also finds labeled AiHead terminals. Core launch and reuse were tested with an isolated Core 0.1.21 and a fake Pi executable, not a real AI session. The mod passed the App 0.1.16 `check`; the desktop window itself has not been tested.
+
+The monitor displays all Herdr-reported agents and live child terminals, not only AiHead jobs. `aihead core terminals` follows `HC_SESSION` and `HC_SOCKET`; `hc connect` may start the selected Core if it is not running. To try the mod when the desktop app is installed, run `herdr-app check herdr-app/mods/aihead-cockpit`, then copy that directory into the app home's `mods/` directory without overwriting an existing mod. The default app home is `~/.config/herdr-app`; `HERDR_APP_HOME` overrides it. Herdr docks the mod when first discovered; later placement is controlled by the selected layout. This check does not replace testing it in the live app.
+
+Future publication to the official mod gallery requires the `herdr-mod` repository topic, a `RECIPE.md`, and a `preview.png`. Gallery publication is future work, not a current feature.
 
 ---
 
@@ -199,6 +211,8 @@ aihead skills install
 | **Claude Code (`claude`)** | Custom Command | `~/.claude/commands/<skill>.md` | Slash command invocations |
 | **OpenCode (`opencode`)** | Skill & Command | `~/.config/opencode/skills/<skill>/SKILL.md`<br/>`~/.config/opencode/commands/<skill>.md` | Local open models & dual dispatch |
 | **Hermes (`hermes`)** | Skill | `~/.hermes/skills/<skill>/SKILL.md` | Protected against unowned clobbering |
+| **Codex (`codex`)** | Skill | `~/.agents/skills/<skill>/SKILL.md` | Global skill installation |
+| **Kilo (`kilo`)** | Skill | `~/.config/kilo/skills/<skill>/SKILL.md` | Global skill installation |
 
 > [!NOTE]
 > `aihead install` (and `aihead skills install`) includes safety protections: existing non-Hermes symlinks are safely overwritten with `--force` (default: `True`), while unowned Hermes files are strictly protected against accidental clobbering via YAML frontmatter collision checks.
@@ -219,6 +233,7 @@ aihead skills remove
 ### 1. `aihead` CLI Reference
 
 The `aihead` binary is the primary entrypoint for interactive and autonomous operations.
+Bare `aihead` finds and attaches to an existing AiHead, or launches the default AiHead in a new Herdr workspace if none exists.
 
 ```bash
 aihead [OPTIONS]
@@ -226,7 +241,7 @@ aihead [OPTIONS]
 
 #### Launch Modes (Mutually Exclusive):
 - `--setup`: Opens the interactive curses settings wizard. Rejects `--no-attach` or launch overrides (`--harness`, `--model`, `--effort`).
-- `--tui`: Launches the full terminal management dashboard ([AiHead-Cockpit](https://github.com/pank85/AiHead-Cockpit)).
+- `--tui`: Like bare `aihead`, finds and attaches to an existing AiHead, or launches the default AiHead in a new Herdr workspace. It does not open the cockpit.
 - `--menu`: Opens the curses command-pane menu inside a Herdr workspace.
 - `--ergo <intent>`: Dispatches an Ergo pipeline for the specified objective in a new Herdr workspace.
 - `--council <intent>`: Dispatches an AI Council deliberation in a new Herdr workspace.
@@ -260,7 +275,7 @@ aihead catalog available [--project <path>] [--json]
 aihead catalog show [--json]
 
 # 3. Resolve effective squad across catalog defaults, project configs, and CLI overrides
-aihead catalog squad [--mode herdr|native] [--harness <host>] \
+aihead catalog squad [--mode herdr|native|core] [--harness <host>] \
   [--models "scout:agy:gemini-3.8-flash-medium architect:pi:openai-codex/gpt-6.1-sol"] \
   [--write-snapshot /abs/path/squad.toml] [--json]
 

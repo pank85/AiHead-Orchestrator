@@ -515,6 +515,7 @@ def test_build_interactive_ai_head_prompt_with_initial_task():
 async def test_launch_ai_head_inside_herdr_split_snapshot_fallback():
     """When split_pane does not return pane_id, it should fall back to snapshot pane inspection."""
     client = AsyncMock(spec=HerdrClient)
+    client.get_agent.return_value = {"agent": {"agent_status": "idle"}}
     # split_pane returns generic result without pane_id
     client.split_pane = AsyncMock(return_value={"status": "ok"})
     client.swap_panes = AsyncMock(return_value={"status": "ok"})
@@ -602,6 +603,7 @@ async def test_launch_ai_head_inside_herdr_split_failure_raises_runtime_error():
 async def test_launch_ai_head_inside_herdr_split_applied():
     """Inside Herdr with split=True, split, swap, focus, and prompt the pane."""
     client = AsyncMock(spec=HerdrClient)
+    client.get_agent.return_value = {"agent": {"agent_status": "idle"}}
     client.current_pane = AsyncMock(return_value={"pane_id": "orig-pane-1"})
     client.split_pane = AsyncMock(return_value={"pane_id": "new-pane-2"})
     client.swap_panes = AsyncMock(return_value={"status": "ok"})
@@ -673,6 +675,7 @@ async def test_launch_ai_head_inside_herdr_split_applied():
 async def test_launch_ai_head_inside_herdr_split_discovers_active_pane_via_current_pane():
     """When ctx.pane_id is None inside Herdr, discover the active pane via current_pane()."""
     client = AsyncMock(spec=HerdrClient)
+    client.get_agent.return_value = {"agent": {"agent_status": "idle"}}
     client.current_pane = AsyncMock(return_value={"pane_id": "discovered-pane-5"})
     client.split_pane = AsyncMock(return_value={"pane_id": "new-pane-9"})
     client.swap_panes = AsyncMock(return_value={"status": "ok"})
@@ -1184,6 +1187,7 @@ def _ai_head_toml(
 
 def _inside_launch_client() -> AsyncMock:
     client = AsyncMock(spec=HerdrClient)
+    client.get_agent.return_value = {"agent": {"agent_status": "idle"}}
     client.current_pane = AsyncMock(return_value={"pane_id": "orig-pane-1"})
     client.split_pane = AsyncMock(return_value={"pane_id": "new-pane-2"})
     client.swap_panes = AsyncMock(return_value={"status": "ok"})

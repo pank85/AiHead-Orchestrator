@@ -23,7 +23,7 @@ __all__ = [
     "materialize_toggle_all",
 ]
 
-_MODES = ("herdr", "native")
+_MODES = ("herdr", "native", "core")
 _HARNESS_VALUES = {kind.value: kind.value for kind in HarnessKind}
 
 
@@ -38,8 +38,9 @@ class AvailableModels(BaseModel):
 
     herdr: Optional[Dict[str, List[str]]] = None
     native: Optional[Dict[str, List[str]]] = None
+    core: Optional[Dict[str, List[str]]] = None
 
-    @field_validator("herdr", "native", mode="before")
+    @field_validator("herdr", "native", "core", mode="before")
     @classmethod
     def _validate_mode_map(cls, value: Any) -> Optional[Dict[str, List[str]]]:
         return _clean_mode_map(value)
@@ -131,8 +132,8 @@ def materialize_toggle(
     harness_key = _require_harness_key(harness)
     cleaned_id = _clean_model_id(model_id)
 
-    herdr, native, extras = _clone_maps(available)
-    target = herdr if mode_name == "herdr" else native
+    maps, extras = _clone_maps(available)
+    target = maps[mode_name]
     if target is None:
         target = {}
     if harness_key not in target:
@@ -149,11 +150,8 @@ def materialize_toggle(
     else:
         ids = [item for item in ids if item != cleaned_id]
     target[harness_key] = ids
-    if mode_name == "herdr":
-        herdr = target
-    else:
-        native = target
-    return AvailableModels(herdr=herdr, native=native, **extras)
+    maps[mode_name] = target
+    return AvailableModels(**maps, **extras)
 
 
 def materialize_toggle_all(
@@ -174,8 +172,8 @@ def materialize_toggle_all(
     mode_name = _require_mode(mode)
     harness_key = _require_harness_key(harness)
 
-    herdr, native, extras = _clone_maps(available)
-    target = herdr if mode_name == "herdr" else native
+    maps, extras = _clone_maps(available)
+    target = maps[mode_name]
     if target is None:
         target = {}
 
@@ -189,11 +187,8 @@ def materialize_toggle_all(
     else:
         target[harness_key] = []
 
-    if mode_name == "herdr":
-        herdr = target
-    else:
-        native = target
-    return AvailableModels(herdr=herdr, native=native, **extras)
+    maps[mode_name] = target
+    return AvailableModels(**maps, **extras)
 
 
 def format_available_models_block(available: Optional[AvailableModels]) -> str:
@@ -226,10 +221,10 @@ def _known_harnesses() -> str:
 
 def _require_mode(mode: Any) -> str:
     if not isinstance(mode, str):
-        raise ValueError(f"Unknown mode {mode!r}. Expected 'herdr' or 'native'.")
+        raise ValueError(f"Unknown mode {mode!r}. Expected 'herdr', 'native', or 'core'.")
     name = mode.strip().lower()
     if name not in _MODES:
-        raise ValueError(f"Unknown mode {mode!r}. Expected 'herdr' or 'native'.")
+        raise ValueError(f"Unknown mode {mode!r}. Expected 'herdr', 'native', or 'core'.")
     return name
 
 
@@ -307,11 +302,10 @@ def _copy_mode_map(
 
 def _clone_maps(
     available: Optional[AvailableModels],
-) -> tuple[Optional[Dict[str, List[str]]], Optional[Dict[str, List[str]]], Dict[str, Any]]:
+) -> tuple[Dict[str, Optional[Dict[str, List[str]]]], Dict[str, Any]]:
     if available is None:
-        return None, None, {}
+        return {mode: None for mode in _MODES}, {}
     return (
-        _copy_mode_map(available.herdr),
-        _copy_mode_map(available.native),
+        {mode: _copy_mode_map(getattr(available, mode)) for mode in _MODES},
         dict(available.model_extra or {}),
     )

@@ -1,8 +1,8 @@
 """Standalone ``aihead`` console-script launch contract.
 
-The command launches an interactive Herdr session. It adopts a live workspace,
-starts Herdr only when that session is absent or empty, and never falls back to
-the headless decision CLI or the AiHeadDev cockpit.
+The command launches an interactive Herdr session. Default launches use a
+dedicated workspace, while explicit task options retain workspace adoption.
+It never falls back to the headless decision CLI or the AiHeadDev cockpit.
 """
 
 from __future__ import annotations
@@ -24,6 +24,15 @@ from herdr_master.herdr.socket import HerdrConnectionError, HerdrRPCError
 from herdr_master.menu import MenuError
 
 runner = CliRunner()
+
+
+@pytest.fixture(autouse=True)
+def _no_existing_aihead():
+    with patch(
+        "herdr_master.cli.main.discover_aihead", new_callable=AsyncMock, create=True,
+        return_value=None,
+    ):
+        yield
 
 
 def _output(result) -> str:
@@ -121,14 +130,6 @@ def test_aihead_app_help_is_a_direct_launch_command():
         assert option in text, option
 
 
-def test_bare_invocation_prints_help_without_launching():
-    with patch("herdr_master.cli.main.launch_ai_head", new_callable=AsyncMock) as launch:
-        result = runner.invoke(aihead_app, [])
-    assert result.exit_code == 0, result.output
-    assert "Usage:" in result.output
-    launch.assert_not_called()
-
-
 def test_nested_aihead_argument_is_rejected(tmp_path: Path):
     ctx = _ctx(inside=True, session="alpha", socket=tmp_path / "sock", workspace_id="ws-1")
     with (
@@ -204,7 +205,8 @@ def test_forwards_task_binding_aliases_and_paths(tmp_path: Path):
     assert cfg.read_text(encoding="utf-8") == original
 
 
-def test_adopts_external_workspace_without_creating_another(tmp_path: Path, monkeypatch):
+@pytest.mark.parametrize("args", [["--no-attach"], ["--tui", "--no-attach"]])
+def test_default_external_launch_creates_dedicated_workspace(tmp_path: Path, monkeypatch, args):
     sock = tmp_path / "herdr.sock"
     sock.write_text("", encoding="utf-8")
     monkeypatch.delenv("HERDR_ENV", raising=False)
@@ -220,8 +222,8 @@ def test_adopts_external_workspace_without_creating_another(tmp_path: Path, monk
         seen["socket"] = os.environ.get("HERDR_SOCKET_PATH")
         seen["workspace"] = os.environ.get("HERDR_WORKSPACE_ID")
         seen["pane"] = os.environ.get("HERDR_PANE_ID")
-        assert kwargs["workspace"] == "ws-live"
-        return _launch_result("default", "ws-live")
+        assert kwargs["workspace"] == "ws-should-not-create"
+        return _launch_result("default", "ws-should-not-create")
 
     with (
         patch("herdr_master.cli.main.resolve_launch_context", return_value=ctx),
@@ -232,21 +234,81 @@ def test_adopts_external_workspace_without_creating_another(tmp_path: Path, monk
         patch("shutil.which", side_effect=_which),
         patch("herdr_master.pipeline.ai_head.execute_cli_decision_sync") as headless,
     ):
-        result = runner.invoke(aihead_app, ["--no-attach"])
+        result = runner.invoke(aihead_app, args)
 
     assert result.exit_code == 0, _output(result)
     server.assert_not_called()
-    client.create_workspace.assert_not_called()
+    client.create_workspace.assert_awaited_once()
+    assert client.create_workspace.await_args.kwargs["label"] == "ai-head"
+    assert client.create_workspace.await_args.kwargs["focus"] is True
     execvp.assert_not_called()
     headless.assert_not_called()
     assert seen == {
         "env": "1",
         "socket": str(sock),
-        "workspace": "ws-live",
+        "workspace": "ws-should-not-create",
         "pane": None,
     }
     assert os.environ.get("HERDR_ENV") is None
     assert sock.exists()
+
+
+@pytest.mark.parametrize("args", [[], ["--tui"], ["--tui", "--no-attach"]])
+@pytest.mark.parametrize("inside", [True, False])
+def test_default_reuses_existing_head_without_duplicate_launch(tmp_path: Path, args, inside):
+    sock = tmp_path / "herdr.sock"
+    sock.touch()
+    ctx = _ctx(inside=inside, socket=sock, workspace_id="caller" if inside else None)
+    client = _live_client("caller")
+    location = SimpleNamespace(workspace_id="head-ws", tab_id="head-tab", pane_id="head-pane")
+    with (
+        patch("herdr_master.cli.main.resolve_launch_context", return_value=ctx),
+        patch("herdr_master.cli.main.HerdrClient", return_value=client),
+        patch(
+            "herdr_master.cli.main.discover_aihead", new_callable=AsyncMock, return_value=location
+        ) as discover,
+        patch("herdr_master.cli.main.focus_aihead", new_callable=AsyncMock, create=True) as focus,
+        patch("herdr_master.cli.main.launch_ai_head", new_callable=AsyncMock) as launch,
+        patch("herdr_master.cli.main.ensure_herdr_server", new_callable=AsyncMock) as server,
+        patch("herdr_master.cli.main.os.execvp") as execvp,
+        patch("herdr_master.cli.main._effective_aihead_cwd", return_value=tmp_path),
+        patch("shutil.which", side_effect=_which),
+    ):
+        result = runner.invoke(aihead_app, args)
+
+    assert result.exit_code == 0, _output(result)
+    discover.assert_awaited_once()
+    assert discover.await_args.args == (client,)
+    assert discover.await_args.kwargs["project"] == tmp_path
+    focus.assert_awaited_once_with(client, location)
+    launch.assert_not_awaited()
+    client.create_workspace.assert_not_awaited()
+    server.assert_not_awaited()
+    if not inside and "--no-attach" not in args:
+        execvp.assert_called_once_with("herdr", ["herdr", "--session", "default"])
+    else:
+        execvp.assert_not_called()
+
+
+def test_task_launch_adopts_external_workspace_without_discovery(tmp_path: Path):
+    sock = tmp_path / "herdr.sock"
+    sock.touch()
+    ctx = _ctx(inside=False, socket=sock)
+    client = _live_client("ws-live")
+    with (
+        patch("herdr_master.cli.main.resolve_launch_context", return_value=ctx),
+        patch("herdr_master.cli.main.HerdrClient", return_value=client),
+        patch("herdr_master.cli.main.discover_aihead", new_callable=AsyncMock) as discover,
+        patch("herdr_master.cli.main.launch_ai_head", new_callable=AsyncMock,
+              return_value=_launch_result("default", "ws-live")) as launch,
+    ):
+        result = runner.invoke(aihead_app, ["--task", "ship", "--no-attach"])
+
+    assert result.exit_code == 0, _output(result)
+    discover.assert_not_awaited()
+    client.create_workspace.assert_not_awaited()
+    assert launch.await_args.kwargs["workspace"] == "ws-live"
+    assert launch.await_args.kwargs["initial_task"] == "ship"
 
 
 def test_starts_server_and_creates_workspace_when_herdr_is_absent(tmp_path: Path):
@@ -307,7 +369,7 @@ def test_creates_workspace_when_live_session_has_none(tmp_path: Path):
         result = runner.invoke(aihead_app, ["--no-attach"])
 
     assert result.exit_code == 0, _output(result)
-    server.assert_awaited_once()
+    server.assert_not_called()
     client.create_workspace.assert_awaited_once()
     assert launch.await_args.kwargs["workspace"] == "ws-created"
     assert sock.exists()
@@ -379,6 +441,27 @@ def test_rpc_error_is_not_treated_as_absence(tmp_path: Path):
     launch.assert_not_called()
     client.create_workspace.assert_not_called()
     headless.assert_not_called()
+
+
+def test_snapshot_timeout_after_ping_does_not_create_duplicate(tmp_path: Path):
+    sock = tmp_path / "herdr.sock"
+    sock.touch()
+    ctx = _ctx(inside=False, socket=sock)
+    client = AsyncMock()
+    client.ping.return_value = {}
+    client.get_snapshot.side_effect = TimeoutError("snapshot timed out")
+    with (
+        patch("herdr_master.cli.main.resolve_launch_context", return_value=ctx),
+        patch("herdr_master.cli.main.HerdrClient", return_value=client),
+        patch("herdr_master.cli.main.ensure_herdr_server", new_callable=AsyncMock) as server,
+        patch("herdr_master.cli.main.launch_ai_head", new_callable=AsyncMock) as launch,
+    ):
+        result = runner.invoke(aihead_app, ["--no-attach"])
+    assert result.exit_code != 0
+    assert "snapshot timed out" in _output(result)
+    server.assert_not_awaited()
+    client.create_workspace.assert_not_awaited()
+    launch.assert_not_awaited()
 
 
 def test_session_mismatch_fails_before_server_or_launch(monkeypatch, tmp_path: Path):
@@ -524,7 +607,7 @@ def test_attach_and_no_attach(tmp_path: Path):
         detached = runner.invoke(aihead_app, ["--no-attach"])
 
     assert attached.exit_code == 0, _output(attached)
-    assert "Attaching to isolated Herdr session 'default'" in _output(attached)
+    assert "Attaching to Herdr session 'default'" in _output(attached)
     execvp.assert_called_once_with("herdr", ["herdr", "--session", "default"])
     assert detached.exit_code == 0, _output(detached)
     assert execvp.call_count == 1

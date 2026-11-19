@@ -24,6 +24,7 @@ from herdr_master.core.catalog import (
     native_binding_error,
     qualify_binding_slug,
     split_worker_bindings,
+    supported_harnesses,
     validate_mode,
     worker_capability,
     worker_route_note,
@@ -377,6 +378,15 @@ def _family_advisory(squad: Squad) -> List[str]:
     ]
 
 
+def _ensure_core_kind(kind: str) -> None:
+    allowed = supported_harnesses(mode="core")
+    if kind not in allowed:
+        raise CatalogError(
+            f"Harness '{kind}' is not supported in Core mode. "
+            f"Supported: {', '.join(allowed)}."
+        )
+
+
 def _finalize(
     squad: Squad,
     sources: Dict[str, str],
@@ -441,6 +451,8 @@ def _finalize(
                 require_effort=True,
             )
         for worker in squad.worker_pool:
+            if mode_key == "core":
+                _ensure_core_kind(worker.kind.value)
             if not worker.enabled:
                 continue
             ensure_herdr_routable(
@@ -663,6 +675,13 @@ def describe_agent(
             role,
             native_harness,
         )
+    if mode_key == "core":
+        _ensure_core_kind(binding.kind.value)
+        desc = describe_herdr_agent(binding.kind.value, binding.model, effort, role)
+        if desc["role"] == "watcher":
+            raise CatalogError("Core watcher descriptors are not supported; use hc wait directly.")
+        desc["mode"] = "core"
+        return desc
     return describe_herdr_agent(binding.kind.value, binding.model, effort, role)
 
 

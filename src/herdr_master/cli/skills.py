@@ -68,6 +68,10 @@ def get_skill_targets(home: Path | None = None) -> Dict[str, List[TargetLocation
 
 def _evaluate_link_status(target_path: Path, canonical_path: Path | None) -> str:
     """Distinguish live active link from missing, broken, or stale links."""
+    if target_path.parent.is_symlink():
+        if canonical_path is not None and target_path.resolve() == canonical_path.resolve():
+            return "[green]✓ Active[/green]"
+        return "[yellow]⚠ Stale[/yellow]"
     if target_path.is_symlink():
         try:
             resolved = target_path.resolve()
@@ -162,12 +166,25 @@ def install_skills(
         True,
         "--force/--no-force",
         "-f",
-        help="Overwrite existing non-Hermes files or links; Hermes unowned targets are always "
-        "protected",
+        help="Overwrite existing files or links except unowned Hermes and Kilo targets",
     ),
+    harness: str | None = typer.Option(None, "--harness", help="Install for one harness only."),
 ) -> None:
     """Install and symlink standalone skills and commands across all supported harnesses."""
     targets_map = get_skill_targets()
+    if harness is not None:
+        try:
+            spec = get_harness(harness)
+        except (KeyError, ValueError):
+            raise typer.BadParameter(
+                f"Unknown harness: {harness}", param_hint="--harness"
+            ) from None
+        if not spec.install_targets:
+            raise typer.BadParameter(f"No skill targets for {harness}", param_hint="--harness")
+        targets_map = {
+            name: [target for target in targets if target.harness == f"{spec.label} ({spec.kind})"]
+            for name, targets in targets_map.items()
+        }
     console.print(
         "[bold cyan]👑 Installing Standalone Skills & Commands across AI Harnesses...[/bold cyan]\n"
     )
@@ -189,6 +206,47 @@ def install_skills(
 
         for target in targets:
             try:
+                if target.harness == "Kilo (kilo)":
+                    for parent in target.path.parents:
+                        if parent.is_symlink():
+                            raise OSError(f"Refusing symlinked Kilo parent: {parent}")
+                    if (
+                        target.path.is_symlink()
+                        and target.path.resolve() == canonical_file.resolve()
+                    ):
+                        console.print(f"[dim]Already installed: {target.path}[/dim]")
+                        installed_count += 1
+                        continue
+                    if target.path.is_symlink() or target.path.exists():
+                        raise OSError(f"Refusing to overwrite unowned Kilo target: {target.path}")
+                    target.path.parent.mkdir(parents=True, exist_ok=True)
+                    target.path.symlink_to(canonical_file)
+                    console.print(f"[green]✓[/green] {target.harness}: {target.path}")
+                    installed_count += 1
+                    continue
+                if target.harness == "Codex (codex)":
+                    directory = target.path.parent
+                    if directory.is_symlink():
+                        if directory.resolve() == canonical_file.parent.resolve():
+                            console.print(f"[dim]Already installed: {directory}[/dim]")
+                            installed_count += 1
+                            continue
+                        raise OSError(f"Refusing to overwrite unowned Codex directory: {directory}")
+                    if directory.exists():
+                        if (
+                            target.path.is_symlink()
+                            and target.path.resolve() == canonical_file.resolve()
+                            and list(directory.iterdir()) == [target.path]
+                        ):
+                            target.path.unlink()
+                            directory.rmdir()
+                        else:
+                            raise OSError(f"Refusing to overwrite Codex directory: {directory}")
+                    directory.parent.mkdir(parents=True, exist_ok=True)
+                    directory.symlink_to(canonical_file.parent, target_is_directory=True)
+                    console.print(f"[green]✓[/green] Codex: {directory}")
+                    installed_count += 1
+                    continue
                 if target.harness == "Hermes (hermes)":
                     root = target.path.parent.parent
                     collision = _hermes_collision(root, target.path, skill_name)
@@ -266,7 +324,8 @@ def install_skills(
     )
     console.print(
         "Available commands in [bold]agy[/bold], [bold]pi[/bold], "
-        "[bold]claude[/bold], [bold]opencode[/bold], [bold]hermes[/bold]:"
+        "[bold]claude[/bold], [bold]opencode[/bold], [bold]hermes[/bold], "
+        "[bold]kilo[/bold], [bold]codex[/bold]:"
     )
     console.print("  • [cyan]/herdr-master [task][/cyan] — Root orchestrator for multiple jobs")
     console.print("  • [cyan]/ergo [--native] [--models ...] [intent][/cyan] — Phased pipeline")
@@ -315,9 +374,15 @@ def remove_skills() -> None:
     """Remove installed symlinks for standalone skills across harnesses."""
     targets_map = get_skill_targets()
     removed_count = 0
-    for _, targets in targets_map.items():
+    for skill_name, targets in targets_map.items():
         for target in targets:
-            if target.path.is_symlink():
+            if target.harness == "Codex (codex)" and target.path.parent.is_symlink():
+                if target.path.resolve() != get_skill_source(skill_name).resolve():
+                    continue
+                target.path.parent.unlink()
+                removed_count += 1
+                console.print(f"[yellow]Removed symlink:[/yellow] {target.path.parent}")
+            elif target.path.is_symlink():
                 target.path.unlink()
                 removed_count += 1
                 console.print(f"[yellow]Removed symlink:[/yellow] {target.path}")

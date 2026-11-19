@@ -87,10 +87,15 @@ def test_harness_identity_matches_enum(kind):
     else:
         assert spec.supports_native is False
         assert spec.native is None
-        if kind == "hermes":
-            assert spec.install_targets[0].path_template == (
-                "{home}/.hermes/skills/{skill}/SKILL.md"
-            )
+        paths = {
+            "hermes": "{home}/.hermes/skills/{skill}/SKILL.md",
+            "codex": "{home}/.agents/skills/{skill}/SKILL.md",
+            "kilo": "{home}/.config/kilo/skills/{skill}/SKILL.md",
+        }
+        if kind in paths:
+            assert len(spec.install_targets) == 1
+            assert spec.install_targets[0].kind == "skill"
+            assert spec.install_targets[0].path_template == paths[kind]
         else:
             assert spec.install_targets == ()
 
@@ -103,9 +108,9 @@ def test_no_hidden_per_host_default_squad():
         assert "default_squad" not in spec
         assert spec["default_model"] is None
     targets = [target for spec in document["identities"] for target in spec["install_targets"]]
-    assert len(targets) == 6
+    assert len(targets) == 8
     assert {target["harness"] for target in targets} == {
-        "agy", "pi", "claude", "opencode", "hermes"
+        "agy", "pi", "claude", "opencode", "hermes", "codex", "kilo"
     }
     for target in targets:
         template = target["path_template"]
@@ -295,3 +300,10 @@ def test_catalog_cli_show_and_agent_json():
     error_payload = _json(missing)
     assert error_payload["ok"] is False
     assert error_payload["error"]
+
+
+def test_core_mode_supports_verified_harnesses():
+    from herdr_master.core.catalog import supported_harnesses, validate_mode
+
+    assert validate_mode("core") == "core"
+    assert supported_harnesses(mode="core") == ["pi", "agy", "claude", "opencode", "hermes"]

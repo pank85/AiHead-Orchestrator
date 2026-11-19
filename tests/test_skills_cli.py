@@ -47,7 +47,7 @@ def test_get_skill_targets_matches_catalog_registry():
     assert "aihead" in targets
 
     aihead_locs = targets["aihead"]
-    assert len(aihead_locs) == 6
+    assert len(aihead_locs) == 8
     aihead_harnesses = {loc.harness for loc in aihead_locs}
     assert "Antigravity (agy)" in aihead_harnesses
     assert "Pi (pi)" in aihead_harnesses
@@ -56,8 +56,8 @@ def test_get_skill_targets_matches_catalog_registry():
 
     for skill_name in CANONICAL_SKILLS:
         locs = targets[skill_name]
-        # Sentinel assertion: 5 harnesses, 6 destinations per skill
-        assert len(locs) == 6
+        # Sentinel assertion: 7 harnesses, 8 destinations per skill
+        assert len(locs) == 8
         assert any(
             loc.path.parts[-4:] == (".hermes", "skills", skill_name, "SKILL.md")
             for loc in locs
@@ -67,6 +67,8 @@ def test_get_skill_targets_matches_catalog_registry():
         assert "Pi (pi)" in harnesses
         assert "Claude Code (claude)" in harnesses
         assert "OpenCode (opencode)" in harnesses
+        assert "Codex (codex)" in harnesses
+        assert "Kilo (kilo)" in harnesses
 
         # Validate against catalog templates directly
         expected_templates: list[str] = []
@@ -78,13 +80,18 @@ def test_get_skill_targets_matches_catalog_registry():
         assert len(locs) == len(expected_templates)
 
 
-def test_get_skill_targets_with_custom_home(tmp_path: Path):
+def test_get_skill_targets_with_custom_home(tmp_path: Path, monkeypatch):
+    ambient_home = tmp_path / "ambient_home"
+    monkeypatch.setenv("HOME", str(ambient_home))
     fake_home = tmp_path / "custom_home"
     targets = get_skill_targets(home=fake_home)
     for _skill, locs in targets.items():
         for loc in locs:
-            assert str(fake_home) in str(loc.path)
-            assert str(Path.home()) not in str(loc.path)
+            assert loc.path.is_relative_to(fake_home)
+            assert not loc.path.is_relative_to(ambient_home)
+        paths = {loc.path for loc in locs}
+        assert fake_home / ".agents" / "skills" / _skill / "SKILL.md" in paths
+        assert fake_home / ".config" / "kilo" / "skills" / _skill / "SKILL.md" in paths
 
 
 def test_evaluate_link_status(tmp_path: Path):
@@ -129,13 +136,90 @@ def test_cli_skills_list():
     assert "/aihead" in result.output
 
 
+@pytest.mark.parametrize("harness", ["kilo", "codex"])
+def test_install_only_selected_harness(tmp_path: Path, harness: str):
+    targets = get_skill_targets(home=tmp_path)
+    with patch("herdr_master.cli.skills.get_skill_targets", return_value=targets):
+        result = runner.invoke(app, ["skills", "install", "--harness", harness, "--no-force"])
+    assert result.exit_code == 0, result.output
+    for locations in targets.values():
+        for target in locations:
+            link = target.path.parent if target.harness == "Codex (codex)" else target.path
+            assert link.is_symlink() == target.harness.endswith(f"({harness})")
+
+
+def test_install_rejects_unknown_harness():
+    result = runner.invoke(app, ["skills", "install", "--harness", "not-a-harness"])
+    assert result.exit_code != 0
+    assert "Unknown harness" in result.output
+
+
+@pytest.mark.parametrize("force", ["--force", "--no-force"])
+@pytest.mark.parametrize("is_link", [False, True])
+def test_kilo_preserves_unowned_target(tmp_path: Path, force: str, is_link: bool):
+    targets = get_skill_targets(home=tmp_path)
+    target = next(loc for loc in targets["aihead"] if loc.harness == "Kilo (kilo)")
+    target.path.parent.mkdir(parents=True)
+    user_file = tmp_path / "user-skill.md" if is_link else target.path
+    user_file.write_text("user skill", encoding="utf-8")
+    if is_link:
+        target.path.symlink_to(user_file)
+    with patch("herdr_master.cli.skills.get_skill_targets", return_value=targets):
+        result = runner.invoke(app, ["skills", "install", "--harness", "kilo", force])
+    assert result.exit_code != 0
+    assert target.path.is_symlink() == is_link
+    assert target.path.read_text(encoding="utf-8") == "user skill"
+
+
+def test_kilo_preserves_canonical_file_through_symlinked_parent(tmp_path: Path):
+    canonical = tmp_path / "canonical" / "SKILL.md"
+    canonical.parent.mkdir()
+    canonical.write_text("canonical skill", encoding="utf-8")
+    targets = get_skill_targets(home=tmp_path / "home")
+    target = next(loc for loc in targets["aihead"] if loc.harness == "Kilo (kilo)")
+    target.path.parent.parent.mkdir(parents=True)
+    target.path.parent.symlink_to(canonical.parent, target_is_directory=True)
+    with (
+        patch("herdr_master.cli.skills.get_skill_targets", return_value={"aihead": [target]}),
+        patch("herdr_master.cli.skills.get_skill_source", return_value=canonical),
+    ):
+        result = runner.invoke(app, ["skills", "install", "--harness", "kilo", "--force"])
+    assert result.exit_code != 0
+    assert target.path.parent.is_symlink()
+    assert not canonical.is_symlink()
+    assert canonical.read_text(encoding="utf-8") == "canonical skill"
+
+
+def test_codex_migrates_only_owned_file_link(tmp_path: Path):
+    targets = get_skill_targets(home=tmp_path)
+    target = next(loc for loc in targets["aihead"] if loc.harness == "Codex (codex)")
+    target.path.parent.mkdir(parents=True)
+    target.path.symlink_to(get_skill_source("aihead"))
+    with patch("herdr_master.cli.skills.get_skill_targets", return_value=targets):
+        result = runner.invoke(app, ["skills", "install", "--harness", "codex", "--no-force"])
+    assert result.exit_code == 0, result.output
+    assert target.path.parent.is_symlink()
+    assert target.path.resolve() == get_skill_source("aihead")
+
+
+def test_codex_preserves_unowned_directory(tmp_path: Path):
+    targets = get_skill_targets(home=tmp_path)
+    target = next(loc for loc in targets["aihead"] if loc.harness == "Codex (codex)")
+    target.path.parent.mkdir(parents=True)
+    target.path.write_text("user skill", encoding="utf-8")
+    with patch("herdr_master.cli.skills.get_skill_targets", return_value=targets):
+        result = runner.invoke(app, ["skills", "install", "--harness", "codex"])
+    assert result.exit_code != 0
+    assert target.path.read_text(encoding="utf-8") == "user skill"
+
+
 def test_cli_skills_install_and_remove_in_temp_home(tmp_path: Path):
     fake_home = tmp_path / "fake_home"
     fake_home.mkdir()
 
     targets_map = get_skill_targets(home=fake_home)
     expected_links = sum(len(locs) for locs in targets_map.values())
-    assert expected_links == 30  # 5 canonical skills * 6 destinations
+    assert expected_links == 40  # 5 canonical skills * 8 destinations
 
     with patch("herdr_master.cli.skills.get_skill_targets", return_value=targets_map):
         # Initial install
@@ -147,7 +231,8 @@ def test_cli_skills_install_and_remove_in_temp_home(tmp_path: Path):
         for skill_name, locs in targets_map.items():
             canonical = get_skill_source(skill_name)
             for loc in locs:
-                assert loc.path.is_symlink()
+                link = loc.path.parent if loc.harness == "Codex (codex)" else loc.path
+                assert link.is_symlink()
                 assert loc.path.resolve() == canonical.resolve()
 
         # Idempotent re-install with force
@@ -176,7 +261,7 @@ def test_toplevel_herdm_install_in_temp_home(tmp_path: Path):
 
     targets_map = get_skill_targets(home=fake_home)
     expected_links = sum(len(locs) for locs in targets_map.values())
-    assert expected_links == 30  # 5 canonical skills * 6 destinations
+    assert expected_links == 40  # 5 canonical skills * 8 destinations
 
     with patch("herdr_master.cli.skills.get_skill_targets", return_value=targets_map):
         # Top-level install command
@@ -189,21 +274,23 @@ def test_toplevel_herdm_install_in_temp_home(tmp_path: Path):
             canonical = get_skill_source(skill_name)
             canonical_content = canonical.read_text(encoding="utf-8")
             for loc in locs:
-                assert loc.path.is_symlink()
+                link = loc.path.parent if loc.harness == "Codex (codex)" else loc.path
+                assert link.is_symlink()
                 assert loc.path.resolve() == canonical.resolve()
                 assert loc.path.read_text(encoding="utf-8") == canonical_content
 
         # Explicitly check aihead destinations
         aihead_locs = targets_map["aihead"]
-        assert len(aihead_locs) == 6
+        assert len(aihead_locs) == 8
         for loc in aihead_locs:
-            assert loc.path.is_symlink()
+            assert (loc.path.parent if loc.harness == "Codex (codex)" else loc.path).is_symlink()
             assert loc.path.resolve() == get_skill_source("aihead").resolve()
 
         # Explicitly verify unchanged old skills
         for old_skill in ("council", "ergo", "herdr-master", "orchestration"):
             for loc in targets_map[old_skill]:
-                assert loc.path.is_symlink()
+                link = loc.path.parent if loc.harness == "Codex (codex)" else loc.path
+                assert link.is_symlink()
                 assert loc.path.resolve() == get_skill_source(old_skill).resolve()
 
         # Idempotency: re-install with force
