@@ -65,6 +65,13 @@ def test_kilo_cli_flags_and_capabilities():
     assert build_agent_args("kilo", "kilo/~anthropic/claude-sonnet-latest", "high") == [
         "--model",
         "kilo/~anthropic/claude-sonnet-latest",
+        "--auto",
+    ]
+    assert build_agent_args(
+        "kilo", "kilo/~anthropic/claude-sonnet-latest", "high", skip_permissions=False
+    ) == [
+        "--model",
+        "kilo/~anthropic/claude-sonnet-latest",
     ]
     descriptor = describe_herdr_agent(
         "kilo", "kilo/~anthropic/claude-sonnet-latest", "high", "coder"

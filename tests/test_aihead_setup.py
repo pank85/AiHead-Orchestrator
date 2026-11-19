@@ -263,21 +263,23 @@ def test_tui_single_screen_renders_all_skills_and_options(tmp_path: Path):
     for label in ("Harness", "Model", "Effort", "Enabled", "Mode", "Split Pane", "Autonomy"):
         assert label in aihead_screen
 
-    # 2. ergo options, including the worker pool that used to be its own section
+    # 2. ergo options: dynamic worker mode replaces static worker pool rows
     tui.handle_key("2")
     ergo_screen = tui.render(width=110, height=48)
-    for label in ("Coordinator", "Scout", "Architect", "Reviewer", "Worker Pool"):
+    for label in ("Coordinator", "Scout", "Architect", "Reviewer", "Worker Mode", "Worker Pool"):
         assert label in ergo_screen
     ergo_rows = [row.key for row in tui._current_rows()]
-    assert ergo_rows.index("ergo.reviewer.model") < ergo_rows.index("pool.0.kind")
-    assert "pool.0.effort" not in ergo_rows
+    assert ergo_rows.index("ergo.reviewer.model") < ergo_rows.index("ergo.worker_mode")
+    assert not any(key.startswith("pool.") for key in ergo_rows)
     assert "worker-pool" not in [sec_id for sec_id, _ in SECTIONS]
 
-    # 3. orchestration options
+    # 3. orchestration options: dynamic worker mode replaces static worker rows
     tui.handle_key("3")
-    orch_screen = tui.render(width=110, height=32)
-    for label in ("Native Host", "Harness", "Scout", "Worker 1 Model", "+ Add Worker"):
+    orch_screen = tui.render(width=110, height=36)
+    for label in ("Native Host", "Harness", "Scout", "Worker Mode", "Worker Pool"):
         assert label in orch_screen
+    orch_rows = [row.key for row in tui._current_rows()]
+    assert not any(key.startswith("orch.worker.") for key in orch_rows)
 
     # 4. council options
     tui.handle_key("4")
@@ -291,18 +293,6 @@ def test_tui_single_screen_renders_all_skills_and_options(tmp_path: Path):
     for label in ("Override Mode", "Harness", "Model"):
         assert label in master_screen
     assert "Effort" not in master_screen
-
-    # Worker pool rows live in Ergo; section 6 is Available.
-    tui.handle_key("2")
-    pool_rows = tui._current_rows()
-    pool_labels = [row.label for row in pool_rows]
-    for label in ("worker-1 Harness", "worker-1 Model", "worker-1 Enabled", "+ Add Worker"):
-        assert label in pool_labels
-    kind_idx = next(i for i, row in enumerate(pool_rows) if row.key == "pool.0.kind")
-    tui.field_cursors["ergo"] = kind_idx
-    assert "worker-1 Harness" in tui.render(width=110, height=32)
-    tui.field_cursors["ergo"] = next(i for i, row in enumerate(pool_rows) if row.key == "pool.add")
-    assert "+ Add Worker" in tui.render(width=110, height=32)
 
 
 def test_tui_driven_without_terminal_reaches_save_functions_via_herdm_aihead_setup(
@@ -377,7 +367,7 @@ def test_tui_driven_without_terminal_reaches_save_functions_via_herdm_aihead_set
     assert data["ai_head"]["binding"]["effort"] == "high"
     assert data["ai_head"]["enabled"] is True
     assert data["models"]["default_squad"]["scout"] == "agy:gemini-3.8-flash-low"
-    assert len(data["models"]["worker_pool"]) == 3
+    assert "worker_pool" not in data["models"]
 
 
 def test_tui_driven_via_aihead_setup_configures_all_skills_and_saves_once(
@@ -531,16 +521,15 @@ def test_tui_validation_error_blocks_save_and_keeps_tui_open(tmp_path: Path):
     cfg.write_text(original, encoding="utf-8")
 
     tui = SetupTuiApp(config_path=cfg, catalog=_offline_catalog())
-    # Disable both workers in the Ergo worker pool and attempt to save.
-    tui.handle_key("2")
+    # Disable one of the two council members (<2 enabled members) and attempt to save.
+    tui.handle_key("4")
     rows = tui._current_rows()
-    first = next(i for i, row in enumerate(rows) if row.key == "pool.0.enabled")
-    second = next(i for i, row in enumerate(rows) if row.key == "pool.1.enabled")
-    tui.drive(["DOWN"] * first + ["SPACE"] + ["DOWN"] * (second - first) + ["SPACE", "s"])
+    first = next(i for i, row in enumerate(rows) if row.key == "council.member.0.enabled")
+    tui.drive(["DOWN"] * first + ["SPACE", "s"])
     assert tui.saved is False
     assert tui.done is False
     assert tui.status_is_error is True
-    assert "enabled worker" in tui.status_message.lower()
+    assert "at least 2 enabled members" in tui.status_message.lower()
     assert cfg.read_text(encoding="utf-8") == original
 
 
@@ -603,7 +592,8 @@ custom = "keep"
     assert tui.saved is True
     data = _load(cfg)
     assert data["ai_head"]["binding"]["custom"] == "preserve"
-    assert data["models"]["worker_pool"]["worker-1"]["custom"] == "keep"
+    # Legacy [models.worker_pool] is tolerated on load and omitted on save.
+    assert "worker_pool" not in data["models"]
 
 
 def test_ergo_custom_coordinator_writes_and_clears(tmp_path: Path):
@@ -822,11 +812,13 @@ def test_available_section_all_toggle_with_empty_catalog(tmp_path: Path):
     # Navigate to section 6 ("models")
     tui.drive(["6"])
     rows = tui._current_rows()
-    assert len(rows) == 4
+    assert len(rows) == 6
     assert [row.key for row in rows] == [
         "available.view.mode",
         "available.view.harness",
         "available.all",
+        "available.billing",
+        "available.evaluate",
         "available.add_custom",
     ]
     # Verify "All" row displays safely
@@ -931,13 +923,6 @@ def test_allowlist_hides_disabled_models_and_keeps_current(tmp_path: Path):
             "herdr",
             tui.master_coordinator.kind.value,
             tui.master_coordinator.model,
-        ),
-        (
-            "2",
-            "pool.0.model",
-            "herdr",
-            tui.squad.worker_pool[0].kind.value,
-            tui.squad.worker_pool[0].model,
         ),
     )
     for section, key, mode, kind, current in picker_cases:
@@ -1067,7 +1052,7 @@ def test_encoded_agy_effort_row_is_hidden_and_not_persisted(tmp_path: Path, monk
     tui.squad.scout.effort = EffortLevel.MEDIUM
     assert tui.save() is True
     assert _load(cfg)["models"]["default_squad"]["scout"] == "agy:claude-opus-5-5-medium"
-    assert _load(cfg)["models"]["worker_pool"]["worker-1"]["binding"].startswith("agy:")
+    assert "worker_pool" not in _load(cfg)["models"]
 
 
 def test_live_model_parsers_and_catalog_modes():
@@ -1239,16 +1224,12 @@ def test_every_harness_model_picker_offers_available_models_and_add_custom(tmp_p
     for role in ("scout", "architect", "reviewer"):
         row = next(r for r in tui._current_rows() if r.key == f"ergo.{role}.model")
         assert row.options[-1] == ADD_CUSTOM_OPTION
-    pool_model = next(r for r in tui._current_rows() if r.key == "pool.0.model")
-    assert pool_model.options[-1] == ADD_CUSTOM_OPTION
 
     # Orchestration
     tui.handle_key("3")
     for role in ("scout", "architect", "reviewer"):
         row = next(r for r in tui._current_rows() if r.key == f"orch.{role}_model")
         assert row.options[-1] == ADD_CUSTOM_OPTION
-    worker_row = next(r for r in tui._current_rows() if r.key == "orch.worker.0")
-    assert worker_row.options[-1] == ADD_CUSTOM_OPTION
 
     # Council
     tui.handle_key("4")
@@ -1293,20 +1274,20 @@ def test_custom_model_entry_via_prompt_sets_model_and_persists(tmp_path: Path):
     ]
     assert custom_herdr_id in catalog_herdr
 
-    # 2. Drive Orchestration worker to enter custom native model
+    # 2. Drive Orchestration scout to enter custom native model
     # Switch native host to opencode (which supports arbitrary native model IDs)
     tui.drive(["3", "ENTER", *"opencode", "ENTER"])
     rows = tui._current_rows()
-    worker_idx = next(i for i, r in enumerate(rows) if r.key == "orch.worker.0")
-    tui.field_cursors["orchestration"] = worker_idx
+    scout_idx = next(i for i, r in enumerate(rows) if r.key == "orch.scout_model")
+    tui.field_cursors["orchestration"] = scout_idx
     tui.drive(["ENTER", *"custom", "ENTER"])
     assert tui.text_prompt is not None
-    assert tui.text_prompt.field_key == "orch.worker.0"
+    assert tui.text_prompt.field_key == "orch.scout_model"
 
-    custom_native_id = "my-custom-native-coder"
+    custom_native_id = "my-custom-native-scout"
     tui.drive([*custom_native_id, "ENTER"])
     assert tui.text_prompt is None
-    assert tui.cfg.orchestration.worker_models[0] == custom_native_id
+    assert tui.cfg.orchestration.scout_model == custom_native_id
 
     # 3. Save to disk and verify roundtrip in TOML
     tui.drive(["s"])
@@ -1314,7 +1295,7 @@ def test_custom_model_entry_via_prompt_sets_model_and_persists(tmp_path: Path):
 
     data = _load(cfg)
     assert data["ai_head"]["binding"]["model"] == custom_herdr_id
-    assert data["orchestration"]["worker_models"] == [custom_native_id]
+    assert data["orchestration"]["scout_model"] == custom_native_id
 
 
 def test_available_section_add_custom_model_persists_to_allowlist(tmp_path: Path):

@@ -5,8 +5,9 @@ from __future__ import annotations
 import os
 import sys
 import tempfile
+from dataclasses import dataclass
 from pathlib import Path
-from typing import Any, Dict, List, Optional, Union
+from typing import Any, Dict, List, Optional, Tuple, Union
 
 from pydantic import (
     BaseModel,
@@ -29,6 +30,13 @@ from herdr_master.core.catalog import (
     HarnessKind,
     ensure_herdr_routable,
     get_harness,
+)
+from herdr_master.core.model_ratings import (
+    ModelEvaluationConfig,
+    ModelRatingsMap,
+    merge_evaluation_configs,
+    merge_ratings,
+    validate_ratings_map,
 )
 from herdr_master.core.models import (
     EffortLevel,
@@ -74,6 +82,13 @@ class ModelsConfig(BaseModel):
     default_squad: Optional[Dict[str, str]] = None
     worker_pool: Optional[Dict[str, Any]] = None
     available: Optional[AvailableModels] = None
+    evaluation: Optional[ModelEvaluationConfig] = None
+    ratings: Optional[ModelRatingsMap] = None
+
+    @field_validator("ratings", mode="before")
+    @classmethod
+    def _validate_ratings(cls, value: Any) -> Optional[ModelRatingsMap]:
+        return validate_ratings_map(value)
 
 
 class TUIConfig(BaseModel):
@@ -173,6 +188,57 @@ DEFAULT_ORCHESTRATION_MODELS: Dict[str, Dict[str, str]] = {
 
 
 ORCHESTRATION_EFFORT_VALUES = ("low", "medium", "high", "xhigh", "max")
+ROUTING_PROFILES = ("balanced", "quality", "fast", "frugal")
+WORKER_MODES = ("inherit", "balanced", "quality", "fast", "frugal")
+
+
+def validate_routing_profile(value: Any) -> str:
+    """Validate and normalize a routing profile (balanced, quality, fast, frugal)."""
+    if value is None:
+        return "balanced"
+    text = str(value).strip().lower()
+    if not text:
+        return "balanced"
+    if text not in ROUTING_PROFILES:
+        raise ValueError(
+            f"Unsupported routing_profile '{value}'. "
+            f"Expected one of: {', '.join(ROUTING_PROFILES)}."
+        )
+    return text
+
+
+def validate_worker_mode(value: Any) -> str:
+    """Validate and normalize a pipeline worker selection mode."""
+    if value is None:
+        return "inherit"
+    text = str(value).strip().lower()
+    if not text:
+        return "inherit"
+    if text not in WORKER_MODES:
+        raise ValueError(
+            f"Unsupported worker_mode '{value}'. Expected one of: {', '.join(WORKER_MODES)}."
+        )
+    return text
+
+
+def resolve_effective_worker_mode(
+    explicit_mode: Optional[str] = None,
+    *,
+    section_mode: Optional[str] = None,
+    ai_head_profile: Optional[str] = None,
+) -> str:
+    """Resolve effective worker selection mode: CLI override > section > ai_head > balanced."""
+    if explicit_mode is not None:
+        norm = validate_worker_mode(explicit_mode)
+        if norm != "inherit":
+            return norm
+    if section_mode is not None:
+        norm = validate_worker_mode(section_mode)
+        if norm != "inherit":
+            return norm
+    if ai_head_profile is not None:
+        return validate_routing_profile(ai_head_profile)
+    return "balanced"
 
 
 class HarnessOrchestrationSettings(BaseModel):
@@ -322,6 +388,7 @@ class OrchestrationConfig(BaseModel):
     harness: HarnessKind = HarnessKind.AGY
     default_harness: Optional[HarnessKind] = None
     agy_mode: str = "subagents"
+    worker_mode: str = "inherit"
     scout_model: Optional[str] = None
     architect_model: Optional[str] = None
     worker_models: List[str] = Field(default_factory=list)
@@ -332,6 +399,11 @@ class OrchestrationConfig(BaseModel):
     architect_effort: Optional[str] = None
     reviewer_effort: Optional[str] = None
     harnesses: Dict[str, HarnessOrchestrationSettings] = Field(default_factory=dict)
+
+    @field_validator("worker_mode", mode="before")
+    @classmethod
+    def _validate_worker_mode(cls, v: Any) -> str:
+        return validate_worker_mode(v)
 
     @field_validator("agy_mode", mode="before")
     @classmethod
@@ -852,11 +924,17 @@ class CouncilConfig(BaseModel):
 
 
 class ErgoConfig(BaseModel):
-    """Configuration for the Ergo coordinator pane opened for a new session."""
+    """Configuration for Ergo coordinator pane and dynamic worker selection mode."""
 
     model_config = ConfigDict(extra="allow", populate_by_name=True)
 
     coordinator: Optional[HarnessBinding] = None
+    worker_mode: str = "inherit"
+
+    @field_validator("worker_mode", mode="before")
+    @classmethod
+    def _validate_worker_mode(cls, v: Any) -> str:
+        return validate_worker_mode(v)
 
     @model_validator(mode="before")
     @classmethod
@@ -928,6 +1006,12 @@ class AiHeadConfig(BaseModel):
     close_foreign_tabs: bool = False
     dangerously_skip_permissions: bool = True
     automode: bool = False
+    routing_profile: str = "balanced"
+
+    @field_validator("routing_profile", mode="before")
+    @classmethod
+    def _validate_routing_profile(cls, v: Any) -> str:
+        return validate_routing_profile(v)
 
     @property
     def folder(self) -> Optional[str]:
@@ -1150,6 +1234,107 @@ def find_project_config_path(
     return None
 
 
+def find_ancestor_config_paths(config_path: Union[str, Path]) -> List[Path]:
+    """Return ancestor ``.herdr-master.toml`` files strictly above ``config_path``.
+
+    Ordered from outermost ancestor to nearest parent so closer configs override
+    outer ones (e.g., ``~/.herdr-master.toml`` inherited by ``~/projects/repo/.herdr-master.toml``).
+    """
+    resolved = Path(config_path).resolve()
+    base_dir = (
+        resolved.parent
+        if resolved.is_file() or resolved.name == ".herdr-master.toml"
+        else resolved
+    )
+    ancestors: List[Path] = []
+    for parent in base_dir.parents:
+        candidate = parent / ".herdr-master.toml"
+        if candidate.is_file() and candidate.resolve() != resolved:
+            ancestors.append(candidate.resolve())
+    ancestors.reverse()
+    return ancestors
+
+
+@dataclass(frozen=True)
+class EffectiveModelsState:
+    """Merged ``[models.available]``, ``[models.ratings]``, and ``[models.evaluation]``."""
+
+    available: Optional[AvailableModels]
+    ratings: ModelRatingsMap
+    evaluation: ModelEvaluationConfig
+    config_path: Optional[Path]
+    inherited_paths: Tuple[Path, ...]
+
+
+def load_effective_models_state(
+    project_path: Optional[Union[str, Path]] = None,
+    *,
+    project_cfg: Optional[HerdrMasterConfig] = None,
+    inherit_ancestors: bool = True,
+) -> EffectiveModelsState:
+    """Resolve effective allowlist, ratings, and evaluation settings with ancestor inheritance.
+
+    - Ratings and evaluation billing merge outermost-ancestor -> nearest-ancestor -> project
+      (project entries win per ``(harness, model_id)``).
+    - ``available`` is taken from the project config when explicitly configured, otherwise
+      inherited from the nearest ancestor that defines ``[models.available]``.
+    - Raw ``load_project_config()`` stays unmerged so round-trip saves never accidentally
+      copy ancestor data into a project file unless explicitly written.
+    """
+    resolved_cfg_path: Optional[Path] = None
+    if project_path is not None:
+        candidate = Path(project_path).resolve()
+        if candidate.is_dir():
+            resolved_cfg_path = find_project_config_path(candidate)
+        else:
+            resolved_cfg_path = candidate
+    else:
+        resolved_cfg_path = find_project_config_path()
+
+    active_cfg = (
+        project_cfg
+        if project_cfg is not None
+        else (
+            load_project_config(resolved_cfg_path)
+            if resolved_cfg_path is not None and resolved_cfg_path.is_file()
+            else HerdrMasterConfig()
+        )
+    )
+
+    ancestor_paths: List[Path] = []
+    if inherit_ancestors and resolved_cfg_path is not None:
+        ancestor_paths = find_ancestor_config_paths(resolved_cfg_path)
+
+    effective_available: Optional[AvailableModels] = None
+    effective_ratings: ModelRatingsMap = {}
+    effective_eval = ModelEvaluationConfig()
+    loaded_ancestors: List[Path] = []
+
+    for anc_path in ancestor_paths:
+        try:
+            anc_cfg = load_project_config(anc_path)
+        except Exception:
+            continue
+        loaded_ancestors.append(anc_path)
+        if anc_cfg.models.available is not None:
+            effective_available = anc_cfg.models.available
+        effective_ratings = merge_ratings(effective_ratings, anc_cfg.models.ratings)
+        effective_eval = merge_evaluation_configs(effective_eval, anc_cfg.models.evaluation)
+
+    if active_cfg.models.available is not None:
+        effective_available = active_cfg.models.available
+    effective_ratings = merge_ratings(effective_ratings, active_cfg.models.ratings)
+    effective_eval = merge_evaluation_configs(effective_eval, active_cfg.models.evaluation)
+
+    return EffectiveModelsState(
+        available=effective_available,
+        ratings=effective_ratings,
+        evaluation=effective_eval,
+        config_path=resolved_cfg_path,
+        inherited_paths=tuple(loaded_ancestors),
+    )
+
+
 def load_project_config(path: Optional[Union[str, Path]] = None) -> HerdrMasterConfig:
     """Load HerdrMasterConfig from path or by searching upwards for .herdr-master.toml.
 
@@ -1346,11 +1531,13 @@ def squad_from_project_config(config: HerdrMasterConfig) -> Squad:
 def squad_to_project_config(
     squad: Squad,
     existing_config: Optional[HerdrMasterConfig] = None,
+    *,
+    include_worker_pool: bool = True,
 ) -> HerdrMasterConfig:
     """Export a Squad into HerdrMasterConfig models.
 
     Mutates ``existing_config.models`` in place. Do not replace ``cfg.models``;
-    sibling fields such as ``available`` must survive a squad save.
+    sibling fields such as ``available`` and ``ratings`` must survive a squad save.
     """
     cfg = existing_config or HerdrMasterConfig()
     if cfg.models.default_squad is None:
@@ -1359,16 +1546,18 @@ def squad_to_project_config(
     cfg.models.default_squad["architect"] = squad.architect.to_slug()
     cfg.models.default_squad["reviewer"] = squad.reviewer.to_slug()
 
-    pool_dict: Dict[str, Any] = {}
-    for idx, worker in enumerate(squad.worker_pool):
-        key = worker.label or f"worker-{idx + 1}"
-        entry: Dict[str, Any] = {
-            "binding": worker.to_slug(include_effort=False),
-            "enabled": bool(worker.enabled),
-        }
-        if worker.description:
-            entry["description"] = worker.description
-        pool_dict[key] = entry
-
-    cfg.models.worker_pool = pool_dict
+    if include_worker_pool:
+        pool_dict: Dict[str, Any] = {}
+        for idx, worker in enumerate(squad.worker_pool):
+            key = worker.label or f"worker-{idx + 1}"
+            entry: Dict[str, Any] = {
+                "binding": worker.to_slug(include_effort=False),
+                "enabled": bool(worker.enabled),
+            }
+            if worker.description:
+                entry["description"] = worker.description
+            pool_dict[key] = entry
+        cfg.models.worker_pool = pool_dict
+    else:
+        cfg.models.worker_pool = None
     return cfg

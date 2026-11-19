@@ -259,7 +259,7 @@ def test_prompt_effort_is_not_an_invented_flag():
     with pytest.raises(ValueError, match="no native adapter"):
         describe_native_agent("codex", "gpt-5.1", None, "coder", "codex")
     kilo = describe_herdr_agent("kilo", "kilo/~anthropic/claude-sonnet-latest", "high", "coder")
-    assert kilo["argv"] == ["--model", "kilo/~anthropic/claude-sonnet-latest"]
+    assert kilo["argv"] == ["--model", "kilo/~anthropic/claude-sonnet-latest", "--auto"]
     assert kilo["prompt_prefix"] == "think harder"
     with pytest.raises(ValueError, match="explicit --model"):
         build_agent_args("kilo", "", None)

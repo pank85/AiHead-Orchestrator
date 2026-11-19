@@ -359,7 +359,7 @@ def _build_specs() -> dict[str, HarnessSpec]:
             supports_herdr=True,
             supports_native=False,
             default_model=None,
-            herdr=_herdr(prompt_effort=True),
+            herdr=_herdr(permission_flags=("--auto",), prompt_effort=True),
             native=None,
             install_targets=(
                 _install(
