@@ -2152,5 +2152,66 @@ def launch_standalone_aihead(
         os.execvp("herdr", ["herdr", "--session", target_session])
 
 
+@aihead_app.command("triage")
+@app.command("triage")
+def triage_cmd(
+    task: str = typer.Option(..., "--task", "-t", help="User engineering request to route."),
+    cwd: Optional[Path] = typer.Option(
+        None, "--cwd", "-C", help="Target repository/working directory."
+    ),
+    project: Optional[Path] = typer.Option(
+        None, "--project", "--config", help="Project .herdr-master.toml path."
+    ),
+    harness: Optional[str] = typer.Option(
+        None, "--harness", help="Host harness override (defaults to ai_head.binding)."
+    ),
+    profile: Optional[str] = typer.Option(
+        None,
+        "--profile",
+        help="Routing profile override: balanced, quality, fast, or frugal.",
+    ),
+    backend: str = typer.Option("herdr", "--backend", help="Backend: herdr or core."),
+    dry_run: bool = typer.Option(
+        False, "--dry-run", help="Do not write .orchestration/triage-* artifacts."
+    ),
+    json_output: bool = typer.Option(False, "--json", help="Emit machine JSON."),
+) -> None:
+    """Run two-stage Mini-Scout -> Strong Router triage and deterministic route validation."""
+    from herdr_master.pipeline.triage import run_triage
+
+    try:
+        res = run_triage(
+            task,
+            cwd=cwd,
+            project_path=project,
+            host_harness=harness,
+            routing_profile=profile,
+            backend=backend,
+            dry_run=dry_run,
+        )
+    except Exception as err:
+        if json_output:
+            sys.stdout.write(json.dumps({"ok": False, "error": str(err)}, indent=2) + "\n")
+        else:
+            console.print(f"[red]Triage failed:[/red] {err}")
+        raise typer.Exit(1) from err
+
+    if json_output:
+        sys.stdout.write(res.model_dump_json(indent=2) + "\n")
+    else:
+        if res.ok and res.routing_plan is not None:
+            plan = res.routing_plan
+            console.print(
+                f"[green]✓[/green] Workflow: [bold]{plan.workflow}[/bold] "
+                f"(worker_mode={plan.worker_mode}, confidence={plan.confidence})"
+            )
+            if plan.rationale:
+                console.print(f"  Rationale: {plan.rationale}")
+        else:
+            console.print(f"[red]Triage route rejected:[/red] {res.error}")
+    if not res.ok:
+        raise typer.Exit(1)
+
+
 if __name__ == "__main__":
     app()

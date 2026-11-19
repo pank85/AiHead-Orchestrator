@@ -13,9 +13,11 @@ else:
 
 import tomli_w
 
+from herdr_master.core.available_models import AvailableModels, enabled_model_ids
 from herdr_master.core.catalog import (
     SCHEMA_VERSION,
     CatalogError,
+    HarnessKind,
     LaunchMode,
     describe_herdr_agent,
     describe_native_agent,
@@ -31,10 +33,19 @@ from herdr_master.core.catalog import (
 )
 from herdr_master.core.config import (
     find_project_config_path,
+    load_effective_models_state,
     load_project_config,
     project_model_overrides,
+    resolve_effective_worker_mode,
     save_project_config,
     squad_to_project_config,
+    validate_routing_profile,
+)
+from herdr_master.core.model_ratings import (
+    ModelRating,
+    ModelRatingsMap,
+    format_context_window,
+    lookup_rating,
 )
 from herdr_master.core.models import HarnessBinding, Squad
 from herdr_master.core.slug import InvalidBindingSlugError, parse_binding
@@ -92,29 +103,206 @@ def validate_squad(squad: Squad) -> List[str]:
     return errors
 
 
+_WORKER_MODE_GUIDANCE: Dict[str, str] = {
+    "balanced": (
+        "match model strength & effort to task complexity; use fast/cheap models for "
+        "mechanical work and high-coding/intelligence models for complex tasks"
+    ),
+    "quality": (
+        "prioritize highest coding, intelligence, and agentic ratings with higher effort "
+        "even on medium tasks"
+    ),
+    "fast": (
+        "prioritize highest speed and low latency while maintaining adequate coding skill "
+        "for each task"
+    ),
+    "frugal": (
+        "prioritize highest cost_efficiency / free routes and lower effort; reserve heavy "
+        "models strictly for high-complexity tasks"
+    ),
+}
+
+
+def worker_mode_rank_score(rating: Optional[ModelRating], worker_mode: str = "balanced") -> float:
+    """Compute a sorting score for a candidate coder model under ``worker_mode``."""
+    if rating is None:
+        return -1.0
+    mode = validate_routing_profile(worker_mode)
+    if mode == "quality":
+        return 0.45 * rating.coding + 0.35 * rating.intelligence + 0.20 * rating.agentic
+    if mode == "fast":
+        return 0.50 * rating.speed + 0.30 * rating.coding + 0.20 * rating.cost_efficiency
+    if mode == "frugal":
+        return 0.55 * rating.cost_efficiency + 0.25 * rating.coding + 0.20 * rating.speed
+    return (
+        0.35 * rating.coding
+        + 0.25 * rating.intelligence
+        + 0.15 * rating.agentic
+        + 0.15 * rating.speed
+        + 0.10 * rating.cost_efficiency
+    )
+
+
+def build_dynamic_coder_pool(
+    *,
+    available: Optional[AvailableModels],
+    ratings: Optional[ModelRatingsMap],
+    mode: LaunchMode = "herdr",
+    native_harness: Optional[str] = None,
+    agy_mode: str = "subagents",
+    worker_mode: str = "balanced",
+) -> tuple[List[HarnessBinding], str, List[str]]:
+    """Derive the Architect's coder pool dynamically from ``[models.available]`` + ratings.
+
+    - In ``herdr`` mode (Ergo): includes enabled Herdr models across all harnesses.
+    - In ``native`` mode (Orchestration): includes ONLY enabled models for ``native_harness``
+      (respecting ``agy_mode == "swarm"`` using ``herdr.agy`` slugs vs ``native.agy`` tiers).
+    - When completely unrestricted (``available is None``), falls back to already-rated
+      models for the scope (or returns empty so caller retains catalog defaults) with an
+      advisory suggesting configuring ``[models.available]``.
+    """
+    mode_key = validate_mode(mode)
+    advisories: List[str] = []
+    pairs: List[tuple[str, str]] = []
+    seen: set[tuple[str, str]] = set()
+
+    def add_candidate(kind_str: str, model_id: str) -> None:
+        key = (kind_str, model_id)
+        if key in seen:
+            return
+        # Validate routability silently so incompatible entries never break resolution
+        try:
+            if mode_key == "native":
+                host = native_harness or kind_str
+                if host == "agy" and agy_mode == "swarm":
+                    ensure_herdr_routable(
+                        kind_str, model_id, None, role="worker", require_effort=False
+                    )
+                else:
+                    if native_binding_error(kind_str, model_id, role="coder", native_harness=host):
+                        return
+            else:
+                ensure_herdr_routable(kind_str, model_id, None, role="worker", require_effort=False)
+        except CatalogError:
+            return
+        seen.add(key)
+        pairs.append(key)
+
+    source_tag = "available_rated"
+
+    if mode_key == "native":
+        if not native_harness:
+            return [], "product_default", advisories
+        host = get_harness(native_harness).kind
+        pool_mode = "herdr" if (host == "agy" and agy_mode == "swarm") else "native"
+        allow = enabled_model_ids(available, pool_mode, host)
+        if allow is None and pool_mode == "native" and host != "agy":
+            allow = enabled_model_ids(available, "herdr", host)
+        if allow is not None:
+            for mid in allow:
+                add_candidate(host, mid)
+        else:
+            source_tag = "rated_fallback"
+            for mid in (ratings or {}).get(host, {}):
+                add_candidate(host, mid)
+            if pairs:
+                advisories.append(
+                    f"No [models.available] allowlist configured for {host}; "
+                    "using rated models. Configure Available models in `aihead --setup`."
+                )
+    else:
+        if available is not None and available.herdr:
+            ordered_harnesses = [
+                k.value for k in HarnessKind if k.value in available.herdr
+            ]
+            ordered_harnesses.extend(
+                k for k in available.herdr if k not in ordered_harnesses
+            )
+            for h_kind in ordered_harnesses:
+                for mid in available.herdr.get(h_kind, ()):
+                    add_candidate(h_kind, mid)
+        else:
+            source_tag = "rated_fallback"
+            if ratings:
+                for h_kind in supported_harnesses(mode="herdr"):
+                    for mid in ratings.get(h_kind, {}):
+                        add_candidate(h_kind, mid)
+                if pairs:
+                    advisories.append(
+                        "No [models.available] allowlist configured; using rated models. "
+                        "Configure Available models in `aihead --setup`."
+                    )
+
+    if not pairs:
+        return [], source_tag, advisories
+
+    # Sort candidates by worker_mode preference (rated models first, preserving order on ties)
+    indexed = list(enumerate(pairs))
+    indexed.sort(
+        key=lambda item: (
+            -worker_mode_rank_score(lookup_rating(ratings, item[1][0], item[1][1]), worker_mode),
+            item[0],
+        )
+    )
+    pool: List[HarnessBinding] = []
+    for order_idx, (_, (h_kind, mid)) in enumerate(indexed):
+        pool.append(
+            HarnessBinding(
+                kind=HarnessKind(h_kind),
+                model=mid,
+                effort=None,
+                label=f"worker-{order_idx + 1}",
+                enabled=True,
+                order=order_idx,
+            )
+        )
+    return pool, source_tag, advisories
+
+
 def format_allowed_coder_models(
     squad: Squad,
     *,
     mode: LaunchMode = "herdr",
     native_harness: Optional[str] = None,
+    ratings: Optional[ModelRatingsMap] = None,
+    worker_mode: str = "balanced",
 ) -> str:
     """Format the ordered worker pool block to paste into the Architect prompt.
 
     Workers do not have a hardcoded thinking effort; the Architect dynamically
     decides reasoning effort per task. Constraint lines name the supported routes.
     """
+    eff_mode = validate_routing_profile(worker_mode)
+    guidance = _WORKER_MODE_GUIDANCE[eff_mode]
     lines: List[str] = [
+        f"WORKER SELECTION MODE: {eff_mode} ({guidance})",
         "ALLOWED CODER MODELS: (assign each task in plan.md one worker model from this list, "
-        "and select reasoning effort low/medium/high/max based on task complexity):"
+        "and select reasoning effort low/medium/high/max based on task complexity):",
     ]
     ordered = sorted(enumerate(squad.worker_pool), key=lambda pair: (pair[1].order, pair[0]))
     for _, worker in ordered:
         if not worker.enabled:
             continue
         slug = worker.to_slug(include_effort=False)
-        hint = f" ({worker.label})" if worker.label else ""
-        desc = f" — {worker.description}" if worker.description else ""
-        lines.append(f"- {slug}{hint}{desc}")
+        rating = lookup_rating(ratings, worker.kind.value, worker.model)
+        if rating is not None:
+            ctx = format_context_window(rating.context_window)
+            eff = (
+                f"choose {'|'.join(rating.supported_efforts)}"
+                if rating.supported_efforts
+                else "fixed/none"
+            )
+            roles = ",".join(rating.recommended_roles) if rating.recommended_roles else "-"
+            lines.append(
+                f"- {slug} | fam={rating.family} | "
+                f"I:{rating.intelligence} C:{rating.coding} A:{rating.agentic} "
+                f"S:{rating.speed} $:{rating.cost_efficiency} Ctx:{ctx} | "
+                f"tier={rating.billing_tier} | effort: {eff} | roles={roles}"
+            )
+        else:
+            hint = f" ({worker.label})" if worker.label else ""
+            desc = f" — {worker.description}" if worker.description else ""
+            lines.append(f"- {slug}{hint}{desc}")
         note = worker_route_note(
             worker.kind.value,
             worker.model,
@@ -152,6 +340,7 @@ class ResolvedSquad:
         advisories: List[str],
         roles: Dict[str, Any],
         workers: List[Dict[str, Any]],
+        worker_mode: str = "balanced",
     ) -> None:
         self.squad = squad
         self.sources = dict(sources)
@@ -161,6 +350,7 @@ class ResolvedSquad:
         self.advisories = list(advisories)
         self.roles = roles
         self.workers = workers
+        self.worker_mode = worker_mode
 
     def to_dict(self) -> Dict[str, Any]:
         squad = self.squad
@@ -168,6 +358,7 @@ class ResolvedSquad:
             "schema_version": SCHEMA_VERSION,
             "mode": self.mode,
             "native_harness": self.native_harness,
+            "worker_mode": self.worker_mode,
             "sources": dict(self.sources),
             "advisories": list(self.advisories),
             "squad": {
@@ -392,6 +583,10 @@ def _finalize(
     sources: Dict[str, str],
     mode: str,
     native_harness: Optional[str],
+    *,
+    ratings: Optional[ModelRatingsMap] = None,
+    worker_mode: str = "balanced",
+    extra_advisories: Optional[List[str]] = None,
 ) -> ResolvedSquad:
     errors = validate_squad(squad)
     if errors:
@@ -492,12 +687,19 @@ def _finalize(
     return ResolvedSquad(
         squad,
         sources,
-        format_allowed_coder_models(squad, mode=mode_key, native_harness=host),
+        format_allowed_coder_models(
+            squad,
+            mode=mode_key,
+            native_harness=host,
+            ratings=ratings,
+            worker_mode=worker_mode,
+        ),
         mode=mode_key,
         native_harness=host,
-        advisories=_family_advisory(squad),
+        advisories=[*_family_advisory(squad), *(extra_advisories or [])],
         roles=role_descriptors,
         workers=worker_rows,
+        worker_mode=worker_mode,
     )
 
 
@@ -508,6 +710,8 @@ def resolve_squad(
     native_harness: Optional[str] = None,
     run_squad_path: Optional[Path] = None,
     overrides: Optional[Mapping[str, str]] = None,
+    worker_mode: Optional[str] = None,
+    inherit_ancestors: Optional[bool] = None,
 ) -> ResolvedSquad:
     """Resolve a squad. Explicit overrides beat the run snapshot, project file, then catalog."""
     mode_key = validate_mode(mode)
@@ -528,8 +732,63 @@ def resolve_squad(
         _apply_role_slug(
             squad, sources, role, slug, "project", mode=mode_key, native_harness=host
         )
+
+    # Resolve effective worker_mode and dynamic rated coder pool from [models.available] + ratings.
+    # Explicit TOML file paths stay hermetic unless inherit_ancestors=True is requested;
+    # directory / workspace lookups automatically inherit ancestor ~/.herdr-master.toml.
+    should_inherit = (
+        inherit_ancestors
+        if inherit_ancestors is not None
+        else (project_path is None or Path(project_path).is_dir())
+    )
+    raw_project_cfg = (
+        load_project_config(project_path)
+        if project_path is not None and Path(project_path).exists()
+        else None
+    )
+    effective_models = (
+        load_effective_models_state(
+            project_path,
+            project_cfg=raw_project_cfg,
+            inherit_ancestors=should_inherit,
+        )
+        if project_path is not None
+        else None
+    )
+    section_wmode: Optional[str] = None
+    ai_head_prof: Optional[str] = None
+    agy_mode = "subagents"
+    if raw_project_cfg is not None:
+        ai_head_prof = raw_project_cfg.ai_head.routing_profile
+        agy_mode = raw_project_cfg.orchestration.agy_mode
+        if mode_key == "native":
+            section_wmode = raw_project_cfg.orchestration.worker_mode
+        elif raw_project_cfg.ergo is not None:
+            section_wmode = raw_project_cfg.ergo.worker_mode
+
+    resolved_worker_mode = resolve_effective_worker_mode(
+        worker_mode,
+        section_mode=section_wmode,
+        ai_head_profile=ai_head_prof,
+    )
+    effective_ratings = effective_models.ratings if effective_models is not None else None
+    extra_advisories: List[str] = []
+
     if project["worker_pool"] is not None:
         _apply_worker_bindings(squad, sources, project["worker_pool"], "project")
+    elif effective_models is not None:
+        dyn_pool, dyn_source, dyn_advisories = build_dynamic_coder_pool(
+            available=effective_models.available,
+            ratings=effective_ratings,
+            mode=mode_key,
+            native_harness=host,
+            agy_mode=agy_mode,
+            worker_mode=resolved_worker_mode,
+        )
+        extra_advisories.extend(dyn_advisories)
+        if dyn_pool:
+            _apply_worker_bindings(squad, sources, dyn_pool, dyn_source)
+
     if run_squad_path is not None:
         snapshot = _run_layer(Path(run_squad_path))
         for role, slug in snapshot["roles"].items():
@@ -563,7 +822,15 @@ def resolve_squad(
                 _workers_from_override(overrides["workers"], mode=mode_key, native_harness=host),
                 "override",
             )
-    return _finalize(squad, sources, mode_key, host)
+    return _finalize(
+        squad,
+        sources,
+        mode_key,
+        host,
+        ratings=effective_ratings,
+        worker_mode=resolved_worker_mode,
+        extra_advisories=extra_advisories,
+    )
 
 
 def _binding_from_document(record: Any, *, role: str, allow_effort: bool) -> HarnessBinding:
@@ -737,6 +1004,7 @@ def save_run_squad(
     *,
     mode: LaunchMode = "herdr",
     native_harness: Optional[str] = None,
+    worker_mode: str = "balanced",
 ) -> Path:
     """Save the ordered run squad to squad.toml.
 
@@ -776,6 +1044,7 @@ def save_run_squad(
         "resolution": {
             "mode": mode_key,
             "native_harness": host,
+            "worker_mode": validate_routing_profile(worker_mode),
         },
     }
     path.parent.mkdir(parents=True, exist_ok=True)

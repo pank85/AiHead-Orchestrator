@@ -50,13 +50,23 @@ from herdr_master.core.config import (
     CouncilMember,
     ErgoConfig,
     HerdrMasterConfig,
+    load_effective_models_state,
     load_project_config,
     save_project_config,
     squad_from_project_config,
     squad_to_project_config,
 )
+from herdr_master.core.model_ratings import (
+    BILLING_TIERS,
+    ModelEvaluationConfig,
+    ModelRating,
+    format_context_window,
+    lookup_rating,
+    merge_ratings,
+)
 from herdr_master.core.models import EffortLevel, HarnessBinding, Squad
 from herdr_master.core.slug import InvalidBindingSlugError
+from herdr_master.pipeline.model_evaluator import EvaluationResult, evaluate_available_models
 from herdr_master.pipeline.squad import save_squad_as_default, validate_squad
 
 SECTIONS: Tuple[Tuple[str, str], ...] = (
@@ -89,6 +99,16 @@ class FieldRow:
     current_value: Any = None
     hint: str = ""
     deletable_id: Optional[Tuple[str, int]] = None
+    badge: str = ""
+
+
+@dataclass
+class RatingInspectState:
+    """Read-only modal displaying full rating breakdown for a single model."""
+
+    harness: str
+    model_id: str
+    rating: Optional[ModelRating]
 
 
 @dataclass
@@ -163,6 +183,7 @@ class SetupTuiApp:
         save_project_fn: Optional[Callable[[HerdrMasterConfig, Optional[Path]], Path]] = None,
         save_squad_fn: Optional[Callable[[Squad, Optional[Path]], Path]] = None,
         discover_harness_fn: Optional[Callable[[str], List[ChoiceOption]]] = None,
+        evaluate_fn: Optional[Callable[..., EvaluationResult]] = None,
     ) -> None:
         self.config_path = config_path
         self._save_project_fn = (
@@ -171,6 +192,7 @@ class SetupTuiApp:
         self._save_squad_fn = (
             save_squad_as_default if save_squad_fn is None else save_squad_fn
         )
+        self._evaluate_fn = evaluate_available_models if evaluate_fn is None else evaluate_fn
         self._load_initial_state(cfg=cfg, squad=squad)
         if catalog is not None:
             self.catalog = catalog
@@ -187,6 +209,7 @@ class SetupTuiApp:
         self.field_scroll: Dict[str, int] = {sec_id: 0 for sec_id, _ in SECTIONS}
         self.picker: Optional[PickerState] = None
         self.text_prompt: Optional[TextPromptState] = None
+        self.rating_inspector: Optional[RatingInspectState] = None
         # View-only Available filters. Mode and harness are not written to TOML.
         self.available_view_mode: str = "herdr"
         self.available_view_harness: Optional[str] = None
@@ -247,6 +270,9 @@ class SetupTuiApp:
             self.ergo_coordinator = loaded_squad.scout.model_copy(
                 update={"label": "ergo-coordinator"}
             )
+        self.ergo_worker_mode: str = (
+            loaded_cfg.ergo.worker_mode if loaded_cfg.ergo is not None else "inherit"
+        )
 
         if loaded_cfg.master_coordinator is not None:
             self.master_custom_coordinator = True
@@ -435,6 +461,16 @@ class SetupTuiApp:
             return "unrestricted"
         return f"{total} enabled"
 
+    def _effective_ratings_and_eval(
+        self,
+    ) -> Tuple[Dict[str, Dict[str, ModelRating]], ModelEvaluationConfig]:
+        effective = load_effective_models_state(
+            self.config_path,
+            project_cfg=self.cfg,
+            inherit_ancestors=self.config_path is not None,
+        )
+        return effective.ratings, effective.evaluation
+
     def _available_rows(self) -> List[FieldRow]:
         """Rebuild Available rows. Bool keys are indexes, never model ids."""
         mode = self.available_view_mode
@@ -465,6 +501,9 @@ class SetupTuiApp:
             if harness
             else True
         )
+        effective_ratings, effective_eval = self._effective_ratings_and_eval()
+        billing_tier = effective_eval.billing_for(harness) if harness else "api"
+
         rows = [
             FieldRow(
                 key="available.view.mode",
@@ -500,9 +539,23 @@ class SetupTuiApp:
                 hint="Enable or disable all models for this harness",
             ),
         ]
+        unrated_count = 0
         for index, opt in enumerate(models):
             model_id = ids[index]
             checked = enabled_set is None or model_id in enabled_set
+            rating = lookup_rating(effective_ratings, harness, model_id) if harness else None
+            if rating is None:
+                if checked:
+                    unrated_count += 1
+                badge = "[unrated]"
+                hint = "Toggle allowlist | [V] inspect | [E] evaluate unrated models"
+            else:
+                badge = rating.compact_badge()
+                ctx_str = format_context_window(rating.context_window)
+                hint = (
+                    f"{rating.family} | A:{rating.agentic} Ctx:{ctx_str} "
+                    f"({rating.confidence}) | [V] inspect"
+                )
             rows.append(
                 FieldRow(
                     key=f"available.toggle.{index}",
@@ -512,9 +565,39 @@ class SetupTuiApp:
                     value_text="true" if checked else "false",
                     options=[ChoiceOption(True, "true"), ChoiceOption(False, "false")],
                     current_value=checked,
-                    hint="Toggle this model in the allowlist",
+                    hint=hint,
+                    badge=badge,
                 )
             )
+        rows.append(
+            FieldRow(
+                key="available.billing",
+                group="Model Evaluation",
+                label="Billing Tier",
+                kind="choice",
+                value_text=billing_tier,
+                options=[
+                    ChoiceOption("api", "api", "pay-per-token API pricing"),
+                    ChoiceOption("subscription", "subscription", "included subscription quota"),
+                    ChoiceOption("free", "free", "free route / $0 marginal cost"),
+                ],
+                current_value=billing_tier,
+                hint=f"Cost-efficiency billing tier for {harness or 'this harness'}",
+            )
+        )
+        rows.append(
+            FieldRow(
+                key="available.evaluate",
+                group="Model Evaluation",
+                label="Evaluate Unrated Models",
+                kind="action",
+                value_text="Enter / E",
+                hint=(
+                    f"Evaluate {unrated_count} unrated enabled model(s) in {harness or 'catalog'} "
+                    "(zero-auth benchmarks + Layer-3 fallback)"
+                ),
+            )
+        )
         rows.append(
             FieldRow(
                 key="available.add_custom",
@@ -529,6 +612,20 @@ class SetupTuiApp:
 
     def _apply_available_field(self, parts: List[str], value: Any) -> bool:
         """Apply an Available field. False means view-only or rejected (not dirty)."""
+        if len(parts) == 2 and parts[1] == "billing":
+            harness = self._available_toggle_harness
+            if not harness:
+                self._set_status("No harness selected for billing tier.", error=True)
+                return False
+            tier = str(value).strip().lower()
+            if tier not in BILLING_TIERS:
+                self._set_status(f"Unsupported billing tier {value!r}.", error=True)
+                return False
+            if self.cfg.models.evaluation is None:
+                self.cfg.models.evaluation = ModelEvaluationConfig()
+            self.cfg.models.evaluation.billing[harness] = tier  # type: ignore[assignment]
+            self._set_status(f"Set billing tier for {harness} to {tier}")
+            return True
         if (len(parts) == 2 and parts[1] == "all") or (
             len(parts) == 3 and parts[1] == "toggle" and parts[2] == "all"
         ):
@@ -752,6 +849,27 @@ class SetupTuiApp:
                         current_value=ah.automode,
                         hint="Compose Ergo/Orchestration squads from Available models",
                     ),
+                    FieldRow(
+                        key="aihead.routing_profile",
+                        group="AiHead Options",
+                        label="Routing Profile",
+                        kind="choice",
+                        value_text=ah.routing_profile,
+                        options=[
+                            ChoiceOption(
+                                "balanced", "balanced", "match model & effort to task complexity"
+                            ),
+                            ChoiceOption(
+                                "quality", "quality", "prefer highest intelligence & coding ratings"
+                            ),
+                            ChoiceOption("fast", "fast", "prefer highest speed & low latency"),
+                            ChoiceOption(
+                                "frugal", "frugal", "prefer highest cost_efficiency / free routes"
+                            ),
+                        ],
+                        current_value=ah.routing_profile,
+                        hint="Default optimization profile for AiHead triage & inherited pipelines",
+                    ),
                 ]
             )
             return rows
@@ -792,7 +910,42 @@ class SetupTuiApp:
                         allow_none_effort=not needs_effort,
                     )
                 )
-            rows.extend(self._worker_pool_rows())
+            rows.append(
+                FieldRow(
+                    key="ergo.worker_mode",
+                    group="Dynamic Workers (Architect picks from Available + Ratings)",
+                    label="Worker Mode",
+                    kind="choice",
+                    value_text=self.ergo_worker_mode,
+                    options=[
+                        ChoiceOption(
+                            "inherit",
+                            "inherit",
+                            "follow AiHead routing_profile (or balanced standalone)",
+                        ),
+                        ChoiceOption(
+                            "balanced", "balanced", "match worker model & effort to task complexity"
+                        ),
+                        ChoiceOption(
+                            "quality", "quality", "prefer top coding & intelligence ratings"
+                        ),
+                        ChoiceOption("fast", "fast", "prefer fastest models"),
+                        ChoiceOption("frugal", "frugal", "prefer lowest cost / free models"),
+                    ],
+                    current_value=self.ergo_worker_mode,
+                    hint="Optimization bias for Architect dynamic worker selection (all harnesses)",
+                )
+            )
+            rows.append(
+                FieldRow(
+                    key="ergo.workers_info",
+                    group="Dynamic Workers (Architect picks from Available + Ratings)",
+                    label="Worker Pool",
+                    kind="info",
+                    value_text="Dynamic (Available models)",
+                    hint="Manage allowed models & ratings in [6] Available",
+                )
+            )
             return rows
 
         if section == "orchestration":
@@ -871,46 +1024,42 @@ class SetupTuiApp:
                     )
                 )
 
-            worker_list = orch.worker_models or [defaults.get("coder", "")]
-            for idx, w_model in enumerate(worker_list):
-                model_opts, empty_hint = self._filtered_model_options(
-                    host, mode=model_mode, current=w_model
-                )
-                rows.append(
-                    FieldRow(
-                        key=f"orch.worker.{idx}",
-                        group="Orchestration Workers (no static effort)",
-                        label=f"Worker {idx + 1} Model",
-                        kind="choice",
-                        value_text=w_model or "(unset)",
-                        options=model_opts,
-                        current_value=w_model,
-                        hint=empty_hint
-                        or "Select worker model (press A to add, D to remove)",
-                        deletable_id=("orch_worker", idx),
-                    )
-                )
             rows.append(
                 FieldRow(
-                    key="orch.worker_add",
-                    group="Orchestration Workers (no static effort)",
-                    label="+ Add Worker",
-                    kind="action",
-                    value_text="Enter / A",
-                    hint="Append a worker model for native orchestration",
+                    key="orch.worker_mode",
+                    group="Dynamic Workers (Architect picks from Available + Ratings)",
+                    label="Worker Mode",
+                    kind="choice",
+                    value_text=orch.worker_mode,
+                    options=[
+                        ChoiceOption(
+                            "inherit",
+                            "inherit",
+                            "follow AiHead routing_profile (or balanced standalone)",
+                        ),
+                        ChoiceOption(
+                            "balanced", "balanced", "match worker model & effort to task complexity"
+                        ),
+                        ChoiceOption(
+                            "quality", "quality", "prefer top coding & intelligence ratings"
+                        ),
+                        ChoiceOption("fast", "fast", "prefer fastest models"),
+                        ChoiceOption("frugal", "frugal", "prefer lowest cost / free models"),
+                    ],
+                    current_value=orch.worker_mode,
+                    hint=f"Optimization bias for Architect worker selection ({host} only)",
                 )
             )
-            if len(orch.worker_models) > 1:
-                rows.append(
-                    FieldRow(
-                        key="orch.worker_remove",
-                        group="Orchestration Workers (no static effort)",
-                        label="- Remove Last Worker",
-                        kind="action",
-                        value_text="Enter / D",
-                        hint="Remove the last orchestration worker",
-                    )
+            rows.append(
+                FieldRow(
+                    key="orch.workers_info",
+                    group="Dynamic Workers (Architect picks from Available + Ratings)",
+                    label="Worker Pool",
+                    kind="info",
+                    value_text=f"Dynamic ({host} Available only)",
+                    hint="Manage allowed models & ratings in [6] Available",
                 )
+            )
             return rows
 
         if section == "council":
@@ -1104,6 +1253,8 @@ class SetupTuiApp:
                     self.ergo_coordinator = self.squad.scout.model_copy(
                         update={"label": "ergo-coordinator"}
                     )
+            elif parts[1] == "worker_mode":
+                self.ergo_worker_mode = str(value)
             elif parts[1] == "coord":
                 self._apply_binding_change(self.ergo_coordinator, parts[2], value)
             else:
@@ -1119,6 +1270,8 @@ class SetupTuiApp:
             elif parts[1] == "agy_mode":
                 orch.agy_mode = str(value)
                 self._reconcile_orchestration()
+            elif parts[1] == "worker_mode":
+                orch.worker_mode = str(value)
             elif parts[1] == "worker":
                 idx = int(parts[2])
                 if not orch.worker_models:
@@ -1274,6 +1427,64 @@ class SetupTuiApp:
         if action_key == "available.add_custom":
             self._open_custom_model_prompt("available.add_custom")
             return
+
+        if action_key == "available.evaluate":
+            self._evaluate_unrated_models()
+            return
+
+    def _evaluate_unrated_models(self) -> None:
+        try:
+            res = self._evaluate_fn(
+                project_path=self.config_path,
+                cfg=self.cfg,
+                catalog=self.catalog,
+                dry_run=True,
+                probe_live_catalog=False,
+                inherit_ancestors=self.config_path is not None,
+            )
+        except Exception as err:
+            self._set_status(f"Evaluation failed: {err}", error=True)
+            return
+
+        if res.evaluated:
+            self.cfg.models.ratings = merge_ratings(self.cfg.models.ratings, res.evaluated)
+            self.dirty = True
+            self._set_status(
+                f"Evaluated {res.evaluated_count} model(s), skipped {res.skipped_count}, "
+                f"unresolved {res.unresolved_count}. Press S to save."
+            )
+        elif res.unresolved_count > 0:
+            self._set_status(
+                f"No new ratings resolved ({res.unresolved_count} unresolved, "
+                f"{res.skipped_count} already rated).",
+                error=True,
+            )
+        else:
+            self._set_status(
+                f"All target models already rated ({res.skipped_count} skipped)."
+            )
+
+    def _inspect_current_available_rating(self) -> None:
+        row = self._current_row()
+        if row is None or not row.key.startswith("available.toggle."):
+            self._set_status("Select a model row in Available to inspect its rating.")
+            return
+        try:
+            index = int(row.key.split(".")[2])
+            model_id = self._available_toggle_ids[index]
+        except (ValueError, IndexError):
+            return
+        harness = self._available_toggle_harness
+        effective_ratings, _ = self._effective_ratings_and_eval()
+        rating = lookup_rating(effective_ratings, harness, model_id)
+        self.rating_inspector = RatingInspectState(
+            harness=harness,
+            model_id=model_id,
+            rating=rating,
+        )
+        self._set_status(
+            f"Inspecting rating for {harness}:{model_id}. Press Esc or Enter to close."
+        )
 
     def _delete_item(self, kind_tag: str, idx: int) -> None:
         if kind_tag == "orch_worker":
@@ -1477,8 +1688,11 @@ class SetupTuiApp:
             cfg.ergo = ErgoConfig(
                 coordinator=HarnessBinding(
                     kind=kind, model=model, effort=effort, label="ergo-coordinator"
-                )
+                ),
+                worker_mode=self.ergo_worker_mode,
             )
+        elif self.ergo_worker_mode != "inherit":
+            cfg.ergo = ErgoConfig(coordinator=None, worker_mode=self.ergo_worker_mode)
         else:
             cfg.ergo = None
 
@@ -1503,21 +1717,9 @@ class SetupTuiApp:
                 problem = native_binding_error(host, model_val, role=role, native_harness=host)
                 if problem:
                     raise ValueError(problem)
-        if not orch.worker_models:
-            raise ValueError("Orchestration requires at least one worker model.")
-        for w_model in orch.worker_models:
-            if not w_model or any(
-                w_model.startswith(f"{k}:") for k in supported_harnesses(mode="herdr")
-            ):
-                raise ValueError(
-                    f"Orchestration worker model '{w_model}' must be a native model ID."
-                )
-            if is_agy_swarm:
-                describe_herdr_agent(host, w_model, None, "worker")
-            else:
-                problem = native_binding_error(host, w_model, role="coder", native_harness=host)
-                if problem:
-                    raise ValueError(problem)
+        # Workers are picked dynamically by the Architect from [models.available] + ratings;
+        # stop persisting static worker_models lists.
+        orch.worker_models = []
         orch.sync_active_to_harnesses()
 
         # 4. Council
@@ -1549,12 +1751,9 @@ class SetupTuiApp:
         else:
             cfg.master_coordinator = None
 
-        # Merge squad into cfg while preserving extra per-worker metadata.
-        cfg = squad_to_project_config(squad, existing_config=cfg)
-        for key, entry in (cfg.models.worker_pool or {}).items():
-            previous = self._old_worker_pool_meta.get(key)
-            if isinstance(previous, dict):
-                cfg.models.worker_pool[key] = {**previous, **entry}
+        # Merge squad role bindings into cfg; omit static [models.worker_pool] since
+        # the Architect dynamically picks workers from [models.available] + [models.ratings].
+        cfg = squad_to_project_config(squad, existing_config=cfg, include_worker_pool=False)
 
         validated_cfg = type(cfg).model_validate(cfg.model_dump())
         return validated_cfg, squad
@@ -1697,6 +1896,12 @@ class SetupTuiApp:
         if key == "CTRL_C":
             raise KeyboardInterrupt
 
+        if self.rating_inspector is not None:
+            if key in ("ESC", "ENTER", "SPACE", "v", "V", "q", "Q"):
+                self.rating_inspector = None
+                self._set_status("Closed rating inspector.")
+            return
+
         if self.text_prompt is not None:
             self._handle_text_prompt_key(key)
             return
@@ -1775,13 +1980,13 @@ class SetupTuiApp:
                 self._open_picker(row)
             elif row.kind == "action":
                 self._run_action(row.key)
+        elif key in ("e", "E") and self.current_section == "models":
+            self._run_action("available.evaluate")
+        elif key in ("v", "V") and self.current_section == "models":
+            self._inspect_current_available_rating()
         elif key in ("a", "A"):
-            if self.current_section == "orchestration":
-                self._run_action("orch.worker_add")
-            elif self.current_section == "council":
+            if self.current_section == "council":
                 self._run_action("council.member_add")
-            elif self.current_section == "ergo":
-                self._run_action("pool.add")
             elif self.current_section == "models":
                 self._run_action("available.add_custom")
         elif key in ("d", "D", "DELETE", "BACKSPACE") and row is not None:
@@ -1801,11 +2006,10 @@ class SetupTuiApp:
             b = self.cfg.ai_head.binding
             text = f"{b.kind.value}:{b.model}"
         elif section == "ergo":
-            enabled_w = sum(1 for w in self.squad.worker_pool if w.enabled)
             text = (
                 f"s={self.squad.scout.kind.value} "
                 f"a={self.squad.architect.kind.value} "
-                f"w={enabled_w}/{len(self.squad.worker_pool)}"
+                f"m={self.ergo_worker_mode}"
             )
         elif section == "orchestration":
             text = f"{self.cfg.orchestration.harness.value} (native)"
@@ -1947,7 +2151,75 @@ class SetupTuiApp:
             box=ROUNDED,
         )
 
+    def _render_rating_inspector(self) -> Panel:
+        assert self.rating_inspector is not None
+        insp = self.rating_inspector
+        lines: List[Text] = [
+            Text(f"  Model: {insp.harness}:{insp.model_id}", style="bold cyan"),
+            Text(""),
+        ]
+        if insp.rating is None:
+            lines.append(Text("  Status: Unrated", style="yellow"))
+            lines.append(
+                Text(
+                    "  Press [E] in Available or run `aihead catalog evaluate` to score.",
+                    style="dim",
+                )
+            )
+        else:
+            r = insp.rating
+            lines.append(
+                Text(
+                    f"  Intelligence: {r.intelligence:>3}/100    Coding:   {r.coding:>3}/100",
+                    style="white",
+                )
+            )
+            lines.append(
+                Text(
+                    f"  Agentic:      {r.agentic:>3}/100    Speed:    {r.speed:>3}/100",
+                    style="white",
+                )
+            )
+            lines.append(
+                Text(
+                    f"  Cost Eff:     {r.cost_efficiency:>3}/100    Context:  "
+                    f"{r.context_handling:>3}/100",
+                    style="white",
+                )
+            )
+            lines.append(Text(""))
+            lines.append(
+                Text(
+                    f"  Family: {r.family}  |  Billing: {r.billing_tier}  |  "
+                    f"Context Window: {format_context_window(r.context_window)}",
+                    style="cyan",
+                )
+            )
+            eff = ", ".join(r.supported_efforts) if r.supported_efforts else "fixed / none"
+            roles = ", ".join(r.recommended_roles) if r.recommended_roles else "-"
+            lines.append(Text(f"  Efforts: {eff}  |  Roles: {roles}", style="white"))
+            lines.append(
+                Text(
+                    f"  Source: {r.source}  |  Confidence: {r.confidence}  |  "
+                    f"Manual: {str(r.manual_override).lower()}",
+                    style="dim",
+                )
+            )
+            if r.notes:
+                lines.append(Text(f"  Notes: {r.notes}", style="dim"))
+            lines.append(Text(f"  Evaluated: {r.evaluated_at}", style="dim"))
+
+        return Panel(
+            Text("\n").join(lines),
+            title="Model Rating Details",
+            subtitle="Esc / Enter / V Close",
+            border_style="cyan",
+            box=ROUNDED,
+        )
+
     def _render_options(self, body_height: int) -> Panel:
+        if self.rating_inspector is not None:
+            return self._render_rating_inspector()
         if self.text_prompt is not None:
             return self._render_text_prompt(body_height)
         if self.picker is not None:
@@ -1986,6 +2258,9 @@ class SetupTuiApp:
                 line.append(f"{row.label:<22}", style=lbl_style)
                 line.append(": ", style="dim")
                 line.append(f"[ {row.value_text} ]", style=val_style)
+                if row.badge:
+                    badge_style = "yellow" if row.badge == "[unrated]" else "dim green"
+                    line.append(f"  {row.badge}", style=badge_style)
             visual_lines.append((idx, line))
 
         viewport = max(5, body_height - 4)

@@ -65,8 +65,8 @@ Do NOT maintain or consult hardcoded default model tables. The single authority 
      - `pi:xai/grok-4.7`: complex, architectural, or subtle work (`--provider xai --model grok-4.7 --thinking <level>`)
    *Note*: `claude:claude-3-opus` and `agy:gemini-4-argon-high` are NOT defaults anywhere.
 
-3. **`ALLOWED CODER MODELS` Block**:
-   Extract `.allowed_coder_models` directly from the `aihead catalog squad --json` output. Paste this block verbatim into the Architect prompt. Do not craft your own model list.
+3. **`ALLOWED CODER MODELS` Block (Dynamic Rated Pool)**:
+   Extract `.allowed_coder_models` directly from `aihead catalog squad [--worker-mode <mode>] --json` output. Unless explicit `--workers` overrides were passed, this block is built dynamically from effective `[models.available]` + `[models.ratings]` across enabled harnesses and ranked by `worker_mode` (`balanced` | `quality` | `fast` | `frugal`, inheriting `ai_head.routing_profile` when set to `inherit`). Paste this block verbatim into the Architect prompt so the Architect selects the best worker model and per-task effort using the stored ratings. Do not craft your own model list.
 
 4. **Resolving Agent Launch Descriptors**:
    For each role/task launch, resolve the exact launch arguments or native tool call from:
