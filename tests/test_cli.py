@@ -767,3 +767,30 @@ def test_ergo_coordinator_flag_forwards_binding_and_defaults_to_none(monkeypatch
     assert binding.model == "openai/gpt-6.1-sol"
     assert binding.effort == EffortLevel.HIGH
     assert launch.await_args_list[1].kwargs["coordinator"] is None
+
+
+def test_subcommands_always_request_fresh_workspace_and_delegate_inside_herdr(
+    monkeypatch, tmp_path
+):
+    monkeypatch.chdir(tmp_path)
+    monkeypatch.setenv("HERDR_ENV", "1")
+    monkeypatch.setenv("HERDR_SOCKET_PATH", "/tmp/sessions/default/herdr.sock")
+    monkeypatch.setenv("HERDR_WORKSPACE_ID", "w-coord")
+    monkeypatch.setenv("HERDR_PANE_ID", "w-coord:p1")
+
+    for subcmd, target, args in (
+        ("orchestration", "herdr_master.cli.main.launch_orchestration", ["orchestration", "task"]),
+        ("ergo", "herdr_master.cli.main.launch_ergo", ["ergo", "task"]),
+        ("council", "herdr_master.cli.main.launch_council", ["council", "task"]),
+        ("master", "herdr_master.cli.main.launch_master", ["master", "start", "--task", "task"]),
+    ):
+        launch = AsyncMock(return_value=_launch_result())
+        with (
+            patch(target, launch),
+            patch("herdr_master.cli.main.os.execvp"),
+        ):
+            result = runner.invoke(app, [*args, "--no-attach"])
+        assert result.exit_code == 0, f"{subcmd}: {result.output}"
+        assert launch.await_args.kwargs["fresh_workspace"] is True, subcmd
+        assert launch.await_args.kwargs["delegated"] is True, subcmd
+        assert launch.await_args.kwargs["parent_pane_id"] == "w-coord:p1", subcmd
