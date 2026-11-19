@@ -4,6 +4,8 @@
 
 The `aihead` command-line utility provides rapid, scriptable control over multi-agent orchestration, worktrees, and Herdr panes. (Legacy `herdm` and `herdr-master` executables remain supported as backwards-compatible entry points.)
 
+Bare `aihead` and root `aihead --tui` find and attach to an existing AiHead, or launch the default AiHead in a new Herdr workspace if none exists. Root `--tui` does not open the cockpit described below; it is distinct from the `tui` subcommand.
+
 ```text
 Usage: aihead [OPTIONS] COMMAND [ARGS]...
 

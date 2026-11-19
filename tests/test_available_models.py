@@ -653,3 +653,50 @@ def test_custom_models_serialization_and_roundtrip_toml(tmp_path):
             == native_allowlist[h.value]
         )
 
+
+
+def test_three_mode_toggle_round_trip_preserves_other_modes_and_extras(tmp_path):
+    from herdr_master.core.available_models import (
+        AvailableModels,
+        materialize_toggle,
+        materialize_toggle_all,
+    )
+    from herdr_master.core.config import (
+        HerdrMasterConfig,
+        ModelsConfig,
+        load_project_config,
+        save_project_config,
+    )
+
+    initial = AvailableModels(
+        herdr={"pi": ["h1"]},
+        native={"pi": ["n1"]},
+        core={"pi": ["c1"]},
+        custom_scope={"x": 1},
+    )
+
+    # Toggling core leaves herdr, native, and extras identical
+    after_core = materialize_toggle(initial, "core", "pi", "c2", True, ["c1", "c2"])
+    assert after_core.core == {"pi": ["c1", "c2"]}
+    assert after_core.herdr == {"pi": ["h1"]}
+    assert after_core.native == {"pi": ["n1"]}
+    assert after_core.model_extra == {"custom_scope": {"x": 1}}
+
+    # Toggling herdr/native leaves core identical
+    after_herdr = materialize_toggle(after_core, "herdr", "pi", "h1", False, ["h1"])
+    assert after_herdr.core == {"pi": ["c1", "c2"]}
+    assert after_herdr.native == {"pi": ["n1"]}
+
+    after_native = materialize_toggle_all(after_herdr, "native", "pi", False, ["n1"])
+    assert after_native.core == {"pi": ["c1", "c2"]}
+    assert after_native.herdr == {"pi": []}
+    assert after_native.native == {"pi": []}
+
+    # Save & reload preserves all three modes
+    cfg_path = tmp_path / ".herdr-master.toml"
+    save_project_config(HerdrMasterConfig(models=ModelsConfig(available=after_native)), cfg_path)
+    reloaded = load_project_config(cfg_path).models.available
+    assert reloaded is not None
+    assert reloaded.core == {"pi": ["c1", "c2"]}
+    assert reloaded.herdr == {"pi": []}
+    assert reloaded.native == {"pi": []}

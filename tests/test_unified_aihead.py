@@ -78,11 +78,21 @@ def test_aihead_ergo_subcommand_dispatches_without_standalone_launch():
     standalone.assert_not_called()
 
 
-def test_tui_dispatches():
-    with patch("herdr_master.cli.main.tui") as cockpit:
-        result = runner.invoke(aihead_app, ["--tui"])
+@pytest.mark.parametrize("args", [[], ["--tui"]])
+def test_default_and_tui_dispatch_same_launch(args, tmp_path):
+    ctx = HerdrContext(is_inside_herdr=True, session_name="default", socket_path=tmp_path / "sock")
+    with (
+        patch("herdr_master.cli.main.resolve_launch_context", return_value=ctx),
+        patch(
+            "herdr_master.cli.main._dispatch_standalone_aihead", new_callable=AsyncMock
+        ) as dispatch,
+        patch("herdr_master.cli.main.tui") as cockpit,
+    ):
+        dispatch.return_value = {"session": "default", "workspace_id": "w", "pane_id": "p"}
+        result = runner.invoke(aihead_app, args)
     assert result.exit_code == 0, result.output
-    cockpit.assert_called_once_with(session=None, demo=False)
+    assert dispatch.await_args.kwargs["default_launch"] is True
+    cockpit.assert_not_called()
 
 
 def test_herdm_ergo_warns_and_runs():
@@ -151,6 +161,7 @@ async def test_delegation_creates_background_workspace_and_forwards_parent(monke
 
 def test_ergo_flag_launches_and_focuses_workspace(monkeypatch):
     monkeypatch.setenv("HERDR_ENV", "1")
+    monkeypatch.delenv("HERDR_PANE_ID", raising=False)
     with (
         patch("herdr_master.cli.main.launch_ergo", new_callable=AsyncMock) as launch,
         patch("herdr_master.cli.main.os.execvp") as execvp,
@@ -199,6 +210,7 @@ async def test_missing_parent_stops_without_creating_workspace(monkeypatch):
 @pytest.mark.parametrize("skill", ["council", "orchestration", "herdr-master"])
 def test_other_skills_use_fresh_focused_workspace(skill, monkeypatch):
     monkeypatch.setenv("HERDR_ENV", "1")
+    monkeypatch.delenv("HERDR_PANE_ID", raising=False)
     function = "launch_master" if skill == "herdr-master" else f"launch_{skill}"
     args = [f"--{skill}"] if skill == "herdr-master" else [f"--{skill}", "test"]
     with (
@@ -243,7 +255,6 @@ def test_skill_outside_herdr_starts_in_terminal(monkeypatch):
         ["--ergo", "test", "--no-attach"],
         ["--herdr-master", "--no-attach"],
         ["--setup", "--no-attach"],
-        ["--tui", "--no-attach"],
         ["--ergo", "   "],
     ],
 )

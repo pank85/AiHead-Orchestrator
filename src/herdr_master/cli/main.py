@@ -1,6 +1,7 @@
 """CLI interface for herdr-master (herdm)."""
 
 import asyncio
+import json
 import os
 import shutil
 import signal
@@ -37,6 +38,7 @@ from herdr_master.core.config import (
 )
 from herdr_master.core.context import HerdrContext
 from herdr_master.core.slug import InvalidBindingSlugError
+from herdr_master.herdr.aihead_discovery import discover_aihead, focus_aihead
 from herdr_master.herdr.client import HerdrClient
 from herdr_master.herdr.socket import HerdrConnectionError
 from herdr_master.pipeline.council import CouncilError
@@ -93,8 +95,7 @@ aihead_app = typer.Typer(
     name="aihead",
     help=(
         "Launch an interactive AiHead session or run a subcommand. "
-        "Adopts an existing workspace when one is already available; otherwise "
-        "starts Herdr and opens a new workspace."
+        "Reopens an existing AiHead or starts one in a new Herdr workspace."
     ),
     invoke_without_command=True,
     no_args_is_help=False,
@@ -102,6 +103,7 @@ aihead_app = typer.Typer(
 )
 master_app = typer.Typer(help="Manage and launch Herdr Master orchestrators (Multiple Jobs).")
 pipeline_app = typer.Typer(help="Manage and run cross-harness Ergo pipelines (Single Major Job).")
+core_app = typer.Typer(help="Inspect the separate experimental Herdr Core backend.")
 
 app.add_typer(master_app, name="master")
 app.add_typer(pipeline_app, name="pipeline")
@@ -111,8 +113,165 @@ aihead_app.add_typer(master_app, name="master")
 aihead_app.add_typer(pipeline_app, name="pipeline")
 aihead_app.add_typer(skills_app, name="skills")
 aihead_app.add_typer(catalog_app, name="catalog")
+aihead_app.add_typer(core_app, name="core")
 
 console = Console()
+
+
+@core_app.command("terminals")
+def core_terminals() -> None:
+    """List Herdr Core terminals as JSON; this does not launch AiHead."""
+    from herdr_master.herdr.core_client import CoreClientError, terminal_list
+
+    try:
+        result = asyncio.run(terminal_list())
+    except CoreClientError as err:
+        _abort(str(err))
+    typer.echo(json.dumps(result, indent=2))
+
+
+@core_app.command("delegate")
+def core_delegate(
+    command: list[str] = typer.Argument(  # noqa: B008
+        ..., help="Command and arguments to run in the Core child terminal."
+    ),
+    cwd: Path = typer.Option(
+        Path("."), "--cwd", help="Working directory for the Core child terminal."
+    ),
+    name: Optional[str] = typer.Option(None, "--name", help="Optional terminal name."),
+    parent: Optional[str] = typer.Option(
+        None,
+        "--parent",
+        help="Explicit parent terminal address (defaults to HC_TERMINAL_ID).",
+    ),
+    standalone: bool = typer.Option(
+        False,
+        "--standalone",
+        help="Explicitly allow spawning without a parent terminal.",
+    ),
+    wait: bool = typer.Option(False, "--wait", help="Wait for the child terminal to exit."),
+    timeout: Optional[float] = typer.Option(
+        None,
+        "--timeout",
+        help="RPC timeout in seconds (defaults to 10s, or 60s with --wait).",
+    ),
+) -> None:
+    """Explicitly dispatch a single-hop child terminal on Herdr Core."""
+    from herdr_master.herdr.core_delegation import (
+        CoreDelegationError,
+        delegate_core_child,
+        run_core_one_child_workflow,
+    )
+
+    try:
+        if wait and not standalone:
+            wait_timeout = 60.0 if timeout is None else timeout
+            report = asyncio.run(
+                run_core_one_child_workflow(
+                    command,
+                    cwd=cwd.resolve(),
+                    name=name,
+                    parent=parent,
+                    wait_timeout=wait_timeout,
+                )
+            )
+            typer.echo(
+                json.dumps(
+                    {
+                        "parent": report.parent,
+                        "address": report.child,
+                        "exit_code": report.exit_code,
+                        "reason": report.wait_reason,
+                    },
+                    indent=2,
+                )
+            )
+            return
+        result = asyncio.run(
+            delegate_core_child(
+                command,
+                cwd=cwd.resolve(),
+                name=name,
+                parent=parent,
+                allow_standalone=standalone,
+                wait=wait,
+                timeout=timeout,
+            )
+        )
+    except CoreDelegationError as err:
+        _abort(str(err))
+    typer.echo(
+        json.dumps(
+            {"address": result.address, "state": result.state, "reason": result.reason},
+            indent=2,
+        )
+    )
+
+
+@core_app.command("send")
+def core_send(
+    target: str = typer.Argument(..., help="Target Core terminal address."),
+    text: str = typer.Argument(..., help="Message text to send to the terminal."),
+    timeout: float = typer.Option(
+        30.0, "--timeout", help="RPC timeout in seconds (defaults to 30s)."
+    ),
+) -> None:
+    """Explicitly send a single message to a Herdr Core terminal."""
+    from herdr_master.herdr.core_delegation import CoreDelegationError, send_core_child
+
+    try:
+        asyncio.run(send_core_child(target, text, timeout=timeout))
+    except CoreDelegationError as err:
+        _abort(str(err))
+    typer.echo(json.dumps({"target": target, "sent": True}, indent=2))
+
+
+@core_app.command("work")
+def core_work(
+    objective: str = typer.Argument(..., help="User objective to delegate to a Core worker."),
+    cwd: Path = typer.Option(
+        Path("."), "--cwd", help="Working directory for the Core worker."
+    ),
+    harness: str = typer.Option("pi", "--harness", help="Worker harness (only 'pi' is supported)."),
+    model: Optional[str] = typer.Option(None, "--model", help="Override worker model."),
+    effort: Optional[str] = typer.Option(None, "--effort", help="Override worker effort."),
+    name: Optional[str] = typer.Option(None, "--name", help="Optional worker terminal name."),
+    parent: Optional[str] = typer.Option(
+        None, "--parent", help="Explicit parent terminal address (defaults to HC_TERMINAL_ID)."
+    ),
+    timeout: float = typer.Option(
+        10.0, "--timeout", help="Spawn RPC timeout in seconds (defaults to 10s)."
+    ),
+) -> None:
+    """Spawn an owned Core worker non-blocking with direct-parent report instructions."""
+    from herdr_master.herdr.core_delegation import CoreDelegationError, delegate_core_task
+
+    try:
+        result = asyncio.run(
+            delegate_core_task(
+                objective,
+                cwd=cwd.resolve(),
+                harness=harness,
+                model=model,
+                effort=effort,
+                name=name,
+                parent=parent,
+                timeout=timeout,
+            )
+        )
+    except CoreDelegationError as err:
+        _abort(str(err))
+    typer.echo(
+        json.dumps(
+            {
+                "address": result.address,
+                "state": result.state,
+                "reason": result.reason,
+            },
+            indent=2,
+        )
+    )
+
 
 PLUGIN_ID = "pank85.aihead-cockpit"
 _HARNESS_HELP = (
@@ -1278,6 +1437,7 @@ def install_cmd(
         help="Overwrite existing non-Hermes files or links; Hermes unowned targets are always "
         "protected",
     ),
+    harness: Optional[str] = typer.Option(None, "--harness", help="Install for one harness only."),
 ) -> None:
     """Install canonical skills across all supported harnesses.
 
@@ -1285,7 +1445,7 @@ def install_cmd(
     included when that catalog contains them; this command does not hard-code a
     skill list.
     """
-    run_install_skills(force=force)
+    run_install_skills(force=force, harness=harness)
 
 
 _AIHEAD_WORKSPACE_LABEL = "ai-head"
@@ -1372,8 +1532,8 @@ def _created_workspace_id(created: Any) -> Optional[str]:
 async def _probe_selected_session(ctx: HerdrContext) -> tuple[bool, Optional[str]]:
     """Return whether the selected daemon is live and which workspace to adopt.
 
-    Connection absence or timeout means the daemon is not usable. RPC and
-    programming errors propagate so they are not disguised as absence.
+    Connection absence or timeout during ping means the daemon is not usable.
+    Snapshot failures propagate rather than being mistaken for an empty session.
     """
     socket_path = Path(ctx.socket_path)
     if not ctx.is_inside_herdr and not socket_path.exists():
@@ -1385,9 +1545,9 @@ async def _probe_selected_session(ctx: HerdrContext) -> tuple[bool, Optional[str
     )
     try:
         await client.ping()
-        snapshot = await client.get_snapshot()
     except _PROBE_ABSENCE:
         return False, None
+    snapshot = await client.get_snapshot()
     return True, _workspace_id_from_snapshot(ctx, snapshot)
 
 
@@ -1452,6 +1612,7 @@ async def _dispatch_standalone_aihead(
     effective_cwd: Path,
     config_path: Optional[Path],
     automode: Optional[bool] = None,
+    default_launch: bool = False,
 ) -> Any:
     """Adopt or create one workspace, then launch interactive AiHead there.
 
@@ -1460,11 +1621,22 @@ async def _dispatch_standalone_aihead(
     """
     daemon_live, existing_workspace = await _probe_selected_session(ctx)
     must_start = not daemon_live
-    must_create = existing_workspace is None and workspace is None
+    must_create = workspace is None and (default_launch or existing_workspace is None)
     if must_start or (not ctx.is_inside_herdr and attach):
         purpose = "start the Herdr server" if must_start else "attach to the Herdr session"
         _require_herdr_executable(purpose)
-    if must_start or must_create:
+    if default_launch and daemon_live:
+        client = HerdrClient(session=ctx.session_name, socket_path=ctx.socket_path)
+        existing = await discover_aihead(client, project=effective_cwd)
+        if existing is not None:
+            await focus_aihead(client, existing)
+            return {
+                "workspace_id": existing.workspace_id,
+                "pane_id": existing.pane_id,
+                "session": ctx.session_name,
+                "reused": True,
+            }
+    if must_start or (must_create and not default_launch):
         await ensure_herdr_server(Path(ctx.socket_path), session_name=ctx.session_name)
 
     adopted_workspace = existing_workspace
@@ -1517,14 +1689,23 @@ def _print_standalone_launch_result(res: Any, fallback_session: str) -> str:
         target_session = res.get("session", fallback_session)
         is_split = res.get("split", False)
         sec_pane = res.get("secondary_pane_id")
+        reused = res.get("reused", False)
     else:
         ws_id = None
         pane_id = None
         target_session = fallback_session
         is_split = False
         sec_pane = None
+        reused = False
 
-    if is_split and sec_pane:
+    if reused:
+        console.print(
+            f"[green]AiHead reopened.[/green]\n"
+            f"  Session: {target_session}\n"
+            f"  Workspace: {ws_id}\n"
+            f"  Pane: {pane_id}"
+        )
+    elif is_split and sec_pane:
         console.print(
             f"[green]✓ AiHead launched in split layout![/green]\n"
             f"  Session: {target_session}\n"
@@ -1638,12 +1819,13 @@ def _launch_skill(
 @aihead_app.callback(invoke_without_command=True)
 def launch_standalone_aihead(
     ctx: typer.Context,
+    backend: str = typer.Option("legacy", "--backend", help="Runtime backend: legacy or core."),
     setup: bool = typer.Option(False, "--setup", help="Open the settings TUI."),
     defaults: bool = typer.Option(
         False, "--defaults", help="Apply setup defaults without prompting."
     ),
     yes: bool = typer.Option(False, "--yes", "-y", help="Skip the setup confirmation prompt."),
-    tui_flag: bool = typer.Option(False, "--tui", help="Launch the AiHead-Cockpit TUI."),
+    tui_flag: bool = typer.Option(False, "--tui", help="Start or reopen interactive AiHead."),
     menu: bool = typer.Option(
         False, "--menu", help="Open the AiHead menu in a Herdr command pane."
     ),
@@ -1732,7 +1914,31 @@ def launch_standalone_aihead(
     ),
 ) -> None:
     """Launch an interactive AiHead session in a Herdr workspace."""
+    if backend not in ("legacy", "core"):
+        _abort("--backend must be legacy or core.")
+    legacy_launch_commands = {
+        "head", "ergo", "council", "orchestration", "master", "pipeline", "tui",
+        "workspace", "aihead-cli",
+    }
+    if (
+        os.environ.get("HC_TERMINAL_ID")
+        and backend == "legacy"
+        and ctx.get_parameter_source("backend").name == "DEFAULT"
+        and (
+            ctx.invoked_subcommand in legacy_launch_commands
+            or (ctx.invoked_subcommand is None and not setup)
+        )
+    ):
+        _abort(
+            "Implicit legacy launch is disabled inside a Core terminal; "
+            "select --backend core or explicitly choose --backend legacy."
+        )
     if ctx.invoked_subcommand is not None:
+        if backend == "core" and ctx.invoked_subcommand in legacy_launch_commands:
+            _abort(
+                f"Core backend does not support the '{ctx.invoked_subcommand}' subcommand; "
+                "choose --backend legacy explicitly to use the legacy backend."
+            )
         return
     skills: list[tuple[str, Optional[str]]] = [
         (name, value)
@@ -1745,8 +1951,13 @@ def launch_standalone_aihead(
     ]
     if herdr_master:
         skills.append(("herdr-master", None))
+    if backend == "core" and (skills or setup or menu):
+        _abort("Core backend does not yet support setup, menu, or pipeline launch flags.")
+    if backend == "core" and (session is not None or workspace is not None or split or secondary):
+        _abort("Core backend does not support --session, --workspace, --split, or --secondary; "
+               "select the Core session using HC_SESSION or HC_SOCKET.")
     if len(skills) + int(tui_flag) + int(setup) + int(menu) > 1 or (
-        task is not None and (skills or tui_flag or setup or menu)
+        task is not None and (skills or setup or menu)
     ):
         _abort("Choose only one launch mode.")
     if setup:
@@ -1758,11 +1969,6 @@ def launch_standalone_aihead(
         if target is None and cwd is not None:
             target = find_project_config_path(cwd) or cwd / ".herdr-master.toml"
         run_aihead_setup(defaults=defaults, yes=yes, config=target)
-        return
-    if tui_flag:
-        if not attach:
-            _abort("--no-attach is not supported with --tui.")
-        tui(session=session, demo=False)
         return
     if menu:
         if not attach:
@@ -1799,13 +2005,16 @@ def launch_standalone_aihead(
             effort,
         )
         return
-    if all(ctx.get_parameter_source(name).name == "DEFAULT" for name in ctx.params):
-        typer.echo(ctx.get_help())
-        return
-    try:
-        ctx = resolve_launch_context(session)
-    except _RESOLVE_ERRORS as err:
-        _abort(str(err))
+    default_launch = all(
+        ctx.get_parameter_source(name).name == "DEFAULT"
+        for name in ctx.params
+        if name not in {"backend", "tui_flag", "session", "attach"}
+    )
+    if backend == "legacy":
+        try:
+            ctx = resolve_launch_context(session)
+        except _RESOLVE_ERRORS as err:
+            _abort(str(err))
 
     if config is not None and not Path(config).expanduser().exists():
         _abort(f"Configuration file not found: {config}")
@@ -1854,6 +2063,39 @@ def launch_standalone_aihead(
         _abort(str(err))
 
     config_path = _config_path_for_launch(config, cwd)
+    if backend == "core":
+        from herdr_master.herdr.core_aihead import ensure_core_aihead
+
+        try:
+            result = asyncio.run(ensure_core_aihead(
+                backend="core",
+                config_path=config_path,
+                cwd=str(effective_cwd),
+                kind=kind,
+                model=model_slug,
+                effort=effort_level,
+                dangerously_skip_permissions=eff_skip,
+                task=task,
+                automode=automode,
+            ))
+        except Exception as err:
+            _abort(f"Core AiHead launch failed: {err}")
+        if result.state != "live":
+            _abort(
+                f"Core AiHead terminal {result.address} is {result.state}; "
+                "inspect it before retrying."
+            )
+        verb = "Started" if result.created else "Found"
+        typer.echo(f"{verb} Core AiHead terminal: {result.address}")
+        if result.created:
+            typer.echo("The initial prompt was passed to the harness; "
+                       "delivery is not yet verified.")
+        if attach:
+            try:
+                os.execvp("hc", ["hc", "attach", result.address])
+            except OSError as err:
+                _abort(f"Cannot attach to Core terminal {result.address}: {err}")
+        return
     try:
         res = asyncio.run(
             _dispatch_standalone_aihead(
@@ -1874,6 +2116,7 @@ def launch_standalone_aihead(
                 effective_cwd=effective_cwd,
                 config_path=config_path,
                 automode=automode,
+                default_launch=default_launch,
             )
         )
     except typer.Exit:
@@ -1885,7 +2128,7 @@ def launch_standalone_aihead(
 
     target_session = _print_standalone_launch_result(res, ctx.session_name)
     if not ctx.is_inside_herdr and attach:
-        console.print(f"[yellow]Attaching to isolated Herdr session '{target_session}'...[/yellow]")
+        console.print(f"[yellow]Attaching to Herdr session '{target_session}'...[/yellow]")
         os.execvp("herdr", ["herdr", "--session", target_session])
 
 

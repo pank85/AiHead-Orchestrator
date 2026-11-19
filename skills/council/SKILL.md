@@ -9,6 +9,8 @@ metadata:
 
 # /council — Multi-Agent AI Council Planning & Consensus Protocol
 
+**Core boundary:** If `HC_TERMINAL_ID` is set or `--backend core` is selected, STOP and report that Council is not yet supported in Herdr Core. Do not launch or use legacy Herdr operations as a fallback. Outside Core, follow the legacy Council workflow below.
+
 Launch with `aihead --council "<intent>"`; `herdm` is deprecated.
 
 Run an AI Council planning deliberation for: `${@:-$ARGUMENTS}` (if no specification, plan intent, or idea path was supplied, prompt the user for requirements and stop).

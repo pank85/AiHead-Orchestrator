@@ -86,6 +86,7 @@ def _inside(session="alpha"):
 
 def _client():
     client = AsyncMock()
+    client.get_agent.return_value = {"agent": {"agent_status": "idle"}}
     client.create_tab.return_value = {
         "root_pane": {"pane_id": "w9:p2"},
         "tab": {"tab_id": "w9:t2"},
@@ -678,9 +679,10 @@ async def test_launch_orchestration_passes_role_efforts_not_worker_effort():
 
 
 @pytest.mark.asyncio
-async def test_launch_passes_herdr_parent_pane_id_and_caller_is_ai_head_not_busy():
+async def test_launch_passes_herdr_parent_pane_id_and_caller_is_ai_head_not_busy(monkeypatch):
     client = _client()
     ctx = _inside()  # ctx.pane_id == "w9:p1"
+    monkeypatch.setenv("HERDR_PANE_ID", "w9:p1")
 
     # Simulate caller IS AiHead (pane_id == ctx.pane_id == "w9:p1"), reported busy by Herdr
     head_info = {

@@ -322,14 +322,21 @@ def _build_specs() -> dict[str, HarnessSpec]:
             label="Codex",
             summary=(
                 "Herdr explicit-model passthrough. "
-                "No native adapter, install target, or default."
+                "No native adapter or default."
             ),
             supports_herdr=True,
             supports_native=False,
             default_model=None,
             herdr=_herdr(),
             native=None,
-            install_targets=(),
+            install_targets=(
+                _install(
+                    "codex",
+                    "skill",
+                    "{home}/.agents/skills/{skill}/SKILL.md",
+                    "Codex skill",
+                ),
+            ),
         ),
         HarnessSpec(
             kind="gemini",
@@ -354,7 +361,14 @@ def _build_specs() -> dict[str, HarnessSpec]:
             default_model=None,
             herdr=_herdr(prompt_effort=True),
             native=None,
-            install_targets=(),
+            install_targets=(
+                _install(
+                    "kilo",
+                    "skill",
+                    "{home}/.config/kilo/skills/{skill}/SKILL.md",
+                    "Kilo skill",
+                ),
+            ),
         ),
     )
     return {spec.kind: spec for spec in specs}
@@ -371,8 +385,8 @@ def _kind_key(kind: str) -> str:
 def validate_mode(mode: str) -> str:
     """Return a normalized launch mode or raise."""
     key = str(mode).strip().lower()
-    if key not in {"herdr", "native"}:
-        raise CatalogError(f"Unknown mode '{mode}'. Expected herdr or native.")
+    if key not in {"herdr", "native", "core"}:
+        raise CatalogError(f"Unknown mode '{mode}'. Expected herdr, native, or core.")
     return key
 
 
@@ -389,6 +403,8 @@ def get_harness(kind: str) -> HarnessSpec:
 def supported_harnesses(*, mode: str) -> list[str]:
     """Harnesses that can launch in the requested mode. Derived from identities."""
     mode_key = validate_mode(mode)
+    if mode_key == "core":
+        return ["pi", "agy", "claude", "opencode", "hermes"]
     specs = [get_harness(member) for member in HarnessKind]
     if mode_key == "native":
         return [spec.kind for spec in specs if spec.supports_native]
