@@ -321,6 +321,7 @@ class OrchestrationConfig(BaseModel):
 
     harness: HarnessKind = HarnessKind.AGY
     default_harness: Optional[HarnessKind] = None
+    agy_mode: str = "subagents"
     scout_model: Optional[str] = None
     architect_model: Optional[str] = None
     worker_models: List[str] = Field(default_factory=list)
@@ -331,6 +332,20 @@ class OrchestrationConfig(BaseModel):
     architect_effort: Optional[str] = None
     reviewer_effort: Optional[str] = None
     harnesses: Dict[str, HarnessOrchestrationSettings] = Field(default_factory=dict)
+
+    @field_validator("agy_mode", mode="before")
+    @classmethod
+    def _validate_agy_mode(cls, v: Any) -> str:
+        if v is None:
+            return "subagents"
+        text = str(v).strip().lower()
+        if not text:
+            return "subagents"
+        if text not in ("subagents", "swarm"):
+            raise ValueError(
+                f"Unsupported orchestration agy_mode '{v}'. Expected 'subagents' or 'swarm'."
+            )
+        return text
 
     @field_validator(
         "scout_effort", "architect_effort", "reviewer_effort", mode="before"

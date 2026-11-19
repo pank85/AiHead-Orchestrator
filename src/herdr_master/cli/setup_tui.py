@@ -20,7 +20,12 @@ from rich.layout import Layout
 from rich.panel import Panel
 from rich.text import Text
 
-from herdr_master.cli.setup_catalog import ChoiceOption, ModelCatalog, discover_model_catalog
+from herdr_master.cli.setup_catalog import (
+    ChoiceOption,
+    ModelCatalog,
+    discover_harness_models,
+    discover_model_catalog,
+)
 from herdr_master.core.available_models import (
     enabled_model_ids,
     filter_model_ids,
@@ -157,6 +162,7 @@ class SetupTuiApp:
         squad: Optional[Squad] = None,
         save_project_fn: Optional[Callable[[HerdrMasterConfig, Optional[Path]], Path]] = None,
         save_squad_fn: Optional[Callable[[Squad, Optional[Path]], Path]] = None,
+        discover_harness_fn: Optional[Callable[[str], List[ChoiceOption]]] = None,
     ) -> None:
         self.config_path = config_path
         self._save_project_fn = (
@@ -166,7 +172,14 @@ class SetupTuiApp:
             save_squad_as_default if save_squad_fn is None else save_squad_fn
         )
         self._load_initial_state(cfg=cfg, squad=squad)
-        self.catalog = catalog or discover_model_catalog(self.cfg, self.squad)
+        if catalog is not None:
+            self.catalog = catalog
+            self._lazy_discovery_enabled = discover_harness_fn is not None
+        else:
+            self.catalog = discover_model_catalog(self.cfg, self.squad, probe_live=False)
+            self._lazy_discovery_enabled = True
+        self._discover_harness_fn = discover_harness_fn or discover_harness_models
+        self._discovered_harnesses: set[str] = set()
 
         self.section_index: int = 0
         self.focus_pane: str = "sections"  # "sections" | "options"
@@ -277,6 +290,17 @@ class SetupTuiApp:
         self.status_message = message
         self.status_is_error = error
 
+    def _ensure_harness_discovered(self, kind: str) -> None:
+        if not self._lazy_discovery_enabled:
+            return
+        kind_key = str(kind).strip().lower()
+        if not kind_key or kind_key in self._discovered_harnesses:
+            return
+        self._discovered_harnesses.add(kind_key)
+        live = self._discover_harness_fn(kind_key)
+        if live:
+            self.catalog.merge_live_models(kind_key, live)
+
     def _reconcile_binding(
         self,
         binding: HarnessBinding,
@@ -285,7 +309,8 @@ class SetupTuiApp:
         allow_none_effort: bool = True,
     ) -> None:
         kind = binding.kind.value
-        models = self.catalog.models(kind, mode="herdr")
+        model_opts, _ = self._filtered_model_options(kind, mode="herdr", current=None)
+        models = [opt for opt in model_opts if opt.value != ADD_CUSTOM_MODEL_VALUE]
         if models and all(opt.value != binding.model for opt in models):
             binding.model = str(models[0].value)
 
@@ -309,34 +334,47 @@ class SetupTuiApp:
             else:
                 binding.effort = _effort_enum(allowed_values[0]) if allowed_values else None
 
+    def _orch_model_mode(self, host: str) -> str:
+        if host == "agy" and self.cfg.orchestration.agy_mode == "swarm":
+            return "herdr"
+        return "native"
+
     def _reconcile_orchestration(self) -> None:
         orch = self.cfg.orchestration
         host = orch.harness.value
-        models = self.catalog.models(host, mode="native")
+        model_mode = self._orch_model_mode(host)
+        model_opts, _ = self._filtered_model_options(host, mode=model_mode, current=None)
+        models = [opt for opt in model_opts if opt.value != ADD_CUSTOM_MODEL_VALUE]
         valid_values = {str(opt.value) for opt in models}
         defaults = DEFAULT_ORCHESTRATION_MODELS.get(host, {})
 
         for role in ("scout", "architect", "reviewer"):
             cur_model = getattr(orch, f"{role}_model")
             if not cur_model or (valid_values and cur_model not in valid_values):
-                fallback = defaults.get(role) or (str(models[0].value) if models else "")
+                default_for_role = defaults.get(role)
+                if default_for_role and valid_values and default_for_role not in valid_values:
+                    default_for_role = None
+                fallback = default_for_role or (str(models[0].value) if models else "")
                 setattr(orch, f"{role}_model", fallback)
             eff_options = self.catalog.efforts(
-                host, getattr(orch, f"{role}_model") or "", mode="native", allow_none=True
+                host, getattr(orch, f"{role}_model") or "", mode=model_mode, allow_none=True
             )
             allowed_effs = [opt.value for opt in eff_options]
             cur_eff = getattr(orch, f"{role}_effort")
             if cur_eff not in allowed_effs:
                 setattr(orch, f"{role}_effort", None)
 
+        coder_default = defaults.get("coder")
+        if coder_default and valid_values and coder_default not in valid_values:
+            coder_default = None
         if not orch.worker_models:
-            coder_default = defaults.get("coder") or (str(models[0].value) if models else "")
-            if coder_default:
-                orch.worker_models = [coder_default]
+            fallback_coder = coder_default or (str(models[0].value) if models else "")
+            if fallback_coder:
+                orch.worker_models = [fallback_coder]
         elif valid_values:
-            coder_default = defaults.get("coder") or str(models[0].value)
+            fallback_coder = coder_default or str(models[0].value)
             orch.worker_models = [
-                w if w in valid_values else coder_default for w in orch.worker_models
+                w if w in valid_values else fallback_coder for w in orch.worker_models
             ]
 
     def _filtered_model_options(
@@ -352,6 +390,9 @@ class SetupTuiApp:
         scope keeps discovered order, then appends ``current`` when missing.
         An empty intersection sets the Available hint even if ``current`` remains.
         """
+        allowlist = enabled_model_ids(self.cfg.models.available, mode, kind)
+        if allowlist is None:
+            self._ensure_harness_discovered(kind)
         options = self.catalog.models(kind, mode=mode, current=current)
         discovered = [str(opt.value) for opt in options]
         filtered = filter_model_ids(
@@ -371,7 +412,6 @@ class SetupTuiApp:
             for model_id in filtered
         ]
         rebuilt.append(ADD_CUSTOM_OPTION)
-        allowlist = enabled_model_ids(self.cfg.models.available, mode, kind)
         intersection_empty = allowlist is not None and not any(
             model_id in set(allowlist) for model_id in discovered
         )
@@ -409,6 +449,8 @@ class SetupTuiApp:
         if not harness and harness_values:
             harness = harness_values[0]
         self.available_view_harness = harness or None
+        if harness:
+            self._ensure_harness_discovered(harness)
         models = self.catalog.models(harness, mode=mode, current=None) if harness else []
         ids = [str(opt.value) for opt in models]
         self._available_toggle_ids = ids
@@ -757,6 +799,7 @@ class SetupTuiApp:
             orch = self.cfg.orchestration
             host = orch.harness.value
             native_harnesses = self.catalog.harnesses(mode="native")
+            model_mode = self._orch_model_mode(host)
             defaults = DEFAULT_ORCHESTRATION_MODELS.get(host, {})
             rows = [
                 FieldRow(
@@ -770,14 +813,38 @@ class SetupTuiApp:
                     hint="Switch active native harness (preserves per-harness profiles)",
                 )
             ]
+            if host == "agy":
+                rows.append(
+                    FieldRow(
+                        key="orch.agy_mode",
+                        group="Native Host",
+                        label="AGY Mode",
+                        kind="choice",
+                        value_text=orch.agy_mode,
+                        options=[
+                            ChoiceOption(
+                                "subagents",
+                                "subagents",
+                                "invoke_subagent (tier IDs: flash_lite, flash, pro)",
+                            ),
+                            ChoiceOption(
+                                "swarm",
+                                "swarm",
+                                "native swarm (exact agy models + shared board)",
+                            ),
+                        ],
+                        current_value=orch.agy_mode,
+                        hint="Choose subagents (tier IDs) or swarm (exact agy models)",
+                    )
+                )
             for role in ("scout", "architect", "reviewer"):
                 cur_model = getattr(orch, f"{role}_model") or defaults.get(role, "")
                 cur_eff = getattr(orch, f"{role}_effort")
                 model_opts, empty_hint = self._filtered_model_options(
-                    host, mode="native", current=cur_model
+                    host, mode=model_mode, current=cur_model
                 )
                 eff_opts = self.catalog.efforts(
-                    host, cur_model, mode="native", allow_none=True
+                    host, cur_model, mode=model_mode, allow_none=True
                 )
                 rows.append(
                     FieldRow(
@@ -788,7 +855,7 @@ class SetupTuiApp:
                         value_text=cur_model or "(unset)",
                         options=model_opts,
                         current_value=cur_model,
-                        hint=empty_hint or f"Select {host} native model for {role}",
+                        hint=empty_hint or f"Select {host} {model_mode} model for {role}",
                     )
                 )
                 rows.append(
@@ -807,7 +874,7 @@ class SetupTuiApp:
             worker_list = orch.worker_models or [defaults.get("coder", "")]
             for idx, w_model in enumerate(worker_list):
                 model_opts, empty_hint = self._filtered_model_options(
-                    host, mode="native", current=w_model
+                    host, mode=model_mode, current=w_model
                 )
                 rows.append(
                     FieldRow(
@@ -1049,6 +1116,9 @@ class SetupTuiApp:
             if parts[1] == "harness":
                 orch.switch_harness(str(value), set_as_default=True)
                 self._reconcile_orchestration()
+            elif parts[1] == "agy_mode":
+                orch.agy_mode = str(value)
+                self._reconcile_orchestration()
             elif parts[1] == "worker":
                 idx = int(parts[2])
                 if not orch.worker_models:
@@ -1059,7 +1129,10 @@ class SetupTuiApp:
                 setattr(orch, parts[1], str(value))
                 role = parts[1].replace("_model", "")
                 eff_options = self.catalog.efforts(
-                    orch.harness.value, str(value), mode="native", allow_none=True
+                    orch.harness.value,
+                    str(value),
+                    mode=self._orch_model_mode(orch.harness.value),
+                    allow_none=True,
                 )
                 if getattr(orch, f"{role}_effort") not in [opt.value for opt in eff_options]:
                     setattr(orch, f"{role}_effort", None)
@@ -1112,7 +1185,10 @@ class SetupTuiApp:
         if action_key == "orch.worker_add":
             orch = self.cfg.orchestration
             host = orch.harness.value
-            models = self.catalog.models(host, mode="native")
+            model_opts, _ = self._filtered_model_options(
+                host, mode=self._orch_model_mode(host), current=None
+            )
+            models = [opt for opt in model_opts if opt.value != ADD_CUSTOM_MODEL_VALUE]
             existing = set(orch.worker_models)
             choice = next(
                 (str(opt.value) for opt in models if str(opt.value) not in existing),
@@ -1166,7 +1242,10 @@ class SetupTuiApp:
             found = False
             for h_opt in self.catalog.harnesses(mode="herdr"):
                 h_kind = str(h_opt.value)
-                for m_opt in self.catalog.models(h_kind, mode="herdr"):
+                model_opts, _ = self._filtered_model_options(h_kind, mode="herdr", current=None)
+                for m_opt in model_opts:
+                    if m_opt.value == ADD_CUSTOM_MODEL_VALUE:
+                        continue
                     if (h_kind, str(m_opt.value)) not in existing_pairs:
                         new_kind = HarnessKind(h_kind)
                         new_model = str(m_opt.value)
@@ -1258,7 +1337,8 @@ class SetupTuiApp:
                 return getattr(self.squad, parts[1]).kind.value, "herdr"
             return self.squad.scout.kind.value, "herdr"
         if root == "orch":
-            return self.cfg.orchestration.harness.value, "native"
+            host = self.cfg.orchestration.harness.value
+            return host, self._orch_model_mode(host)
         if root == "council":
             if len(parts) >= 2 and parts[1] == "coord":
                 return self.cfg.council.coordinator.kind.value, "herdr"
@@ -1408,6 +1488,7 @@ class SetupTuiApp:
         if host not in supported_harnesses(mode="native"):
             raise ValueError(f"Orchestration harness '{host}' does not support native mode.")
         orch.default_harness = orch.harness
+        is_agy_swarm = host == "agy" and orch.agy_mode == "swarm"
         for role in ("scout", "architect", "reviewer"):
             model_val = getattr(orch, f"{role}_model") or ""
             if not model_val or any(
@@ -1416,9 +1497,12 @@ class SetupTuiApp:
                 raise ValueError(
                     f"Orchestration {role} model must be a native model ID for {host}."
                 )
-            problem = native_binding_error(host, model_val, role=role, native_harness=host)
-            if problem:
-                raise ValueError(problem)
+            if is_agy_swarm:
+                describe_herdr_agent(host, model_val, getattr(orch, f"{role}_effort"), "master")
+            else:
+                problem = native_binding_error(host, model_val, role=role, native_harness=host)
+                if problem:
+                    raise ValueError(problem)
         if not orch.worker_models:
             raise ValueError("Orchestration requires at least one worker model.")
         for w_model in orch.worker_models:
@@ -1428,9 +1512,12 @@ class SetupTuiApp:
                 raise ValueError(
                     f"Orchestration worker model '{w_model}' must be a native model ID."
                 )
-            problem = native_binding_error(host, w_model, role="coder", native_harness=host)
-            if problem:
-                raise ValueError(problem)
+            if is_agy_swarm:
+                describe_herdr_agent(host, w_model, None, "worker")
+            else:
+                problem = native_binding_error(host, w_model, role="coder", native_harness=host)
+                if problem:
+                    raise ValueError(problem)
         orch.sync_active_to_harnesses()
 
         # 4. Council

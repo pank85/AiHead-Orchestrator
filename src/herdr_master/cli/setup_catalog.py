@@ -466,6 +466,27 @@ class ModelCatalog:
             return
         items.append(ChoiceOption(value=cleaned, label=cleaned, detail="custom"))
 
+    def merge_live_models(
+        self,
+        kind: Union[HarnessKind, str],
+        live_options: Sequence[ChoiceOption],
+    ) -> None:
+        """Merge live-discovered models for one harness into herdr and native pools."""
+        kind_key = (kind.value if hasattr(kind, "value") else str(kind)).strip().lower()
+        if not kind_key or not live_options:
+            return
+        if kind_key in supported_harnesses(mode="herdr"):
+            combined = list(self.herdr_models.get(kind_key, ()))
+            combined.extend(live_options)
+            if kind_key == "agy":
+                combined = [opt for opt in combined if opt.value not in _AGY_TIERS]
+            self.herdr_models[kind_key] = _dedupe_options(combined)
+        if kind_key in supported_harnesses(mode="native") and kind_key != "agy":
+            combined = list(self.native_models.get(kind_key, ()))
+            combined.extend(live_options)
+            self.native_models[kind_key] = _dedupe_options(combined)
+        self.live_counts[kind_key] = len(live_options)
+
     def efforts(
         self,
         kind: str,
@@ -490,6 +511,28 @@ def _build_harness_options(mode: str) -> List[ChoiceOption]:
         spec = get_harness(kind)
         options.append(ChoiceOption(value=spec.kind, label=spec.kind, detail=spec.label))
     return options
+
+
+def discover_harness_models(kind: Union[HarnessKind, str]) -> List[ChoiceOption]:
+    """Run live CLI model discovery for a single harness."""
+    kind_key = (kind.value if hasattr(kind, "value") else str(kind)).strip().lower()
+    if kind_key == "opencode":
+        out = _run_probe(["opencode", "models"])
+        return _parse_opencode_models(out) if out else []
+    if kind_key == "pi":
+        out = _run_probe(["pi", "--list-models"])
+        return _parse_pi_models(out) if out else []
+    if kind_key == "agy":
+        out = _run_probe(["agy", "models"])
+        return _parse_agy_models(out) if out else []
+    if kind_key == "kilo":
+        out = _run_probe(["kilo", "models"], 20.0)
+        return _parse_kilo_models(out) if out else []
+    if kind_key == "codex":
+        return _probe_codex_models()
+    if kind_key == "hermes":
+        return _probe_hermes_config_models()
+    return []
 
 
 def discover_model_catalog(
