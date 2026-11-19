@@ -411,6 +411,8 @@ def master_start(
     except _RESOLVE_ERRORS as err:
         _abort(str(err))
     client = HerdrClient(session=ctx.session_name, socket_path=ctx.socket_path)
+    caller_pane_id = os.environ.get("HERDR_PANE_ID") or getattr(ctx, "pane_id", None)
+    is_delegated = bool(caller_pane_id)
 
     async def _run():
         return await launch_master(
@@ -421,6 +423,9 @@ def master_start(
             initial_task=task,
             session=session,
             effort=effort_level,
+            fresh_workspace=True,
+            delegated=is_delegated,
+            parent_pane_id=caller_pane_id if is_delegated else None,
         )
 
     shown = f"{kind.value} {model_slug}"
@@ -523,6 +528,8 @@ def run_ergo(
         _abort(str(err))
     client = HerdrClient(session=ctx.session_name, socket_path=ctx.socket_path)
     ws_label = label or f"ergo-{datetime.now().strftime('%Y%m%d-%H%M')}"
+    caller_pane_id = os.environ.get("HERDR_PANE_ID") or getattr(ctx, "pane_id", None)
+    is_delegated = bool(caller_pane_id)
 
     async def _run():
         return await launch_ergo(
@@ -533,6 +540,9 @@ def run_ergo(
             session=session,
             ai_head=ai_head,
             coordinator=coordinator_binding,
+            fresh_workspace=True,
+            delegated=is_delegated,
+            parent_pane_id=caller_pane_id if is_delegated else None,
         )
 
     console.print(f"[bold magenta]⚡ Launching Ergo orchestrator[/bold magenta] ('{intent}')...")
@@ -628,6 +638,8 @@ def run_orchestration(
 
     client = HerdrClient(session=ctx.session_name, socket_path=ctx.socket_path)
     ws_label = label or f"orchestration-{datetime.now().strftime('%Y%m%d-%H%M')}"
+    caller_pane_id = os.environ.get("HERDR_PANE_ID") or getattr(ctx, "pane_id", None)
+    is_delegated = bool(caller_pane_id)
 
     async def _run():
         return await launch_orchestration(
@@ -645,6 +657,9 @@ def run_orchestration(
             session=session,
             ai_head=ai_head,
             dangerously_skip_permissions=dangerously_skip_permissions,
+            fresh_workspace=True,
+            delegated=is_delegated,
+            parent_pane_id=caller_pane_id if is_delegated else None,
         )
 
     console.print(f"[bold cyan]🚀 Launching native orchestration[/bold cyan] ('{intent}')...")
@@ -701,6 +716,8 @@ def run_council(
 
     client = HerdrClient(session=ctx.session_name, socket_path=ctx.socket_path)
     ws_label = label or f"council-{datetime.now().strftime('%Y%m%d-%H%M')}"
+    caller_pane_id = os.environ.get("HERDR_PANE_ID") or getattr(ctx, "pane_id", None)
+    is_delegated = bool(caller_pane_id)
 
     async def _run():
         return await launch_council(
@@ -710,6 +727,9 @@ def run_council(
             council=council_cfg,
             session=session,
             ai_head=ai_head,
+            fresh_workspace=True,
+            delegated=is_delegated,
+            parent_pane_id=caller_pane_id if is_delegated else None,
         )
 
     console.print(f"[bold cyan]🏛️ Launching AI Council[/bold cyan] ('{intent}')...")
