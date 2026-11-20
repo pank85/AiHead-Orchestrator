@@ -1,426 +1,385 @@
-# 👑 AiHead-Orchestrator (`aihead` / `herdm`)
+# 👑 AiHead-Orchestrator (`aihead`)
 
-> **Universal Multi-Master, Multi-Worker Cross-Harness AI Agent Orchestrator built on [Herdr](https://herdr.dev).**
+> **Fully Autonomous Cross-Harness AI Technical Director & Multi-Agent Orchestrator built on [Herdr](https://herdr.dev).**
 
 [![GitHub Repo](https://img.shields.io/badge/GitHub-pank85%2FAiHead--Orchestrator-181717?style=flat&logo=github)](https://github.com/pank85/AiHead-Orchestrator)
 [![License: MIT](https://img.shields.io/badge/License-MIT-blue.svg)](LICENSE)
 [![Python: 3.10+](https://img.shields.io/badge/python-3.10+-3776AB.svg?logo=python&logoColor=white)](https://www.python.org/downloads/)
 [![Herdr: v0.9.5+](https://img.shields.io/badge/herdr-v0.9.5+-8A2BE2.svg)](https://herdr.dev)
-[![Tests: Passing](https://img.shields.io/badge/tests-passing-success.svg)](#-testing--verification)
 [![Code style: ruff](https://img.shields.io/badge/code%20style-ruff-000000.svg)](https://github.com/astral-sh/ruff)
 
 ---
 
-## 📖 Executive Summary
+## 🎯 What Is AiHead?
 
-**AiHead-Orchestrator** is an autonomous multi-agent engineering platform that connects disparate AI agent harnesses—**Antigravity (`agy`)**, **Pi (`pi`)**, **Claude Code (`claude`)**, **OpenCode (`opencode`)**, and **Hermes (`hermes`)**—into structured, verifiable engineering pipelines with strict Git worktree sandboxing.
+**AiHead** is an autonomous AI Technical Director that sits above your coding agent harnesses—**Antigravity (`agy`)**, **Pi (`pi`)**, **Claude Code (`claude`)**, **OpenCode (`opencode`)**, **Hermes (`hermes`)**, **Codex (`codex`)**, and **Kilo (`kilo`)**—and runs engineering work end-to-end without tying up your main chat or asking you to manually wire models for every task.
 
-The platform provides two primary interfaces:
-1. **`aihead` (Modern Primary Entrypoint):** An interactive, autonomous Technical Director and decision-maker that evaluates user intents, dynamically composes specialist squads via **Automode**, approves implementation plans, and directs execution without escalating routine decisions to the operator.
-2. **`herdm` / `herdr-master` (Orchestration Engine & Compatibility CLI):** The underlying multi-workstream engine managing concurrent jobs, background watcher processes, cross-harness IPC, and backwards-compatible CLI tooling.
+Instead of relying on static hardcoded squads or guessing from model names, AiHead combines **three tightly integrated autonomous systems**:
+
+1. **Incremental Model Evaluation Registry (`[models.ratings]`)** — Scores every enabled model across 6 normalized dimensions (`intelligence`, `coding`, `agentic`, `speed`, `cost_efficiency`, `context_handling`) plus billing tier (`free` / `subscription` / `api`), context window, family, and effort support using zero-auth public benchmarks + a batched harness evaluator fallback for preview/custom models.
+2. **Two-Stage Read-Only Smart Triage (`Mini-Scout → Strong Router → Validation Gate`)** — Automatically surveys the codebase with a cheap, fast model, decides the optimal workflow (`/ergo`, `/council`, `/orchestration`, `/herdr-master`, or `direct`), harnesses, models, and effort levels with a strong reasoning model, and deterministically validates every binding before dispatching.
+3. **Dynamic Rated Architect Worker Selection** — Static worker-pool settings are gone from Ergo and Orchestration. The Architect receives a live, rated `ALLOWED CODER MODELS` pool ranked by your active optimization profile (`balanced` | `quality` | `fast` | `frugal`) and assigns the best model and effort per task dynamically.
 
 ---
 
-## 🧠 AiHead Automode & Available Models Architecture
+## 🧠 Fully Autonomous Mode Architecture
 
-The flagship capability of AiHead is **Automode** (`ai_head.automode = true` in `.herdr-master.toml` or overridden via `--automode / --no-automode`).
+When `ai_head.automode = true` (or launched with `aihead --automode`), every incoming engineering request flows through a deterministic, context-preserving autonomous loop:
 
 ```mermaid
 flowchart TD
-    UserReq["User Request / Engineering Objective"] --> AiHead["AiHead Autonomous Technical Director"]
-    
-    subgraph Governance ["Allowlist Governance ([models.available])"]
-        SetupTUI["aihead --setup<br/>(Interactive Toggle & Discovery)"] --> ConfigFile[".herdr-master.toml<br/>[models.available]"]
-        CatalogCLI["aihead catalog available<br/>(Audit & Inspection)"] -.-> ConfigFile
-        ConfigFile --> DynamicFilter["Strict Allowlist Enforcement<br/>(Zero Hallucinated Model IDs)"]
+    Req["User Engineering Request"] --> Fast{"Pure Q&A, Status,<br/>or Explicit Pinned Cmd?"}
+    Fast -- "Yes" --> Bypass["Fast-Path Execution<br/>(zero triage overhead)"]
+    Fast -- "No" --> EvalCheck["Preflight: Check unrated_models<br/>(aihead catalog available --json)"]
+
+    subgraph EvalLayer ["1. Incremental Model Evaluation Registry"]
+        EvalCheck -- "Unrated models exist" --> ZeroAuth["Zero-Auth Sources (24h Cache)<br/>models.dev · OpenRouter · SWE-bench · Aider · LiveBench"]
+        ZeroAuth --> Calib["Base-Model Grouping · Billing Tiers<br/>Effort-Delta Calibration (-low/-med/-high/-xhigh)"]
+        Calib --> Layer3["Unmatched / Preview Models?<br/>Batched Layer-3 Harness Evaluator (+ opt-in --probe)"]
+        Layer3 --> Store["Atomic Save to [models.ratings]<br/>(inherits ~/.herdr-master.toml across repos)"]
     end
-    
-    DynamicFilter --> AiHead
-    
-    subgraph AutomodeEngine ["Automode Dynamic Squad Composition"]
-        AiHead --> RoleScout["Scout (Exploration & Codebase Survey)"]
-        AiHead --> RoleArchitect["Architect (System Design & Work Breakdown)"]
-        AiHead --> RoleCoders["Coders (Parallel Worktree Implementation)"]
-        AiHead --> RoleReviewer["Reviewer (Blind Cumulative Diff Gate)"]
+
+    EvalCheck -- "All rated" --> Picker["2. Deterministic Triage Picker<br/>(aihead catalog triage-models)"]
+    Store --> Picker
+
+    subgraph TriageLayer ["2. Two-Stage Read-Only Triage"]
+        Picker --> Adapter{"Host Harness<br/>Native Subagents?"}
+        Adapter -- "agy / pi / claude / opencode" --> Native["Same-Harness Native Subagents"]
+        Adapter -- "kilo / codex / hermes / gemini" --> Headless["aihead triage Headless CLI Fallback"]
+        Native --> S1["Stage 1: Cheap Mini-Scout<br/>(Read-Only · Low Effort · Fastest Model)"]
+        Headless --> S1
+        S1 --> ScoutJSON["TriageScoutReport JSON<br/>(scope, files, ambiguity, risk, multi-job)"]
+        ScoutJSON --> S2["Stage 2: Strong Routing Decider<br/>(Request + Scout + Rated Models + routing_profile)"]
+        Store --> S2
     end
-    
-    RoleScout --> PipelineExecution["Execution Pipeline (/ergo or /orchestration)"]
-    RoleArchitect --> PipelineExecution
-    RoleCoders --> PipelineExecution
-    RoleReviewer --> PipelineExecution
+
+    S2 --> Gate["3. Deterministic Validation Gate<br/>(aihead catalog validate-route)"]
+    Gate -- "Invalid (max 1 self-repair retry)" --> S2
+    Gate -- "Valid RoutingPlan" --> Dispatch["4. Background Dispatch & Dynamic Architect Workers"]
+
+    subgraph Pipelines ["Execution Workflows"]
+        Dispatch --> Direct["Direct Agent<br/>(1-2 file atomic fix)"]
+        Dispatch --> Orch["/orchestration<br/>(Single-harness native · same-harness rated workers)"]
+        Dispatch --> Ergo["/ergo<br/>(Cross-harness Herdr · all-harness rated workers)"]
+        Dispatch --> Council["/council<br/>(Multi-family consensus planning only)"]
+        Dispatch --> Master["/herdr-master<br/>(Parallel multi-job coordinator)"]
+    end
 ```
 
-### 1. Dynamic Squad Composition
-When Automode is active, AiHead analyzes incoming tasks and dynamically matches specialized models to pipeline roles based on the nature of the work:
-- **Exploration & Context Survey (Scout):** Fast, high-context retrieval models (e.g. `agy:gemini-3.8-flash-medium`).
-- **Architecture & System Design (Architect):** Deep-reasoning models capable of strict interface specifications (e.g. `pi:openai-codex/gpt-6.1-sol` with reasoning effort `max`).
-- **Implementation (Coders):** Allocated from the user's enabled coder pool, matching task complexity (mechanical tasks get lightweight fast coders; intricate algorithms get frontier coders).
-- **Independent Verification (Reviewer):** Unbiased, cross-family review models that evaluate cumulative diffs against specifications (e.g. `pi:xai/grok-4.7`).
+---
 
-### 2. Available Models Allowlist (`[models.available]`)
-Automode is strictly bound by the user's configured model allowlist in `.herdr-master.toml`. AiHead selects models **only** from this explicit pool and **never invents or hallucinates model IDs**.
+## 📊 1. Available Harness & Model Evaluation Registry
 
-The configuration supports distinct allowlists for **Herdr cross-harness mode** and **Native subagent mode**:
+AiHead never guesses model capabilities from slug strings. Every model enabled in `[models.available]` is evaluated **incrementally**—already-rated models are skipped, and manual overrides (`manual_override = true`) are protected unless `--force` is passed.
 
-```toml
-[models.available.herdr]
-agy = ["gemini-3.8-flash-medium", "gemini-3.8-flash", "gemini-3.8-pro"]
-pi = ["openai-codex/gpt-6.1-sol", "xai/grok-4.7", "anthropic/claude-3-7-sonnet"]
-claude = ["claude-3-7-sonnet"]
-opencode = ["deepseek-coder-v2"]
-hermes = ["qwen2.5-coder-32b"]
+### Six Normalized 0–100 Dimensions + Routing Metadata
 
-[models.available.native]
-agy = ["flash", "pro", "flash_lite"]
-pi = ["default", "fast"]
-claude = ["sonnet", "haiku"]
-opencode = ["general", "code"]
-```
+| Dimension / Field | What It Measures | How AiHead & Architects Use It |
+| :--- | :--- | :--- |
+| **`intelligence`** | Reasoning, planning, ambiguity resolution | Selects **Architect**, **Council Members**, and **Stage-2 Router**. |
+| **`coding`** | Multi-file editing, debugging, code synthesis | Selects **Coders**, **Reviewer**, and **Direct** implementation agents. |
+| **`agentic`** | Tool use, iterative test/fix loops, repo navigation | Distinguishes strong autonomous coding models from chat-only models. |
+| **`speed`** | Generation throughput & responsiveness | Selects **Stage-1 Mini-Scout**, pipeline **Scout**, and fast fixes. |
+| **`cost_efficiency`** | Value relative to `billing_tier` (`free` / `subscription` / `api`) | Balances API $/token, subscription quota burn, and `:free` routes. |
+| **`context_handling`** | Context window size (`200k`, `1M`, etc.) & long-context fit | Routes large-repo surveys and cross-module refactors. |
+| **`family` & `supported_efforts`** | Lineage (`openai`, `anthropic`, `google`, `xai`, ...) & effort flags | Enforces **cross-family Architect vs Reviewer** and valid effort flags (recognizing effort-encoded slugs like `gemini-4-neon-high`). |
 
-#### Allowlist Semantics:
-- **Missing or `None`:** The mode or harness remains **unrestricted** (all discovered models are allowed).
-- **Explicit List:** Only listed model identifiers are permitted.
-- **Empty List (`[]`):** Explicitly **zero** models are allowed for that harness.
-- **Omitted Harness Key:** That specific harness remains unrestricted even if sibling harnesses are constrained.
+### Zero-Auth Multi-Source Pipeline (Zero API Keys Required)
 
-### 3. Interactive Configuration via `aihead --setup`
-Run `aihead --setup` to launch the curses configuration interface. Navigate to the **"Available"** models screen:
-- **Copy-on-First-Touch (`materialize_toggle`):** When you toggle a model in a previously unrestricted harness, the system snapshots all discovered models for that harness and flips the selected item. Untouched harnesses remain unrestricted.
-- **Dynamic Picker Filtering:** Model selectors across AiHead, Ergo, Orchestration, and Council immediately restrict their dropdown menus to enabled models.
+1. **Layer 1 & 2 — Zero-Auth Public Benchmarks (24h Disk Cache in `~/.cache/herdr-master/model-eval-sources/`)**:
+   - [`models.dev`](https://models.dev/api.json) — Specs, pricing, context windows, reasoning options, descriptions, and release dates.
+   - [`OpenRouter /api/v1/models`](https://openrouter.ai/api/v1/models) — Cross-provider pricing, context limits, and relative throughput ordering.
+   - **SWE-bench** (`Verified`, `Multilingual`, `Lite`) — Real-world multi-file issue resolution.
+   - **Aider Polyglot** — Multi-language code editing accuracy.
+   - **LiveBench** — Contamination-free reasoning and coding scores.
+2. **Base-Model Grouping & Effort-Delta Calibration**:
+   - Effort-encoded sibling slugs (e.g., `gemini-4-neon-low`, `-medium`, `-high`, `-xhigh`) are evaluated **once** as a base model and calibrated monotonically so `-low` is always faster/cheaper and `-high`/`-xhigh` is always stronger.
+3. **Layer 3 — Batched Harness Evaluator + Opt-In Live Probe**:
+   - For brand-new preview models, proxy aliases (`litellm/coding-pro`), or free routers not yet on public leaderboards, a single batched call to a headless harness evaluator scores **only the unmatched models** while preserving hard Layer-1 pricing/context facts.
+   - Pass `--probe` to run a bounded live latency/health micro-probe, or `--no-llm` for purely deterministic zero-token runs.
+4. **Ancestor Config Inheritance**:
+   - Store `[models.available]` and `[models.ratings]` once in `~/.herdr-master.toml`. Project repositories under `$HOME` automatically inherit your home ratings, billing tiers, and (when absent locally) allowlists—while still allowing project-local overrides.
 
-### 4. Allowlist Inspection CLI
-Audit and verify your active allowlist and discovered catalog models at any time:
+---
+
+## 🧭 2. Two-Stage Smart Triage & Deterministic Validation
+
+Instead of having AiHead scan files in its main conversation or guess a workflow from one sentence:
+
+1. **Deterministic Triage Picker (`aihead catalog triage-models`)**:
+   - Picks the fastest/cheapest rated model (`intelligence >= 45`, `effort = low`) on your host harness for **Stage-1 Mini-Scout**, and the strongest reasoning model for **Stage-2 Router**.
+   - On native-subagent hosts (`agy`, `pi`, `claude`, `opencode`), AiHead runs them directly as read-only same-harness subagents (respecting `agy_mode = "subagents"` tier IDs vs `"swarm"` exact slugs).
+   - On non-native hosts (`kilo`, `codex`, `hermes`, `gemini`), AiHead seamlessly invokes `aihead triage` to run the exact same two-stage pipeline via verified headless CLI runners.
+2. **Stage-1 Mini-Scout (Read-Only)**:
+   - Surveys git status, touched modules, coupling, test framework, ambiguity, and multi-job structure, outputting a compact `TriageScoutReport` JSON.
+3. **Stage-2 Strong Routing Decider (Read-Only)**:
+   - Combines your request, `TriageScoutReport`, the compact rated-models table, and `ai_head.routing_profile` into a `RoutingPlan` JSON selecting:
+     - **Workflow**: `direct` | `orchestration` | `ergo` | `council` | `herdr-master`
+     - **Role bindings & efforts**: strictly from `[models.available]`
+     - **Worker selection mode**: `balanced` | `quality` | `fast` | `frugal`
+4. **Deterministic Validation Gate (`aihead catalog validate-route`)**:
+   - Verifies every binding against `[models.available]` (zero hallucinated IDs), `core/catalog.py` legality, single-harness `/orchestration`, Herdr Core boundaries, and cross-family Architect/Reviewer diversity.
+   - If validation fails, feeds the exact error back to Stage-2 for at most **1 bounded self-repair retry**, failing closed otherwise.
+
+---
+
+## ⚡ 3. Dynamic Architect Worker Selection & Shared Modes
+
+You no longer need to maintain redundant static worker lists (`[models.worker_pool]` or `[orchestration] worker_models`) in `aihead --setup`:
+
+- **Ergo (`/ergo`)**: `aihead catalog squad` builds a rated `ALLOWED CODER MODELS` block from **all enabled Herdr harnesses** in `[models.available.herdr]` + `[models.ratings]`. The Architect reads the ratings and assigns the optimal harness, model, and effort per task in `plan.md`.
+- **Orchestration (`/orchestration`)**: Builds `ALLOWED CODER MODELS` strictly from **the active native harness only** (using `available.herdr.agy` in `swarm` mode or `available.native.agy` in `subagents` mode).
+- **Shared Optimization Modes**: AiHead (`ai_head.routing_profile`), Ergo (`ergo.worker_mode`), and Orchestration (`orchestration.worker_mode`) share the exact same four presets:
+
+| Mode | Behavior |
+| :--- | :--- |
+| **`balanced`** *(default)* | Matches model strength and effort to task complexity; cheap/fast for mechanical tasks, frontier for hard tasks. |
+| **`quality`** | Prioritizes top `coding`, `intelligence`, and `agentic` ratings with higher effort. |
+| **`fast`** | Prioritizes top `speed` and low latency while maintaining adequate coding skill. |
+| **`frugal`** | Prioritizes `cost_efficiency` / free routes and lower effort; reserves heavy models for complex tasks only. |
+| **`inherit`** *(Ergo & Orchestration default)* | Follows `ai_head.routing_profile` when dispatched by AiHead, or `balanced` standalone. |
+
+*(Legacy `.herdr-master.toml` files containing `[models.worker_pool]` or `worker_models` still load cleanly without error, and explicit one-off CLI `--workers` / `--models coder=...` overrides continue to work.)*
+
+---
+
+## 🚀 Quick Start
+
+### 1. Install Package & Multi-Harness Skills
 
 ```bash
-# Human-readable summary of restrictions, Automode status, and enabled models
-aihead catalog available
-
-# Machine-readable JSON output for scripting and CI
-aihead catalog available --json --project /path/to/project
-```
-
----
-
-## 🔌 Herdr Integrations
-
-### Legacy Herdr TUI Plugin (`pank85.aihead-cockpit`)
-
-The existing `herdr-plugin.toml` (`min_herdr_version = "0.9.5"`) targets the legacy **[Herdr](https://herdr.dev)** terminal UI, not the separate Herdr desktop app and core.
-
-### 1. Six Workspace Actions
-When working inside a Herdr workspace, the plugin registers 6 actions accessible directly through the Herdr UI or command palette:
-
-| Action ID | Title | Execution Command | Behavior |
-| :--- | :--- | :--- | :--- |
-| **`head`** | **AiHead** | `aihead` (or legacy `herdm head`) | Launches an interactive AiHead session in a new tab. |
-| **`master`** | **New Master** | `aihead --herdr-master` | Spawns a root Herdr-Master multi-job orchestrator in a new tab. |
-| **`ergo`** | **New Ergo** | `python3 src/herdr_master/menu.py ergo` | Prompts for an objective, attaches project config, and starts Ergo. |
-| **`orchestration`** | **Orchestrate** | `python3 src/herdr_master/menu.py orchestration` | Prompts for an objective, attaches project config, and starts Orchestration. |
-| **`council`** | **AI Council** | `python3 src/herdr_master/menu.py council` | Prompts for an objective, attaches project config, and starts AI Council. |
-| **`settings`** | **Settings** | `python3 src/herdr_master/menu.py settings-open` | Discovers active pane cwd, sets `AIHEAD_SETTINGS_CONFIG`, and opens the Settings TUI. |
-
-### 2. Curses Command-Pane Menu (`aihead --menu`)
-Executing `aihead --menu` inside Herdr opens an interactive terminal menu:
-- Displays actions `[0] AiHead`, `[1] New Master`, `[2] New Ergo`, `[3] Orchestrate`, `[4] AI Council`, and `[5] Settings`.
-- **Objective Handling:** When selecting Ergo, Orchestration, or Council, it prompts `Objective: ` directly in the pane.
-- **Config Auto-Discovery:** Discovers the active workspace's project directory and automatically appends `--config <path>` to ensure the session inherits local allowlists and squad configurations.
-
-### Herdr Desktop App and Core
-
-The separate Herdr app/core integration is experimental. `aihead --backend core --harness pi` finds or starts an AiHead terminal in the selected Core session and attaches with `hc attach`; add `--no-attach` to leave it running. Starting a new Core AiHead head currently supports only Pi; the initial Core-specific prompt is passed in its argv, visible in Core terminal metadata. A successful spawn does not prove the prompt was processed. Reusing a head with `--task` is rejected rather than silently dropping or resending it. `aihead core terminals` lists Core terminals. Existing Ergo, Council and Herdr-Master workflows still target the separate TUI and are not yet ported to Core; Core selection rejects their launch commands rather than silently using the legacy backend.
-
-`herdr-app/mods/aihead-cockpit/` contains an initial native agent monitor that also finds labeled AiHead terminals. Core launch and reuse were tested with an isolated Core 0.1.21 and a fake Pi executable, not a real AI session. The mod passed the App 0.1.16 `check`; the desktop window itself has not been tested.
-
-The monitor displays all Herdr-reported agents and live child terminals, not only AiHead jobs. `aihead core terminals` follows `HC_SESSION` and `HC_SOCKET`; `hc connect` may start the selected Core if it is not running. To try the mod when the desktop app is installed, run `herdr-app check herdr-app/mods/aihead-cockpit`, then copy that directory into the app home's `mods/` directory without overwriting an existing mod. The default app home is `~/.config/herdr-app`; `HERDR_APP_HOME` overrides it. Herdr docks the mod when first discovered; later placement is controlled by the selected layout. This check does not replace testing it in the live app.
-
-Future publication to the official mod gallery requires the `herdr-mod` repository topic, a `RECIPE.md`, and a `preview.png`. Gallery publication is future work, not a current feature.
-
----
-
-## ⚡ Canonical Skills & Slash Commands Overview
-
-AiHead-Orchestrator ships with **5 canonical skills** deployable across all 5 harnesses:
-
-| Skill | Primary Scope | Execution Mode | Delegation & Sandboxing | Review & Landing Gate |
-| :--- | :--- | :--- | :--- | :--- |
-| [**/aihead**](skills/aihead/README.md) | Technical Director & Decision-Maker | Herdr workspace | Always delegates to background Herdr workspaces; never implements in main chat. | Evaluates `plan.md`, verifies architectural alignment, opens interactive `Update: <short>` tab. |
-| [**/ergo**](skills/ergo/README.md) | Phased Cross-Harness Pipeline (Single Major Job) | Herdr (default) or `--native` (host subagents) | Scout → Architect → parallel specialist Coders → Reviewer. Isolated Git worktree & branch. | Up to 3 Reviewer fix loops. Mandatory squash-merge into target branch (`develop`). |
-| [**/orchestration**](skills/orchestration/README.md) | Phased Single-Harness Subagent Pipeline | 100% Herdr-free; host subagents only | Complete pipeline executed entirely within the host harness (`agy`, `pi`, `claude`, `opencode`, `hermes`). | Blind review gate. Commit on branch; delegating parent integrates. |
-| [**/council**](skills/council/README.md) | Multi-Agent Architecture Consensus Deliberation | Herdr workspace | 1 Coordinator + 1 Scout + $\ge$2 Council Members. Independent drafting, cross-reviews, synthesis. | Atomic `council-state` CLI enforcement. Produces `final_plan.md` only; zero code changes or commits. |
-| [**/herdr-master**](skills/herdr-master/README.md) | Root Multi-Job Orchestrator | Herdr workspace | Coordinates multiple concurrent tasks across parallel isolated worktrees. Escalates to human. | Serial squash-merge into `develop`. Native async watchers wake coordinator. |
-
----
-
-## 📐 Universal Engineering Contracts
-
-Every skill in the AiHead-Orchestrator ecosystem strictly adheres to eight core operating invariants:
-
-1. **The Master Session Never Implements:** The coordinator session never edits files, runs build scripts, or executes implementation code directly. All implementation is delegated to isolated worktrees or subagents.
-2. **Strict One-Level-Up Communication Hierarchy:**
-   - Level 3 workers (Coders, Scout, Reviewer, Council Members) notify **ONLY** their direct Level 2 parent (Ergo Orchestrator or Council Coordinator) at `$ORCHESTRATOR_PANE_ID` / `$COORDINATOR_PANE_ID`. They never message AiHead or grandparent panes directly.
-   - Level 2 coordinators notify **ONLY** Level 1 (AiHead or Herdr-Master) at `$HERDR_PARENT_PANE_ID`.
-   - Child notification syntax: `herdr agent prompt <PARENT_PANE_ID> "..."`.
-3. **Non-Blocking Parents (No Polling Loops):** Parents prompt child agents and immediately yield control. Parents sleep until an async notification or watcher wakes them; busy polling loops (`while true; sleep ...`) are strictly prohibited.
-4. **Mandatory Launch Verification:** Every spawned pane is immediately checked via `herdr agent get <pane>` (status: `working`) and `herdr agent read <pane>` (model banner confirmed, no crash).
-5. **Children Registry (`RUN_DIR/children.tsv`):** An 8-field tab-separated ledger tracking all spawned sessions: `pane_id`, `role`, `tab_id`, `branch`, `worktree`, `run_dir`, `status`, and `last_heartbeat`. Only the parent writes to this file.
-6. **Read-Only Background Monitor:** A 10-minute recurring watcher inspects child health via non-invasive `herdr agent get/read` queries without closing panes or modifying state.
-7. **Interactive Update Tabs vs Question Tabs:**
-   - Operator questions appear in `Q: <short>` tabs and auto-close when answered.
-   - Job completion reports appear in an interactive `Update: <short>` tab opened with `--focus` in the coordinator workspace. These tabs present plain-language summaries and remain open until explicitly acknowledged by the operator.
-8. **Mandatory Post-Landing Cleanup:** Upon successful squash-merging of a feature branch, the parent automatically terminates child tabs, removes Git worktrees (`git worktree remove`), and deletes temporary branches (`git branch -D`).
-
----
-
-## 📦 Installation & Setup
-
-### 1. Package Installation
-Install AiHead-Orchestrator into your Python environment:
-
-```bash
-# Clone the repository
 git clone https://github.com/pank85/AiHead-Orchestrator.git
 cd AiHead-Orchestrator
 
 # Install editable via uv (recommended)
 uv pip install -e .
 
-# Or install via pipx for global CLI isolation
-pipx install --editable .
-```
-
-### 2. Multi-Harness Skill Installation
-Install all 5 canonical skills (`/aihead`, `/ergo`, `/orchestration`, `/council`, `/herdr-master`) across all detected agent harnesses:
-
-```bash
-# Using the CLI installer (recommended)
+# Install all 5 canonical skills (/aihead, /ergo, /orchestration, /council, /herdr-master)
+# across detected harnesses (agy, pi, claude, opencode, hermes, codex, kilo)
 aihead install
-
-# Or using the explicit skills subcommand
-aihead skills install
-
-# Or using the standalone shell script
-./scripts/install-skills.sh
 ```
 
-#### Supported Harness Destination Paths:
+### 2. Configure Available Models, Billing Tiers & Automode
 
-| Harness | Target Type | Installation Path | Features |
-| :--- | :--- | :--- | :--- |
-| **Antigravity (`agy`)** | Native Skill | `~/.gemini/antigravity-cli/skills/<skill>/SKILL.md` | Full tool integration, subagents |
-| **Pi (`pi`)** | Prompt / Skill | `~/.pi/agent/skills/<skill>/SKILL.md` | Deep reasoning, system prompts |
-| **Claude Code (`claude`)** | Custom Command | `~/.claude/commands/<skill>.md` | Slash command invocations |
-| **OpenCode (`opencode`)** | Skill & Command | `~/.config/opencode/skills/<skill>/SKILL.md`<br/>`~/.config/opencode/commands/<skill>.md` | Local open models & dual dispatch |
-| **Hermes (`hermes`)** | Skill | `~/.hermes/skills/<skill>/SKILL.md` | Protected against unowned clobbering |
-| **Codex (`codex`)** | Skill | `~/.agents/skills/<skill>/SKILL.md` | Global skill installation |
-| **Kilo (`kilo`)** | Skill | `~/.config/kilo/skills/<skill>/SKILL.md` | Global skill installation |
-
-> [!NOTE]
-> `aihead install` (and `aihead skills install`) includes safety protections: existing non-Hermes symlinks are safely overwritten with `--force` (default: `True`), while unowned Hermes files are strictly protected against accidental clobbering via YAML frontmatter collision checks.
-
-### 3. Inspecting & Removing Skills
 ```bash
-# Inspect installation status across all harnesses (Active, Stale, Broken, Missing)
-aihead skills list
-
-# Remove installed symlinks across all harnesses
-aihead skills remove
+# Open the unified interactive setup TUI
+aihead --setup
 ```
+
+Inside `aihead --setup`:
+- **`[6] Available`**: Toggle the models you want to allow per harness, set each harness's **Billing Tier** (`api` / `subscription` / `free`), press **`E`** to evaluate all unrated models live, and press **`V`** on any model to inspect its full rating breakdown.
+- **`[1] aihead`**: Enable **Automode = true** and choose your default **Routing Profile** (`balanced` | `quality` | `fast` | `frugal`).
+- **`[2] ergo` / `[3] orchestration`**: Choose **Worker Mode** (`inherit` | `balanced` | `quality` | `fast` | `frugal`) — no manual worker lists required.
+- Press **`S`** to save atomically to `.herdr-master.toml`.
+
+### 3. Evaluate Models & Test Smart Routing from CLI
+
+```bash
+# Incrementally evaluate any unrated available models (zero-auth sources + Layer-3 fallback)
+aihead catalog evaluate --project ~/.herdr-master.toml
+
+# Inspect stored ratings across harnesses
+aihead catalog ratings --project ~/.herdr-master.toml
+
+# Manually override a model's score (locks manual_override=true against auto-refresh)
+aihead catalog rate --binding pi:openai/gpt-6.1-sol --coding 96 --billing-tier api
+
+# Preview a full two-stage triage decision without dispatching
+aihead triage --task "Add rate-limiting middleware and tests" --project ~/.herdr-master.toml --dry-run
+```
+
+### 4. Launch Autonomous AiHead
+
+```bash
+# Attach to an existing AiHead or launch in a Herdr workspace
+aihead
+
+# Launch with an immediate objective and force automode on for this session
+aihead --automode --task "Refactor auth token refresh and add integration tests"
+```
+
+---
+
+## 🔀 Execution Workflows Selected by AiHead
+
+| Workflow | When AiHead Selects It | Isolation & Execution | Review & Integration |
+| :--- | :--- | :--- | :--- |
+| **`direct`** | Atomic 1–2 file mechanical change, low ambiguity, no design needed. | Single background Herdr job workspace. | Optional cross-family lightweight reviewer. |
+| [**`/orchestration`**](skills/orchestration/README.md) | Cohesive small–medium task where one native harness covers all roles strongly. | 100% single-harness native subagents (`agy`, `pi`, `claude`, `opencode`); Architect picks same-harness rated workers. | Blind reviewer gate; parent integrates. |
+| [**`/ergo`**](skills/ergo/README.md) | Complex feature, cross-module refactor, or high-rigor work benefiting from cross-harness diversity. | Isolated Git worktree & Herdr workspace; Architect picks rated workers across all enabled harnesses. | Plan Approval Gate + up to 3 adversarial Reviewer fix loops + squash-merge. |
+| [**`/council`**](skills/council/README.md) | High ambiguity, major RFC, or architectural trade-offs needing consensus before coding. | Coordinator + Scout + ≥2 Council Members from distinct model families (max 5 cycles). | Produces `final_plan.md` only; zero code edits. |
+| [**`/herdr-master`**](skills/herdr-master/README.md) | Multiple decoupled tasks or parallel workstreams across repos/folders. | One Herdr job workspace per workstream + async watchers. | Serial final review and squash-merge into `develop`. |
 
 ---
 
 ## 💻 CLI Reference
 
-### 1. `aihead` CLI Reference
-
-The `aihead` binary is the primary entrypoint for interactive and autonomous operations.
-Bare `aihead` finds and attaches to an existing AiHead, or launches the default AiHead in a new Herdr workspace if none exists.
-
+### Core AiHead Entrypoints
 ```bash
-aihead [OPTIONS]
+aihead                                    # Attach to or launch interactive AiHead
+aihead --task "<objective>"               # Launch AiHead with an initial objective
+aihead --automode / --no-automode         # Launch-time override of ai_head.automode
+aihead --setup                            # Unified interactive TUI settings & model evaluator
+aihead --menu                             # Curses command-pane menu inside Herdr
+aihead triage --task "<req>" [--profile balanced|quality|fast|frugal] [--dry-run] [--json]
+aihead --ergo "<intent>"                  # Dispatch /ergo in a background Herdr workspace
+aihead --orchestration "<intent>"         # Dispatch /orchestration
+aihead --council "<intent>"               # Dispatch /council deliberation
+aihead --herdr-master                     # Dispatch /herdr-master multi-job coordinator
 ```
 
-#### Launch Modes (Mutually Exclusive):
-- `--setup`: Opens the interactive curses settings wizard. Rejects `--no-attach` or launch overrides (`--harness`, `--model`, `--effort`).
-- `--tui`: Like bare `aihead`, finds and attaches to an existing AiHead, or launches the default AiHead in a new Herdr workspace. It does not open the cockpit.
-- `--menu`: Opens the curses command-pane menu inside a Herdr workspace.
-- `--ergo <intent>`: Dispatches an Ergo pipeline for the specified objective in a new Herdr workspace.
-- `--council <intent>`: Dispatches an AI Council deliberation in a new Herdr workspace.
-- `--orchestration <intent>`: Dispatches single-harness Orchestration in a new Herdr workspace.
-- `--herdr-master`: Dispatches a Herdr-Master root orchestrator in a new Herdr workspace.
-- `--task`, `-t <task>`: Launches an interactive AiHead session in Herdr with an initial instruction.
-
-#### Configuration & Runtime Overrides:
-- `--automode / --no-automode`: Launch-time override of saved `ai_head.automode` without writing to disk.
-- `--config <path>`: Explicit path to `.herdr-master.toml`.
-- `--cwd`, `--folder`, `-C <path>`: Initial working directory for AiHead or child skill.
-- `--attach / --no-attach`: Attach terminal to Herdr session (default: `True`). Background scripts pass `--no-attach`.
-- `--session <str>`: Target Herdr session name (adopts active session or auto-provisions if omitted).
-- `--workspace`, `-w <str>`: Target workspace label or ID.
-- `--split / --no-split`: Split active Herdr screen so AiHead is primary and active pane is secondary.
-- `--secondary`: Enforce screen split with active pane becoming secondary.
-- `--skip-permissions / --no-skip-permissions`: Override `dangerously_skip_permissions` for the coordinator harness.
-- `--harness <str>`: Interactive coordinator harness override (`agy`, `pi`, `claude`, `opencode`, `hermes`).
-- `--model <str>`: Model slug override.
-- `--effort <str>`: Reasoning effort override (`low`, `medium`, `high`, `max`).
-
-### 2. `aihead catalog` CLI Reference
-
-Inspect harnesses, resolve squads, and verify allowlists:
-
+### Catalog, Evaluation & Routing Commands
 ```bash
-# 1. Audit allowlist and catalog models
-aihead catalog available [--project <path>] [--json]
+# Incremental model evaluation & rating management
+aihead catalog evaluate [--project PATH] [--harness KIND] [--refresh] [--force] [--max-age DAYS] [--probe] [--no-llm] [--evaluator SLUG] [--dry-run] [--json]
+aihead catalog ratings  [--project PATH] [--harness KIND] [--json]
+aihead catalog rate     --binding <harness:model> [--intelligence N] [--coding N] [--agentic N] [--speed N] [--cost-efficiency N] [--context-handling N] [--billing-tier free|subscription|api] [--notes TEXT]
 
-# 2. Inspect catalog identities, product defaults, and canonical skill paths
+# Allowlist inspection (includes ratings & unrated_models)
+aihead catalog available [--project PATH] [--json]
+
+# Two-stage triage & deterministic route validation
+aihead catalog triage-models  [--harness HOST] [--project PATH] [--profile MODE] [--json]
+aihead catalog validate-route --from-json <PATH|-> [--project PATH] [--backend herdr|core] [--json]
+
+# Squad & agent launch resolution (with dynamic rated worker pool)
+aihead catalog squad [--mode herdr|native|core] [--harness HOST] [--worker-mode inherit|balanced|quality|fast|frugal] [--project PATH] [--models "..."] [--write-snapshot /abs/squad.toml] [--json]
+aihead catalog agent --binding <harness:model[:effort]> --role <role> [--mode herdr|native] [--json]
 aihead catalog show [--json]
-
-# 3. Resolve effective squad across catalog defaults, project configs, and CLI overrides
-aihead catalog squad [--mode herdr|native|core] [--harness <host>] \
-  [--models "scout:agy:gemini-3.8-flash-medium architect:pi:openai-codex/gpt-6.1-sol"] \
-  [--write-snapshot /abs/path/squad.toml] [--json]
-
-# 4. Resolve a binding slug into Herdr launch argv or native subagent descriptors
-aihead catalog agent --binding agy:gemini-3.8-flash:medium --role coder [--mode herdr|native]
 ```
 
-### 3. Headless Decisions & Subcommands
-
-*(Legacy `herdm` and `herdr-master` commands remain supported as backwards-compatible entry points.)*
-
+### Skill Management
 ```bash
-# Headless bounded decision-maker (used by pipelines when no active AiHead session is running)
-aihead aihead-cli -q "Select database engine" -c "High write throughput required" --choices "postgres,scylladb"
-
-# Initialize project configuration
-aihead init --target-branch develop
-
-# Show active sessions, worktrees, and running pipelines
-aihead status
-
-# View parsed configuration
-aihead config
+aihead install          # Alias for `aihead skills install`
+aihead skills list      # Inspect symlink/composed status across all harnesses
+aihead skills remove    # Cleanly remove managed skill links
 ```
 
 ---
 
-## ⚙️ Configuration Specification (`.herdr-master.toml`)
-
-Here is an annotated reference configuration for `.herdr-master.toml`:
+## ⚙️ Configuration Reference (`.herdr-master.toml`)
 
 ```toml
 [general]
-target_branch = "develop"
-log_level = "INFO"
-
-[worktree]
-base_dir = ".orchestration/worktrees"
-clean_on_exit = true
+default_session = "default"
+target_integration_branch = "develop"
+create_develop_if_missing = true
+disallow_hard_reset = true
 
 [ai_head]
 enabled = true
-automode = true                         # Enable dynamic squad composition
-split = true                            # Split Herdr screen on launch
-autonomy = "routine"                    # "routine" (autonomous) or "ask" (escalate)
-dangerously_skip_permissions = true     # Bypass confirmation prompts for tool actions
-cwd = "."
+automode = true                         # Enable autonomous triage & rated squad composition
+routing_profile = "balanced"            # balanced | quality | fast | frugal
+autonomy = "routine"                    # routine (autonomous) | ask (confirm before dispatch)
+brief_before_action = true
+split = true
+dangerously_skip_permissions = true
+lesson_paths = ["~/.herdr-master/lessons"]
 
 [ai_head.binding]
 kind = "pi"
-model = "openai-codex/gpt-6.1-sol"
-effort = "max"
+model = "openai/gpt-6.1-sol"
+effort = "high"
 
 [models.available.herdr]
-# Models permitted for cross-harness Herdr pipelines
-agy = ["gemini-3.8-flash-medium", "gemini-3.8-flash", "gemini-3.8-pro"]
-pi = ["openai-codex/gpt-6.1-sol", "xai/grok-4.7", "anthropic/claude-3-7-sonnet"]
-claude = ["claude-3-7-sonnet"]
-opencode = ["deepseek-coder-v2"]
-hermes = ["qwen2.5-coder-32b"]
+agy = ["gemini-4-hydrogen-low", "gemini-4-neon-medium", "gemini-4-neon-high", "claude-opus-5-5-high"]
+pi = ["openai/gpt-6.1-sol", "xai/grok-4.7", "openai/gpt-6-luna"]
+claude = ["opus", "sonnet", "haiku"]
+kilo = ["kilo/kilo-auto/free", "openai/gpt-6.1-terra"]
 
 [models.available.native]
-# Models permitted for single-harness native subagent pipelines
-agy = ["flash", "pro", "flash_lite"]
-pi = ["default", "fast"]
-claude = ["sonnet", "haiku"]
-opencode = ["general", "code"]
+agy = ["flash_lite", "flash", "pro"]
 
-[models.default_squad]
-# Authoritative product squad fallback for Ergo
-scout = "agy:gemini-3.8-flash-medium"
-architect = "pi:openai-codex/gpt-6.1-sol"
-reviewer = "pi:xai/grok-4.7"
+[models.evaluation]
+cache_ttl_hours = 24
+max_age_days = 30
 
-[models.worker_pool]
-# Coder pool entries for Ergo implementation phases
-worker-1 = { harness = "agy", model = "gemini-3.8-flash" }
-worker-2 = { harness = "pi", model = "xai/grok-4.7" }
+[models.evaluation.billing]
+agy = "subscription"
+claude = "subscription"
+pi = "api"
+kilo = "free"
+
+# Populated automatically by `aihead catalog evaluate` (inherited from ~/.herdr-master.toml)
+[models.ratings.pi."openai/gpt-6.1-sol"]
+intelligence = 93
+coding = 94
+agentic = 93
+speed = 74
+cost_efficiency = 73
+context_handling = 96
+family = "openai"
+billing_tier = "api"
+context_window = 1050000
+supports_reasoning = true
+supported_efforts = ["low", "medium", "high", "max"]
+recommended_roles = ["scout", "direct", "coder", "architect", "reviewer", "council", "router"]
+source = "models_dev+harness_eval"
+confidence = "medium"
+manual_override = false
 
 [ergo]
-# Dedicated Ergo coordinator binding
-coordinator = "pi:openai-codex/gpt-6.1-sol:max"
+coordinator = "agy:gemini-4-neon-low"
+worker_mode = "inherit"                 # inherit | balanced | quality | fast | frugal
 
 [orchestration]
-# Native single-harness pipeline settings
 harness = "agy"
-scout_model = "flash"
-architect_model = "pro"
-worker_models = ["flash"]
-reviewer_model = "pro"
-scout_effort = "medium"
-architect_effort = "high"
-reviewer_effort = "high"
+agy_mode = "swarm"                      # subagents (tier IDs) | swarm (exact agy slugs)
+worker_mode = "inherit"                 # Architect picks workers from active harness Available models only
+scout_model = "gemini-4-hydrogen-low"
+architect_model = "gemini-4-neon-high"
+reviewer_model = "claude-opus-5-5-high"
 
 [council]
-# AI Council consensus deliberation settings
-coordinator = "pi:openai-codex/gpt-6.1-sol:max"
-scout = "agy:gemini-3.8-flash-medium:medium"
+coordinator = "pi:openai/gpt-6.1-sol:high"
+scout = "agy:gemini-4-hydrogen-low"
 
 [[council.members]]
-label = "Security-Lead"
-binding = "pi:xai/grok-4.7:high"
+label = "council-1"
+binding = "pi:openai/gpt-6.1-sol:high"
 enabled = true
 
 [[council.members]]
-label = "Systems-Architect"
-binding = "pi:anthropic/claude-3-7-sonnet:high"
+label = "council-2"
+binding = "agy:claude-opus-5-5-high"
 enabled = true
-
-[master_coordinator]
-# Default binding for aihead --herdr-master
-kind = "pi"
-model = "openai-codex/gpt-6.1-sol"
-effort = "high"
 ```
+
+---
+
+## 🔌 Supported Harnesses & Herdr Integration
+
+| Harness | Herdr Cross-Harness | Native Subagents (`/orchestration` & Triage) | Skill Install Destination |
+| :--- | :---: | :---: | :--- |
+| **Antigravity (`agy`)** | ✅ | ✅ (`invoke_subagent` / `swarm`) | `~/.gemini/antigravity-cli/skills/<skill>/SKILL.md` |
+| **Pi (`pi`)** | ✅ | ✅ (`subagent`) | `~/.pi/agent/skills/<skill>/SKILL.md` |
+| **Claude Code (`claude`)** | ✅ | ✅ (`Agent`) | `~/.claude/commands/<skill>.md` |
+| **OpenCode (`opencode`)** | ✅ | ✅ (`subagent`) | `~/.config/opencode/skills/<skill>/SKILL.md` & `commands/<skill>.md` |
+| **Hermes (`hermes`)** | ✅ | Headless triage fallback (`aihead triage`) | `~/.hermes/skills/<skill>/SKILL.md` |
+| **Codex (`codex`)** | ✅ | Headless triage fallback (`aihead triage`) | `~/.agents/skills/<skill>/SKILL.md` |
+| **Kilo (`kilo`)** | ✅ | Headless triage fallback (`aihead triage`) | `~/.config/kilo/skills/<skill>/SKILL.md` |
+
+### Core Operating Invariants
+- **Main chat stays always free**: AiHead never edits files or blocks in polling loops—every job runs in a background Herdr workspace with push notifications (`herdr agent prompt`) one level up.
+- **User-facing inspection tabs**: Approved plans (`Plan: <short>`), completion summaries (`Update: <short>`), escalations (`Info: <short>`), and blocking questions (`Q: <short>`) open in interactive tabs in the coordinator workspace.
+- **Zero fabricated models**: Every automated routing decision passes through `validate_route()` against `[models.available]` and `core/catalog.py`.
+- **Mandatory squash-merge & cleanup**: Completed feature branches are squash-merged into `develop` once review and tests pass, followed by automatic worktree, branch, and tab cleanup.
+- **Experimental Herdr Core (`--backend core`)**: Supported for Pi AiHead launch (`aihead --backend core --harness pi`) and `aihead core terminals`; `validate_route --backend core` fails closed on legacy Herdr-only workflows (`/ergo`, `/council`, `/herdr-master`).
 
 ---
 
 ## 🧪 Testing & Verification
 
-The test suite validates state machines, allowlist enforcement, framing protocols, launcher lifecycles, and distribution contracts:
-
 ```bash
-# Run core contract and skills test suite
-uv run --extra dev pytest tests/test_skill_contract.py tests/test_distribution_contract.py tests/test_skills_cli.py
-
-# Run all unit tests with pytest
-uv run --extra dev pytest
-
-# Check code formatting and linting with Ruff
+# Lint with Ruff
 uv run ruff check .
+
+# Run Model Evaluation, Dynamic Worker, and Triage test suites
+uv run --extra dev pytest tests/test_model_ratings.py tests/test_eval_sources.py tests/test_model_evaluator.py tests/test_triage_and_dynamic_workers.py
+
+# Run full test suite
+uv run --extra dev pytest
 ```
-
----
-
-## 📚 Deep-Dive Documentation
-
-For detailed architectural specifications and design documents, refer to:
-
-- [**00. System Overview & Vision**](ai_docs/00_OVERVIEW.md) — Architectural vision, tenets, and principles.
-- [**01. Architecture & Core Specifications**](ai_docs/01_ARCHITECTURE_AND_SPECS.md) — System components, worker states, and lifecycle.
-- [**02. Inter-Harness Communication Protocol (IHCP)**](ai_docs/02_INTER_HARNESS_PROTOCOL.md) — Message envelopes, mailboxes, and PTY injection.
-- [**03. Orchestration Pipelines & Ergo Integration**](ai_docs/03_ORCHESTRATION_AND_ERGO_PIPELINE.md) — Phased pipeline execution flow.
-- [**04. CLI & Terminal UI (TUI) Specification**](ai_docs/04_CLI_AND_TUI_SPEC.md) — UI widgets, actions, and modal specs.
-- [**05. Herdr Plugin & Integration Packaging**](ai_docs/05_HERDR_PLUGIN_AND_INTEGRATION.md) — Packaging as Herdr plugin and skill.
 
 ---
 
