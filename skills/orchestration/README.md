@@ -60,7 +60,7 @@ The Hermes native subagent tool `delegate_task` does **not** support per-task mo
   - **STOP immediately** rather than silently proceeding with the inherited model.
 
 ### Worker tier and mode guidance
-Tier 1 = fast/cheap, Tier 2 = decent/all-around, Tier 3 = frontier/clever. balanced: prefers tier 2 and tier 1; tier 3 (frontier) only when truly necessary. frugal: normally tier 1; may rise to tier 2. quality: uses tier 3 (frontier); uses tier 2 (all-around) only when quality will not be lost. fast: prefers fast tier 1/2 models. Thinking effort is guidance, not a one-to-one lock: AiHead or the Architect combines worker tier and effort.
+Tier 1 = Cheap/Fast, Tier 2 = Everyday/All-rounder, Tier 3 = Frontier. `frugal` picks the cheapest model in the minimum viable tier (Scout T1, Architect T2, Reviewer T1–T2). `balanced` picks the best value in the task's tier (Scout T1 cheapest, Reviewer T2 best value, Architect a mid/value T3 or T2 if simple; T3 only when truly necessary). `quality` picks the best capability in the tier (Scout T2, Architect top T3, Reviewer top T3). `fast` picks the fastest T1/T2 model. `cost_efficiency` counts even on subscription models because expensive models burn quota faster. The Architect is never Tier 1. Thinking effort is guidance, not a one-to-one lock: AiHead or the Architect combines worker tier and effort. Native mode has no controlled dispatch adapter, so tiers are guidance only.
 
 ### Reasoning Effort Overrides
 - Users may configure effort levels via `--efforts scout=<level>,architect=<level>,reviewer=<level>` (values: `low`, `medium`, `high`, `max`).
