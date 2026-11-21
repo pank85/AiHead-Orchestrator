@@ -40,6 +40,7 @@ from herdr_master.core.model_ratings import (
     ModelRating,
     ModelRatingsMap,
     detect_model_family,
+    effective_worker_tier,
     format_rated_models_table,
     infer_supported_efforts,
     lookup_rating,
@@ -586,6 +587,15 @@ def validate_route(
                 disabled_harnesses=disabled_set,
             )
 
+    # Hard rule: the Architect is never a Tier 1 (Cheap/Fast) model in any mode.
+    if arch_binding is not None:
+        arch_rating = lookup_rating(ratings, arch_binding.kind.value, arch_binding.model)
+        if arch_rating is not None and effective_worker_tier(arch_rating) == 1:
+            errors.append(
+                f"architect: '{arch_binding.to_slug()}' is Tier 1 (Cheap/Fast); "
+                "the Architect must be Tier 2 or Tier 3."
+            )
+
     # Cross-family Architect vs Reviewer advisory
     if arch_binding is not None and rev_binding is not None:
         arch_fam = detect_model_family(arch_binding.kind.value, arch_binding.model)
@@ -642,7 +652,10 @@ def build_router_prompt(
     previous_errors: Optional[Sequence[str]] = None,
 ) -> str:
     """Build the Stage-2 Strong Routing Decider prompt."""
+    from herdr_master.pipeline.squad import format_mode_tier_guidance
+
     profile = validate_routing_profile(routing_profile)
+    mode_guidance = format_mode_tier_guidance(profile)
     repair_block = ""
     if previous_errors:
         joined = "\n".join(f"- {err}" for err in previous_errors)
@@ -663,6 +676,8 @@ def build_router_prompt(
         f"- orchestration agy_mode: {agy_mode}\n"
         f"- native-capable harnesses for /orchestration: "
         f"{', '.join(supported_harnesses(mode='native'))}\n\n"
+        f"MODE & TIER BASELINE (AiHead makes the final decision per task; price/quota matters "
+        f"even on subscription):\n{mode_guidance}\n\n"
         "WORKFLOW RUBRIC:\n"
         "- direct: atomic 1-2 file mechanical change, requires_design=false, ambiguity=low.\n"
         "- orchestration: small/medium cohesive multi-file task where ONE native harness covers "
