@@ -60,8 +60,11 @@ from herdr_master.core.model_ratings import (
     BILLING_TIERS,
     ModelEvaluationConfig,
     ModelRating,
+    derive_worker_tier,
+    detect_model_family,
     effective_worker_tier,
     format_context_window,
+    infer_supported_efforts,
     lookup_rating,
     merge_ratings,
 )
@@ -69,6 +72,12 @@ from herdr_master.core.models import EffortLevel, HarnessBinding, Squad
 from herdr_master.core.slug import InvalidBindingSlugError
 from herdr_master.pipeline.model_evaluator import EvaluationResult, evaluate_available_models
 from herdr_master.pipeline.squad import save_squad_as_default, validate_squad
+
+WORKER_TIER_LABELS: Dict[int, str] = {
+    1: "T1 Cheap/Fast",
+    2: "T2 Everyday",
+    3: "T3 Frontier",
+}
 
 SECTIONS: Tuple[Tuple[str, str], ...] = (
     ("aihead", "aihead"),
@@ -549,13 +558,17 @@ class SetupTuiApp:
                 if checked:
                     unrated_count += 1
                 badge = "[unrated]"
-                hint = "Toggle allowlist | [V] inspect | [E] evaluate unrated models"
+                hint = "Toggle allowlist | [T] set tier | [V] inspect | [E] evaluate unrated models"
             else:
-                badge = rating.compact_badge()
+                tier = effective_worker_tier(rating)
+                tier_tag = WORKER_TIER_LABELS.get(tier, f"T{tier}")
+                if rating.worker_tier_override:
+                    tier_tag = f"{tier_tag}*"
+                badge = f"[{tier_tag}] {rating.compact_badge()}"
                 ctx_str = format_context_window(rating.context_window)
                 hint = (
                     f"{rating.family} | A:{rating.agentic} Ctx:{ctx_str} "
-                    f"({rating.confidence}) | [V] inspect"
+                    f"({rating.confidence}) | [T] set tier | [V] inspect"
                 )
             rows.append(
                 FieldRow(
@@ -662,6 +675,21 @@ class SetupTuiApp:
             shown = self.available_view_harness or "-"
             self._set_status(f"Viewing {self.available_view_mode} {shown}")
             return False
+        if parts[1] == "tier":
+            try:
+                index = int(parts[2])
+            except ValueError:
+                self._set_status("Available tier key must be an index.", error=True)
+                return False
+            if index < 0 or index >= len(self._available_toggle_ids):
+                self._set_status("Available model list changed; select tier again.", error=True)
+                return False
+            harness = self._available_toggle_harness
+            if not harness:
+                self._set_status("No harness selected for Available.", error=True)
+                return False
+            model_id = self._available_toggle_ids[index]
+            return self._apply_available_worker_tier(harness, model_id, value)
         if parts[1] != "toggle":
             self._set_status(f"Unknown available field {'.'.join(parts)}", error=True)
             return False
@@ -1323,6 +1351,9 @@ class SetupTuiApp:
         elif root == "available":
             if not self._apply_available_field(parts, value):
                 return
+            if len(parts) >= 2 and parts[1] == "tier":
+                self.dirty = True
+                return
 
         elif root == "pool":
             idx, attr = int(parts[1]), parts[2]
@@ -1464,6 +1495,104 @@ class SetupTuiApp:
             self._set_status(
                 f"All target models already rated ({res.skipped_count} skipped)."
             )
+
+    def _open_tier_picker_for_current_available(self) -> None:
+        row = self._current_row()
+        if row is None or not row.key.startswith("available.toggle."):
+            self._set_status("Select a model row in Available to set its worker tier.")
+            return
+        try:
+            index = int(row.key.split(".")[2])
+            model_id = self._available_toggle_ids[index]
+        except (ValueError, IndexError):
+            return
+        harness = self._available_toggle_harness
+        if not harness:
+            self._set_status("No harness selected for Available.", error=True)
+            return
+        effective_ratings, _ = self._effective_ratings_and_eval()
+        rating = lookup_rating(effective_ratings, harness, model_id)
+        options = [
+            ChoiceOption(1, "1. Cheap / Fast", "Tier 1 — quick, low-cost tasks & scouts"),
+            ChoiceOption(
+                2, "2. Everyday / All-rounder", "Tier 2 — general coding & balanced default"
+            ),
+            ChoiceOption(3, "3. Frontier", "Tier 3 — complex architecture & hard tasks"),
+            ChoiceOption("auto", "Auto (derived)", "Recompute tier automatically from ratings"),
+        ]
+        cursor = 0
+        if rating is not None:
+            current_val: Any = (
+                effective_worker_tier(rating) if rating.worker_tier_override else "auto"
+            )
+            for idx, opt in enumerate(options):
+                if opt.value == current_val:
+                    cursor = idx
+                    break
+        self.picker = PickerState(
+            field_key=f"available.tier.{index}",
+            title=f"Worker Tier — {harness}:{model_id}",
+            options=options,
+            cursor=cursor,
+        )
+        self._set_status(f"Select worker tier for {harness}:{model_id} (Enter confirm, Esc cancel)")
+
+    def _apply_available_worker_tier(self, harness: str, model_id: str, value: Any) -> bool:
+        effective_ratings, effective_eval = self._effective_ratings_and_eval()
+        existing = lookup_rating(effective_ratings, harness, model_id)
+        if value == "auto":
+            if existing is None:
+                self._set_status("No rating stored yet; evaluate or choose tier 1/2/3.", error=True)
+                return False
+            recomputed = derive_worker_tier(existing)
+            updated = existing.model_copy(
+                update={"worker_tier": recomputed, "worker_tier_override": False}
+            )
+            if self.cfg.models.ratings is None:
+                self.cfg.models.ratings = {}
+            self.cfg.models.ratings.setdefault(harness, {})[model_id] = updated
+            self._set_status(
+                f"Worker tier for {harness}:{model_id} set to Auto "
+                f"({WORKER_TIER_LABELS[recomputed]})"
+            )
+            return True
+        if value not in (1, 2, 3):
+            self._set_status(f"Invalid worker tier {value!r}.", error=True)
+            return False
+        if existing is not None:
+            updated = existing.model_copy(
+                update={"worker_tier": value, "worker_tier_override": True}
+            )
+        else:
+            mode = (
+                self._available_toggle_mode
+                if self._available_toggle_mode in ("herdr", "native")
+                else "herdr"
+            )
+            updated = ModelRating(
+                intelligence=75,
+                coding=75,
+                agentic=75,
+                speed=75,
+                cost_efficiency=75,
+                context_handling=75,
+                family=detect_model_family(harness, model_id),
+                billing_tier=effective_eval.billing_for(harness),
+                worker_tier=value,
+                worker_tier_override=True,
+                supported_efforts=infer_supported_efforts(harness, model_id, mode=mode),
+                notes="Manual worker tier",
+                source="manual_tier",
+                confidence="low",
+                manual_override=False,
+            )
+        if self.cfg.models.ratings is None:
+            self.cfg.models.ratings = {}
+        self.cfg.models.ratings.setdefault(harness, {})[model_id] = updated
+        self._set_status(
+            f"Worker tier for {harness}:{model_id} set to {WORKER_TIER_LABELS[value]}"
+        )
+        return True
 
     def _inspect_current_available_rating(self) -> None:
         row = self._current_row()
@@ -1774,8 +1903,7 @@ class SetupTuiApp:
         self.dirty = False
         self.saved = True
         self.saved_path = saved_path
-        self.done = True
-        self._set_status(f"Saved to {saved_path}")
+        self._set_status(f"Saved to {saved_path} (press Q to quit)")
         return True
 
     def _handle_picker_key(self, key: str) -> None:
@@ -1912,7 +2040,6 @@ class SetupTuiApp:
             return
 
         if key in ("q", "Q"):
-            self.saved = False
             self.done = True
             return
 
@@ -1983,6 +2110,8 @@ class SetupTuiApp:
                 self._run_action(row.key)
         elif key in ("e", "E") and self.current_section == "models":
             self._run_action("available.evaluate")
+        elif key in ("t", "T") and self.current_section == "models":
+            self._open_tier_picker_for_current_available()
         elif key in ("v", "V") and self.current_section == "models":
             self._inspect_current_available_rating()
         elif key in ("a", "A"):
@@ -2063,8 +2192,8 @@ class SetupTuiApp:
                 counts = counts[:19] + "…"
             lines.append(Text(f"  Live: {counts}", style="dim", no_wrap=True))
         lines.append(Text(""))
-        lines.append(Text("[S] Save All  [R] Reset", style="green", no_wrap=True))
-        lines.append(Text("[Q] Quit (discard)", style="yellow", no_wrap=True))
+        lines.append(Text("[S] Save  [R] Reset", style="green", no_wrap=True))
+        lines.append(Text("[Q] Quit", style="yellow", no_wrap=True))
 
         body = Text("\n").join(lines)
         border = "cyan" if self.focus_pane == "sections" else "bright_black"
