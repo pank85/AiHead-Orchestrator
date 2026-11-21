@@ -950,7 +950,7 @@ def evaluate_available_models(
                 rating.worker_tier = existing.worker_tier
                 rating.worker_tier_override = True
             else:
-                rating.worker_tier = derive_worker_tier(rating)
+                rating.worker_tier = derive_worker_tier(rating, model_id=mid)
                 rating.worker_tier_override = False
 
     # 5. Atomic persistence into target .herdr-master.toml

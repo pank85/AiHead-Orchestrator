@@ -5,7 +5,7 @@ from __future__ import annotations
 import os
 import sys
 import tempfile
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any, Dict, List, Optional, Tuple, Union
 
@@ -84,6 +84,16 @@ class ModelsConfig(BaseModel):
     available: Optional[AvailableModels] = None
     evaluation: Optional[ModelEvaluationConfig] = None
     ratings: Optional[ModelRatingsMap] = None
+    harnesses: Dict[str, bool] = Field(default_factory=dict)
+
+    @field_validator("harnesses", mode="before")
+    @classmethod
+    def _validate_harnesses(cls, value: Any) -> Dict[str, bool]:
+        if value is None:
+            return {}
+        if not isinstance(value, dict):
+            raise ValueError("models.harnesses must be a mapping of harness -> bool.")
+        return {str(k).strip().lower(): bool(v) for k, v in value.items() if str(k).strip()}
 
     @field_validator("ratings", mode="before")
     @classmethod
@@ -1257,13 +1267,28 @@ def find_ancestor_config_paths(config_path: Union[str, Path]) -> List[Path]:
 
 @dataclass(frozen=True)
 class EffectiveModelsState:
-    """Merged ``[models.available]``, ``[models.ratings]``, and ``[models.evaluation]``."""
+    """Merged ``[models.available]``, ``ratings``, ``evaluation``, and ``harnesses``."""
 
     available: Optional[AvailableModels]
     ratings: ModelRatingsMap
     evaluation: ModelEvaluationConfig
     config_path: Optional[Path]
     inherited_paths: Tuple[Path, ...]
+    harnesses: Dict[str, bool] = field(default_factory=dict)
+
+    @property
+    def disabled_harnesses(self) -> frozenset[str]:
+        return frozenset(k for k, enabled in self.harnesses.items() if not enabled)
+
+
+def is_harness_enabled(
+    harnesses: Optional[Dict[str, bool]],
+    harness: str,
+) -> bool:
+    """Return True unless ``harness`` is explicitly disabled in ``[models.harnesses]``."""
+    if not harnesses:
+        return True
+    return bool(harnesses.get(harness.strip().lower(), True))
 
 
 def load_effective_models_state(
@@ -1308,6 +1333,7 @@ def load_effective_models_state(
     effective_available: Optional[AvailableModels] = None
     effective_ratings: ModelRatingsMap = {}
     effective_eval = ModelEvaluationConfig()
+    effective_harnesses: Dict[str, bool] = {}
     loaded_ancestors: List[Path] = []
 
     for anc_path in ancestor_paths:
@@ -1320,11 +1346,13 @@ def load_effective_models_state(
             effective_available = anc_cfg.models.available
         effective_ratings = merge_ratings(effective_ratings, anc_cfg.models.ratings)
         effective_eval = merge_evaluation_configs(effective_eval, anc_cfg.models.evaluation)
+        effective_harnesses.update(anc_cfg.models.harnesses)
 
     if active_cfg.models.available is not None:
         effective_available = active_cfg.models.available
     effective_ratings = merge_ratings(effective_ratings, active_cfg.models.ratings)
     effective_eval = merge_evaluation_configs(effective_eval, active_cfg.models.evaluation)
+    effective_harnesses.update(active_cfg.models.harnesses)
 
     return EffectiveModelsState(
         available=effective_available,
@@ -1332,6 +1360,7 @@ def load_effective_models_state(
         evaluation=effective_eval,
         config_path=resolved_cfg_path,
         inherited_paths=tuple(loaded_ancestors),
+        harnesses=effective_harnesses,
     )
 
 

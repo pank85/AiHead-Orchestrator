@@ -344,6 +344,7 @@ def _check_allowlist_and_route(
     agy_mode: str,
     available: Optional[AvailableModels],
     errors: List[str],
+    disabled_harnesses: frozenset[str] = frozenset(),
 ) -> Optional[HarnessBinding]:
     try:
         binding = parse_binding(raw_slug, label=role)
@@ -354,6 +355,12 @@ def _check_allowlist_and_route(
     kind = binding.kind.value
     model = binding.model
     effort = binding.effort.value if binding.effort else None
+
+    if kind in disabled_harnesses:
+        errors.append(
+            f"{role}: harness '{kind}' is disabled in [models.harnesses] (`aihead --setup`)."
+        )
+        return None
 
     if mode == "native":
         if target_harness and kind != target_harness:
@@ -406,11 +413,13 @@ def validate_route(
     ratings: Optional[ModelRatingsMap] = None,
     agy_mode: str = "subagents",
     backend: str = "herdr",
+    disabled_harnesses: Optional[Sequence[str] | set[str] | frozenset[str]] = None,
 ) -> RouteValidationResult:
     """Deterministically validate a Stage-2 :class:`RoutingPlan` against all invariants."""
     errors: List[str] = []
     advisories: List[str] = []
     backend_key = backend.strip().lower()
+    disabled_set = frozenset(str(h).strip().lower() for h in (disabled_harnesses or ()))
 
     if backend_key == "core" and plan.workflow in ("ergo", "council", "herdr-master"):
         errors.append(
@@ -443,6 +452,7 @@ def validate_route(
                 agy_mode=agy_mode,
                 available=available,
                 errors=errors,
+                disabled_harnesses=disabled_set,
             )
         if plan.direct_reviewer:
             _check_allowlist_and_route(
@@ -453,6 +463,7 @@ def validate_route(
                 agy_mode=agy_mode,
                 available=available,
                 errors=errors,
+                disabled_harnesses=disabled_set,
             )
 
     elif plan.workflow == "orchestration":
@@ -505,6 +516,7 @@ def validate_route(
                 agy_mode=agy_mode,
                 available=available,
                 errors=errors,
+                disabled_harnesses=disabled_set,
             )
             if role_name == "architect":
                 arch_binding = bound
@@ -519,6 +531,7 @@ def validate_route(
                 agy_mode=agy_mode,
                 available=available,
                 errors=errors,
+                disabled_harnesses=disabled_set,
             )
 
     elif plan.workflow == "council":
@@ -535,6 +548,7 @@ def validate_route(
                 agy_mode=agy_mode,
                 available=available,
                 errors=errors,
+                disabled_harnesses=disabled_set,
             )
         if len(plan.council_members) < 2:
             errors.append("Workflow 'council' requires at least 2 council_members.")
@@ -549,6 +563,7 @@ def validate_route(
                     agy_mode=agy_mode,
                     available=available,
                     errors=errors,
+                    disabled_harnesses=disabled_set,
                 )
                 if bound is not None:
                     member_families.add(detect_model_family(bound.kind.value, bound.model))
@@ -568,6 +583,7 @@ def validate_route(
                 agy_mode=agy_mode,
                 available=available,
                 errors=errors,
+                disabled_harnesses=disabled_set,
             )
 
     # Cross-family Architect vs Reviewer advisory
@@ -878,6 +894,7 @@ def run_triage(
             ratings=effective.ratings,
             agy_mode=agy_mode,
             backend=backend,
+            disabled_harnesses=effective.disabled_harnesses,
         )
         if last_validation.valid:
             break

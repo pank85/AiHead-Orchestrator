@@ -266,10 +266,11 @@ def build_dynamic_coder_pool(
     native_harness: Optional[str] = None,
     agy_mode: str = "subagents",
     worker_mode: str = "balanced",
+    disabled_harnesses: Optional[List[str] | set[str] | frozenset[str]] = None,
 ) -> tuple[List[HarnessBinding], str, List[str]]:
     """Derive the Architect's coder pool dynamically from ``[models.available]`` + ratings.
 
-    - In ``herdr`` mode (Ergo): includes enabled Herdr models across all harnesses.
+    - In ``herdr`` mode (Ergo): includes enabled Herdr models across all enabled harnesses.
     - In ``native`` mode (Orchestration): includes ONLY enabled models for ``native_harness``
       (respecting ``agy_mode == "swarm"`` using ``herdr.agy`` slugs vs ``native.agy`` tiers).
     - When completely unrestricted (``available is None``), falls back to already-rated
@@ -277,11 +278,14 @@ def build_dynamic_coder_pool(
       advisory suggesting configuring ``[models.available]``.
     """
     mode_key = validate_mode(mode)
+    disabled_set = {str(h).strip().lower() for h in (disabled_harnesses or ())}
     advisories: List[str] = []
     pairs: List[tuple[str, str]] = []
     seen: set[tuple[str, str]] = set()
 
     def add_candidate(kind_str: str, model_id: str) -> None:
+        if kind_str.strip().lower() in disabled_set:
+            return
         key = (kind_str, model_id)
         if key in seen:
             return
@@ -915,6 +919,7 @@ def resolve_squad(
             native_harness=host,
             agy_mode=agy_mode,
             worker_mode=resolved_worker_mode,
+            disabled_harnesses=effective_models.disabled_harnesses,
         )
         extra_advisories.extend(dyn_advisories)
         if dyn_pool:

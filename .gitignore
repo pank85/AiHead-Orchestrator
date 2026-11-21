@@ -34,6 +34,7 @@ venv.bak/
 *.log
 .orchestration/
 .herdr/
+.herdr-master.toml
 
 # IDE / Editor
 .vscode/

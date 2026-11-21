@@ -147,6 +147,7 @@ def policy_snapshot(worktree: Path) -> dict[str, object]:
     state = load_effective_models_state(worktree)
     return {
         "available": state.available.model_dump(mode="json") if state.available else None,
+        "harnesses": dict(state.harnesses),
         "ratings": {
             h: {m: r.model_dump(mode="json") for m, r in models.items()}
             for h, models in state.ratings.items()
@@ -299,6 +300,12 @@ def validate_worker_assignment(
         if task.kind != task.kind.strip().lower() or task.model != task.model.strip():
             raise WorkerDispatchError(
                 "invalid_binding", "Binding must use exact normalized harness and model IDs."
+            )
+        harnesses_cfg = snapshot.get("harnesses")
+        if isinstance(harnesses_cfg, dict) and harnesses_cfg.get(task.kind, True) is False:
+            raise WorkerDispatchError(
+                "harness_disabled",
+                f"Harness '{task.kind}' is disabled in [models.harnesses].",
             )
         if not any(
             row.enabled and row.kind == task.kind and row.model == task.model
