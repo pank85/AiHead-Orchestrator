@@ -59,6 +59,9 @@ The Hermes native subagent tool `delegate_task` does **not** support per-task mo
   - Explain the technical limitation clearly.
   - **STOP immediately** rather than silently proceeding with the inherited model.
 
+### Worker tier and mode guidance
+Tier 1 = fast/cheap, Tier 2 = decent/all-around, Tier 3 = frontier/clever. balanced: prefers tier 2 and tier 1; tier 3 (frontier) only when truly necessary. frugal: normally tier 1; may rise to tier 2. quality: uses tier 3 (frontier); uses tier 2 (all-around) only when quality will not be lost. fast: prefers fast tier 1/2 models. Thinking effort is guidance, not a one-to-one lock: AiHead or the Architect combines worker tier and effort.
+
 ### Reasoning Effort Overrides
 - Users may configure effort levels via `--efforts scout=<level>,architect=<level>,reviewer=<level>` (values: `low`, `medium`, `high`, `max`).
 - Passed as the host's native effort parameter or as a line-1 prompt directive (`think`, `think hard`, `think harder`, `ultrathink`).
@@ -108,12 +111,18 @@ flowchart TD
 The orchestrator independently verifies `plan.md` before presenting it to the user. If any task omits an Expert Persona, overlaps files, or specifies unapproved models, the plan is rejected back to the Architect.
 
 ### Step 5: User Approval Gate
+
+Automode handles routine reversible work without waiting for the user. Batch materially consequential choices into a plan checkpoint; keep non-automode and explicit gates. A technical `APPROVED` is not permission to bypass security or irreversibly destroy state. Those actions need explicit user approval for the specific target and action, relayed through the direct chain. Trust prompts and silence never grant it.
+
+Every worker's first native prompt names the actual invoking supervisor as its only return route for decisions, questions, blockers, and completion. Workers never ask the user or contact Herdr. Native workers use only the invoking supervisor's return/message channel, even when the coordinator itself has a Herdr parent. A blocking tool's terminal result/error is its supervision; background launches require queryable exact native run IDs and one run-scoped 600-second health watcher. Stop on teardown or all children terminal. Without the adapter, do not dispatch in the background. Health alerts do not replace result callbacks.
 Evaluate exactly one approval condition:
-1. **Delegated Parent Gate**: When dispatched by a parent master (`HERDR_PARENT_PANE_ID`), route the plan and child pane ID to the direct parent and wait for explicit approval.
+1. **Delegated Parent Gate**: Send the exact plan, run/version and child pane ID only to the verified direct parent. Wait for explicit AiHead or human approval, relayed with provenance. No coordinator may self-approve or mint approval for a child. A changed plan needs fresh approval; a routine automode update is not approval.
 2. **Standalone AiHead Gate**: In a standalone run with `--ai-head`, an authorized AiHead decision evaluates alignment and logs rationale to `RUN_DIR/aihead_decision.json`.
 3. **Standalone Human Gate**: In a standalone run without AiHead, print plan details and pause until explicit user confirmation is received.
 
 ### Step 6: Parallel Specialist Coders
+- After AiHead or human approval of the exact plan, the orchestrator closes its finished Scout and Architect immediately once Coders verifiably start, using supported native lifecycle controls.
+- Close each Coder only after explicit per-Coder `APPROVED` and retention of the work and evidence. Keep unreviewed and `NEEDS FIXES` sessions open. Never substitute Herdr for missing native controls.
 - For each approved task, spawn a Coder subagent with `Adopt this expert persona: <Expert Persona>.` injected on line 1.
 - Dispatch all `INDEPENDENT` tasks concurrently in a single turn. Dependent tasks wait for upstream `coder_<upstream>_summary.md` artifacts.
 - Coders modify only assigned files, execute verification commands, and write `RUN_DIR/coder_<N>_summary.md`.
@@ -141,10 +150,11 @@ For standalone runs:
 
 ### Step 9: Report & Parent Notification
 - Deliver concise final report: commit SHA, review verdict, test verification results, and remaining risks.
-- If delegated under a parent orchestrator (`HERDR_PARENT_PANE_ID`), notify the direct parent via `herdr agent prompt`:
+- If delegated, notify only the exact direct-parent pane named in the coordinator's first prompt. For a launcher-tagged run, use `python -m herdr_master.pipeline.parent_contract complete` with the bound run directory and launch token. For an untagged shell run, substitute the concrete first-prompt pane ID here:
   ```bash
-  herdr agent prompt "$HERDR_PARENT_PANE_ID" "Orchestration run <run-id>: assigned branch <branch>, commit <SHA>, review APPROVED, verification passed."
+  herdr agent prompt <direct-parent-pane-id-from-first-prompt> "Orchestration run <run-id>: assigned branch <branch>, commit <SHA>, review APPROVED, verification passed."
   ```
+  If the first-prompt pane is missing, ambiguous, or conflicts with metadata, stop and report a blocker; do not target `HERDR_PARENT_PANE_ID`.
 
 ---
 

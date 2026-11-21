@@ -865,11 +865,10 @@ _SKILL_CLI_CASES = [
 
 
 @pytest.mark.parametrize(("skill", "flags", "target_mock_name"), _SKILL_CLI_CASES)
-def test_aihead_skill_cli_with_herdr_pane_id_env_passes_delegated_true(
+def test_aihead_skill_cli_leaves_implicit_caller_for_preflight(
     tmp_path: Path, monkeypatch, skill: str, flags: list[str], target_mock_name: str
 ):
-    """When HERDR_PANE_ID is set, aihead --ergo/--council/--orchestration/--herdr-master
-    delegates to the caller pane (delegated=True, parent_pane_id=HERDR_PANE_ID)."""
+    """The dispatcher leaves caller classification to exact-pane launcher preflight."""
     caller_pane = "caller-env-pane-101"
     monkeypatch.setenv("HERDR_PANE_ID", caller_pane)
     sock = tmp_path / "herdr.sock"
@@ -904,16 +903,16 @@ def test_aihead_skill_cli_with_herdr_pane_id_env_passes_delegated_true(
     mock = mocks[target_mock_name]
     assert mock.call_count == 1
     kwargs = mock.call_args.kwargs
-    assert kwargs["delegated"] is True
-    assert kwargs["parent_pane_id"] == caller_pane
+    assert "delegated" not in kwargs
+    assert "parent_pane_id" not in kwargs
+    assert os.environ["HERDR_PANE_ID"] == caller_pane
 
 
 @pytest.mark.parametrize(("skill", "flags", "target_mock_name"), _SKILL_CLI_CASES)
-def test_aihead_skill_cli_inside_herdr_with_ctx_pane_id_passes_delegated_true(
+def test_aihead_skill_cli_does_not_promote_context_pane(
     tmp_path: Path, monkeypatch, skill: str, flags: list[str], target_mock_name: str
 ):
-    """When inside Herdr and ctx.pane_id is present (HERDR_PANE_ID env unset),
-    _launch_skill passes delegated=True and parent_pane_id=ctx.pane_id."""
+    """A contextual pane cannot be promoted to a verified direct parent."""
     monkeypatch.delenv("HERDR_PANE_ID", raising=False)
     sock = tmp_path / "herdr.sock"
     ctx_pane = "caller-ctx-pane-202"
@@ -948,16 +947,15 @@ def test_aihead_skill_cli_inside_herdr_with_ctx_pane_id_passes_delegated_true(
     mock = mocks[target_mock_name]
     assert mock.call_count == 1
     kwargs = mock.call_args.kwargs
-    assert kwargs["delegated"] is True
-    assert kwargs["parent_pane_id"] == ctx_pane
+    assert "delegated" not in kwargs
+    assert "parent_pane_id" not in kwargs
 
 
 @pytest.mark.parametrize(("skill", "flags", "target_mock_name"), _SKILL_CLI_CASES)
-def test_aihead_skill_cli_without_caller_pane_passes_delegated_false(
+def test_aihead_skill_cli_without_caller_pane_leaves_parent_unset(
     tmp_path: Path, monkeypatch, skill: str, flags: list[str], target_mock_name: str
 ):
-    """When HERDR_PANE_ID is unset and outside Herdr without pane,
-    _launch_skill passes delegated=False and parent_pane_id=None."""
+    """An outside invocation does not invent an explicit parent."""
     monkeypatch.delenv("HERDR_PANE_ID", raising=False)
     sock = tmp_path / "herdr.sock"
     ctx = _ctx(inside=False, socket=sock, pane_id=None)
@@ -991,8 +989,8 @@ def test_aihead_skill_cli_without_caller_pane_passes_delegated_false(
     mock = mocks[target_mock_name]
     assert mock.call_count == 1
     kwargs = mock.call_args.kwargs
-    assert kwargs["delegated"] is False
-    assert kwargs["parent_pane_id"] is None
+    assert "delegated" not in kwargs
+    assert "parent_pane_id" not in kwargs
 
 
 @pytest.mark.parametrize(
@@ -1007,8 +1005,7 @@ def test_aihead_skill_cli_without_caller_pane_passes_delegated_false(
 def test_launch_skill_direct_delegation_behavior(
     tmp_path: Path, monkeypatch, skill: str, intent: str | None, target_mock_name: str
 ):
-    """Direct invocation of _launch_skill verifies delegated=True when HERDR_PANE_ID is set,
-    and delegated=False when HERDR_PANE_ID is unset."""
+    """Direct dispatcher invocation never turns unclassified context into an explicit parent."""
     dummy_result = {"session": "alpha", "workspace_id": "ws-direct", "pane_id": "ws-direct:p1"}
     sock = tmp_path / "herdr.sock"
 
@@ -1040,8 +1037,9 @@ def test_launch_skill_direct_delegation_behavior(
         )
 
     assert mock_func_a.call_count == 1
-    assert mock_func_a.call_args.kwargs["delegated"] is True
-    assert mock_func_a.call_args.kwargs["parent_pane_id"] == "caller-direct-pane-1"
+    assert "delegated" not in mock_func_a.call_args.kwargs
+    assert "parent_pane_id" not in mock_func_a.call_args.kwargs
+    assert os.environ["HERDR_PANE_ID"] == "caller-direct-pane-1"
 
     # Case B: HERDR_PANE_ID is unset and ctx.pane_id is None
     monkeypatch.delenv("HERDR_PANE_ID", raising=False)
@@ -1071,5 +1069,5 @@ def test_launch_skill_direct_delegation_behavior(
         )
 
     assert mock_func_b.call_count == 1
-    assert mock_func_b.call_args.kwargs["delegated"] is False
-    assert mock_func_b.call_args.kwargs["parent_pane_id"] is None
+    assert "delegated" not in mock_func_b.call_args.kwargs
+    assert "parent_pane_id" not in mock_func_b.call_args.kwargs

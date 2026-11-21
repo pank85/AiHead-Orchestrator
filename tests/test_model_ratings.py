@@ -26,6 +26,8 @@ from herdr_master.core.model_ratings import (
     ModelRating,
     apply_effort_calibration,
     derive_recommended_roles,
+    derive_worker_tier,
+    effective_worker_tier,
     detect_model_family,
     find_unrated_models,
     format_rated_models_table,
@@ -59,6 +61,34 @@ def _sample_rating(**overrides) -> ModelRating:
     if not rating.recommended_roles:
         rating.recommended_roles = derive_recommended_roles(rating)
     return rating
+
+
+@pytest.mark.parametrize("value", [True, False, 1.0, "1", 0, 4, -1])
+def test_worker_tier_rejects_invalid_values(value):
+    with pytest.raises(ValidationError):
+        _sample_rating(worker_tier=value)
+
+
+def test_worker_tier_lock_and_legacy_round_trip():
+    with pytest.raises(ValidationError):
+        _sample_rating(worker_tier_override=True)
+    legacy = _sample_rating(extra_provenance="kept")
+    assert legacy.worker_tier is None
+    assert effective_worker_tier(legacy) == 3
+    restored = ModelRating.model_validate(legacy.model_dump())
+    assert restored.model_extra["extra_provenance"] == "kept"
+    assert restored.billing_tier == "api" and restored.worker_tier is None
+    assert effective_worker_tier(_sample_rating(worker_tier=1)) == 1
+
+
+@pytest.mark.parametrize("capability,speed,cost,expected", [
+    (74, 10, 10, 1), (75, 79, 80, 2), (87, 80, 80, 1),
+    (87, 80, 79, 2), (88, 100, 100, 3),
+])
+def test_worker_tier_calibration_boundaries(capability, speed, cost, expected):
+    rating = _sample_rating(intelligence=capability, coding=capability,
+                            agentic=capability, speed=speed, cost_efficiency=cost)
+    assert derive_worker_tier(rating) == expected
 
 
 def test_model_rating_clamping_badge_and_staleness():

@@ -46,6 +46,15 @@ def _json(result):
     return json.loads(stdout)
 
 
+def test_catalog_squad_without_project_uses_effective_mode(tmp_path, monkeypatch):
+    config = tmp_path / ".herdr-master.toml"
+    config.write_text('[ai_head]\nrouting_profile = "quality"\n', encoding="utf-8")
+    monkeypatch.chdir(tmp_path)
+    result = CliRunner().invoke(catalog_app, ["squad", "--json"])
+    assert result.exit_code == 0, result.output
+    assert _json(result)["worker_mode"] == "quality"
+
+
 def test_harness_kind_is_reexported_same_object():
     assert ModelsHarnessKind is CatalogHarnessKind
     assert [kind.value for kind in ModelsHarnessKind] == [

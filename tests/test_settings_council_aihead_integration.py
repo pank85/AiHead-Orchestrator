@@ -260,9 +260,22 @@ async def test_integration_named_folder_precedence_and_field_selection(tmp_path)
 
 
 @pytest.mark.asyncio
-async def test_integration_council_launch_bootstrap_and_guard_linkage(tmp_path):
-    """Verify launch_council's bootstrap payload and roster pre-allocation guard."""
+async def test_integration_council_launch_bootstrap_and_guard_linkage(tmp_path, monkeypatch):
+    """Verify Council's parent-bound bootstrap payload and roster pre-allocation guard."""
+    monkeypatch.setenv("HERDR_PANE_ID", "w9:p1")
+    monkeypatch.setenv("HERDR_PARENT_PANE_ID", "ancestor:p1")
+    monkeypatch.setattr("herdr_master.pipeline.parent_contract._watch_run_dir", lambda *_: tmp_path)
+    monkeypatch.setattr("herdr_master.pipeline.parent_contract._ensure_watcher", lambda *_: None)
     client = _fake_client()
+
+    async def get_agent(pane_id):
+        workspace, ordinal = pane_id.split(":p")
+        return {"agent": {
+            "pane_id": pane_id, "workspace_id": workspace, "tab_id": f"{workspace}:t{ordinal}",
+            "terminal_id": f"term-{pane_id}", "agent": "pi", "agent_status": "idle",
+        }}
+
+    client.get_agent.side_effect = get_agent
     ctx = _fake_context(tmp_path)
     repo_dir = tmp_path / "repo"
     repo_dir.mkdir()
@@ -350,9 +363,11 @@ async def test_integration_council_launch_bootstrap_and_guard_linkage(tmp_path):
     assert len(council_payload["members"]) == 2
     assert [m["label"] for m in council_payload["members"]] == ["m1", "m2"]
 
-    # AiHead block was wired into bootstrap
-    assert "ai_head" in payload
-    assert payload["ai_head"]["enabled"] is True
+    # AiHead discovery is not used to promote or replace the exact caller.
+    assert payload["parent_pane_id"] == "w9:p1"
+    assert 'herdr agent prompt w9:p1 "<message>"' in init_prompt
+    assert "ancestor:p1" not in init_prompt
+    assert "ai_head" not in payload
 
 
 # ==============================================================================

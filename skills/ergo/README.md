@@ -76,7 +76,7 @@ Ergo resolves squad roles and allowed worker models strictly through `aihead cat
 
 ### Authoritative Product Default Squad
 Resolved via `aihead catalog squad --mode herdr --json`:
-- **Scout**: `agy:gemini-3.8-flash-medium` (`--effort medium --dangerously-skip-permissions`)
+- **Scout**: `agy:gemini-3.8-flash-medium` (`--effort medium`; keep normal tool confirmations enabled)
 - **Architect**: `pi:openai-codex/gpt-6.1-sol:max` (`--provider openai-codex --model gpt-6.1-sol --thinking max`)
 - **Reviewer**: `pi:xai/grok-4.7:high` (`--provider xai --model grok-4.7 --thinking high`)
 - **Worker Pool** (dynamically allocated per task by the Architect):
@@ -116,16 +116,18 @@ The Architect receives the verbatim `ALLOWED CODER MODELS` block and must assign
 - **Orchestrator Validation**: The orchestrator inspects `plan.md`. If any task omits an Expert Persona, overlaps files with another task, or selects an invalid model, the plan is rejected back to the Architect.
 
 ### Step 4: Plan Approval Gate
+
+Automode handles routine reversible work without waiting for the user. Batch materially consequential choices into a plan checkpoint; keep non-automode and explicit gates. A technical `APPROVED` is not permission to bypass security or irreversibly destroy state. Those actions need explicit user approval for the specific target and action, relayed through the direct chain. Trust prompts and silence never grant it.
 Before any Coder begins, the plan must pass an approval gate:
 - Present a plain-language summary of the plan (what is built, why, key deliverables).
 - Verify architectural alignment with repository conventions and design patterns.
 - **Routing**:
-  - **Branch A (Delegated Parent Gate)**: When running under a parent coordinator or AiHead (`$HERDR_PARENT_PANE_ID`), submit plan via `herdr agent prompt "$HERDR_PARENT_PANE_ID" "<plan>"` and wait for explicit approval.
+  - **Branch A (Delegated Parent Gate)**: When delegated, submit the plan to the exact direct-parent pane named in Ergo's first prompt: `herdr agent prompt <direct-parent-pane-id-from-first-prompt> "<plan>"`. Substitute the concrete first-prompt pane ID; environment/bootstrap values are corroboration only. If the pane is missing or ambiguous, stop without prompting.
   - **Branch B (Autonomous AiHead Gate)**: In standalone mode with `--ai-head`, an authorized AiHead decision evaluates alignment and logs rationale to `RUN_DIR/aihead_decision.json`.
   - **Branch C (Human Gate)**: In standalone mode without AiHead, print `HERDR_NEEDS_USER: Please review and approve the implementation plan` and wait for explicit human confirmation.
 
 ### Step 5: Parallel Specialist Coders & Planning Pruning
-- **Planning Tab Pruning**: As soon as the plan is approved, immediately close the Scout and Architect tabs (`herdr tab close <scout-tab-id>`, `herdr tab close <architect-tab-id>`).
+- **Planning Tab Pruning**: After AiHead or the human explicitly approves the exact plan and Coders verifiably start, immediately close the finished Scout and Architect tabs (`herdr tab close <scout-tab-id>`, `herdr tab close <architect-tab-id>`).
 - **Parallel Launch**: Launch all `INDEPENDENT` tasks concurrently in a single turn. Tasks with dependencies wait until upstream tasks complete and generate `coder_<upstream>_summary.md`.
 - **Specialist Personas**: Inject `Adopt this expert persona: <Persona>` at the top of each Coder's prompt.
 - **Git Lock Collision Prevention**: Coders are strictly forbidden from executing git commands (`git add`, `git commit`, `git checkout`). Only the orchestrator lands code.
@@ -136,8 +138,8 @@ Before any Coder begins, the plan must pass an approval gate:
 - **Inputs**: Combined git diff against base commit, `RUN_DIR/plan.md`, all `coder_<N>_summary.md` files, and `unitTestsMode`.
 - **Reviewer Verdict**: Emits `RUN_DIR/review.md` (`APPROVED` or `NEEDS FIXES`) and actionable `RUN_DIR/fixes_<N>.md` per Coder.
 - **Worker Pruning**:
-  - As each Coder's task passes review, close its tab immediately.
-  - Keep active only Coders requiring fixes (`NEEDS FIXES`).
+  - Close each Coder only once the review records explicit per-Coder `APPROVED` and the work and evidence are retained.
+  - Keep sessions awaiting review and Coders requiring fixes (`NEEDS FIXES`) open.
 - **Fix Loop**: Re-run affected Coders with their `fixes_<N>.md`. Relaunch the Reviewer in `MODE: fix-verification` (checking only whether findings are resolved). Max 3–5 cycles.
 - When verdict is `APPROVED`, close the Reviewer tab immediately.
 
@@ -162,7 +164,7 @@ Before any Coder begins, the plan must pass an approval gate:
 
 ### Step 8: Done, Carryover & Parent Notification
 - In standalone mode: write `<canonical_root>/.orchestration/carryover.md` and report the squash commit SHA and verification proofs.
-- In delegated mode: notify direct parent orchestrator via `herdr agent prompt "$HERDR_PARENT_PANE_ID"` with the commit SHA and verification status.
+- In delegated mode: send the completion report to the exact direct-parent pane named in Ergo's first prompt. For a launcher-tagged run, use `python -m herdr_master.pipeline.parent_contract complete` with the bound run directory and launch token; for an untagged shell run, use `herdr agent prompt <direct-parent-pane-id-from-first-prompt> "<commit SHA and verification status>"`. Missing or ambiguous first-prompt pane means stop and report a blocker; never target the environment variable.
 
 ---
 
@@ -171,9 +173,9 @@ Before any Coder begins, the plan must pass an approval gate:
 Ergo enforces a strict two-way parent-child communication protocol:
 
 ```
-Level 1: AiHead / Master Coordinator ($HERDR_PARENT_PANE_ID)
+Level 1: Verified direct parent from Ergo's first prompt
              ▲
-             │ herdr agent prompt $HERDR_PARENT_PANE_ID "..."
+             │ herdr agent prompt <direct-parent-pane-id-from-first-prompt> "..."
              ▼
 Level 2: Ergo Orchestrator ($HERDR_PANE_ID / ORCHESTRATOR_PANE_ID)
              ▲
@@ -183,7 +185,9 @@ Level 3: Scout, Architect, Coders, Reviewer
 ```
 
 - **Level 3 workers notify ONLY the Level 2 Ergo Orchestrator** at `ORCHESTRATOR_PANE_ID`. Level 3 workers **NEVER** message AiHead or a grandparent coordinator directly.
-- **Level 2 Ergo Orchestrator notifies ONLY Level 1** (`$HERDR_PARENT_PANE_ID`) for plan approvals, blockers, and pipeline completion.
+- **Level 2 Ergo Orchestrator notifies ONLY its direct parent** for plan approvals, blockers, and pipeline completion.
+
+Only AiHead acting within its authorized scope or the human can approve a gated exact plan version. A delegated coordinator sends that plan and its run/version to its direct parent and waits for explicit approval. Intermediaries can relay the original decision with provenance, but neither they nor the coordinator can self-approve. Standalone coordinators use enabled AiHead where supported, or ask the human and wait. A routine automode update outside a gate is not approval.
 - **Non-blocking parents**: Parents never poll or sleep; they return control immediately after dispatching tasks and wake up reactively upon child notifications.
 
 ---
@@ -196,4 +200,32 @@ pane_id	role	tab_id	branch	worktree	run_dir	status	last_heartbeat
 ```
 - Row added immediately upon child spawn (`status=working`).
 - Row updated immediately upon child close (`status=closed`).
-- A 10-minute read-only background monitor checks child health using `herdr agent get` and `herdr agent read` without modifying code or closing tabs.
+- The first task prompt binds the actual immediate supervisor. A Herdr child receives that coordinator's concrete pane ID and sends every question, decision request, blocker, and completion only there; environment/bootstrap values corroborate the route. A missing delegated route stops before spawn. Only an intentional root handles user decisions directly.
+- After the first confirmed child is registered, the spawning coordinator starts one detached `python -m herdr_master.pipeline.child_watch --run-dir "$RUN_DIR" --parent-pane "$PARENT"` process for its private mode-700 run directory, in the verified session (pin `--parent-generation` for detached handoff). It checks confirmed child identities every 600 seconds and reports verified loss only to that coordinator, not to the user. Idle or blocked is not dead; RPC uncertainty is unknown. This is separate from startup checks and completion callbacks; files alone do not establish success and no child is automatically retried. Stop with `touch "$RUN_DIR/child-watch.stop"`; never reuse the run directory or kill by watcher PID. No monitor agent or pane is created.
+- Native workers use only the invoking supervisor's return/message channel, even when the coordinator itself has a Herdr parent. A blocking tool's terminal result/error is its supervision; background launches require queryable exact native run IDs and one run-scoped 600-second health watcher. Stop on teardown or all children terminal. Without the adapter, do not dispatch in the background. Health alerts do not replace result callbacks.
+
+## Worker tiers & controlled dispatch
+
+Tier 1 = fast/cheap, Tier 2 = decent/all-around, Tier 3 = frontier/clever
+
+balanced: prefers tier 2 and tier 1; tier 3 (frontier) only when truly necessary
+
+frugal: normally tier 1; may rise to tier 2
+
+quality: uses tier 3 (frontier); uses tier 2 (all-around) only when quality will not be lost
+
+fast: prefers fast tier 1/2 models
+
+Thinking effort is guidance, not a one-to-one lock: AiHead or the Architect combines worker tier and effort.
+
+Role tiers (guidance): balanced = scout tier 1, architect tier 3, reviewer tier 2; frugal shifts roles down (tier 1, at most tier 2); quality shifts roles up (tier 3, tier 2 only when quality will not be lost).
+
+Option 1: tiers are enforced only on the controlled dispatch path (aihead worker dispatch); a direct agent launch is not intercepted or blocked.
+
+Controlled dispatch commands, in order:
+1. `aihead worker snapshot --worktree "$WORKTREE" --output "$RUN_DIR/policy_snapshot.json"`
+2. `aihead worker run-policy create --run-id "$RUN_ID" --worktree "$WORKTREE" --mode herdr --run-squad "$RUN_DIR/squad.toml" [--workers "<exact explicit override, only if the run used one>"] --output "$RUN_DIR/run_policy.json"`
+3. `aihead worker manifest schema`
+4. `aihead worker manifest validate --manifest "$RUN_DIR/worker_manifest.json"`
+5. `aihead worker approval create --manifest "$RUN_DIR/worker_manifest.json" --manifest-digest <exact-approved-manifest-digest> --snapshot-digest <exact-approved-policy-snapshot-digest> --approver-type <human|aihead> --approver <approver-name> --confirm-approved --output "$RUN_DIR/worker_approval.json"`
+6. `aihead worker dispatch --manifest "$RUN_DIR/worker_manifest.json" --task-id "$TASK_ID" --approval "$RUN_DIR/worker_approval.json"`

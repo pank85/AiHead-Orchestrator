@@ -15,7 +15,6 @@ from herdr_master.pipeline.launcher import (
     ORCHESTRATOR_NAME,
     LaunchContextError,
     _build_agent_args,
-    ensure_agy_trusted,
     launch_ergo,
     launch_master,
     resolve_ergo_coordinator,
@@ -30,7 +29,6 @@ SCOUT_ARGS = [
     "gemini-3.8-flash-medium",
     "--effort",
     "medium",
-    "--dangerously-skip-permissions",
 ]
 ARCHITECT_ARGS = [
     "--kind",
@@ -84,9 +82,28 @@ def _inside(session="alpha"):
     )
 
 
+@pytest.fixture(autouse=True)
+def _offline_launch(monkeypatch, tmp_path):
+    monkeypatch.setattr("herdr_master.pipeline.parent_contract._ensure_watcher", lambda *args: None)
+    monkeypatch.setattr(
+        "herdr_master.pipeline.parent_contract._watch_run_dir", lambda *args: tmp_path
+    )
+    monkeypatch.setattr(
+        "herdr_master.pipeline.parent_contract.require_existing_agy_trust",
+        lambda *args, **kwargs: None,
+    )
+
+
 def _client():
     client = AsyncMock()
-    client.get_agent.return_value = {"agent": {"agent_status": "idle"}}
+
+    async def get_agent(pane_id):
+        workspace, ordinal = pane_id.split(":p")
+        return {"agent": {"agent": "pi", "agent_status": "idle", "pane_id": pane_id,
+                          "workspace_id": workspace, "tab_id": f"{workspace}:t{ordinal}",
+                          "terminal_id": f"term-{pane_id}"}}
+
+    client.get_agent.side_effect = get_agent
     client.create_tab.return_value = {
         "root_pane": {"pane_id": "w9:p2"},
         "tab": {"tab_id": "w9:t2"},
@@ -121,16 +138,38 @@ def test_build_agent_args_product_routes():
         _build_agent_args("agy", "gemini-3.8-flash-medium", EffortLevel.HIGH)
 
 
-def test_ensure_agy_trusted_appends_cwd(tmp_path, monkeypatch):
-    settings = tmp_path / ".gemini" / "antigravity-cli" / "settings.json"
-    settings.parent.mkdir(parents=True)
-    settings.write_text(json.dumps({"trustedWorkspaces": ["/tmp/test"]}))
-    monkeypatch.setattr("herdr_master.pipeline.launcher.Path.home", lambda: tmp_path)
-    target = tmp_path / "repo"
-    target.mkdir()
-    ensure_agy_trusted(str(target))
-    data = json.loads(settings.read_text())
-    assert str(target.resolve()) in data["trustedWorkspaces"]
+def test_handoff_context_carries_effective_orchestration_settings(tmp_path):
+    from herdr_master.pipeline.launcher import _Allocated, _handoff_context
+
+    (tmp_path / ".herdr-master.toml").write_text(
+        '[ai_head]\nrouting_profile = "quality"\n'
+        '[orchestration]\nagy_mode = "swarm"\ndefault_harness = "agy"\n'
+        '[models.ratings.pi."openai/gpt-6.1-sol"]\n'
+        'intelligence = 91\ncoding = 92\nagentic = 93\nspeed = 80\n'
+        'cost_efficiency = 70\ncontext_handling = 85\n',
+        encoding="utf-8",
+    )
+    allocated = _Allocated(
+        client=None,
+        session_name="s",
+        socket_path=tmp_path / "sock",
+        workspace_id="w",
+        pane_id="w:p1",
+        tab_id="w:t1",
+        owns_workspace=True,
+    )
+    context = _handoff_context(
+        entrypoint="orchestration",
+        intent="test",
+        allocated=allocated,
+        cwd=str(tmp_path),
+        native_harness="agy",
+    )
+    assert context["worker_mode"] == "quality"
+    assert context["agy_mode"] == "swarm"
+    assert context["selected_harness"] == "agy"
+    assert context["default_harness"] == "agy"
+    assert context["ratings"]["pi"]["openai/gpt-6.1-sol"]["intelligence"] == 91
 
 
 def test_resolve_launch_context_preserves_and_rejects(monkeypatch):
@@ -169,7 +208,7 @@ async def test_launch_master_no_override_uses_catalog_scout():
     assert client.start_agent.await_args.kwargs["kind"] == "agy"
     assert client.start_agent.await_args.kwargs["args"] == _rpc_args(SCOUT_ARGS)
     prompt = client.prompt_agent.await_args.args[1]
-    assert prompt.startswith(load_skill_body("herdr-master").rstrip("\n"))
+    assert load_skill_body("herdr-master").rstrip("\n") in prompt
     assert prompt != "/herdr-master Audit codebase"
     assert _payload(prompt)["intent"] == "Audit codebase"
     assert _payload(prompt)["entrypoint"] == "herdr-master"
@@ -196,8 +235,8 @@ async def test_launch_master_claude_uses_prompt_prefix_not_effort_flag():
     assert args[0] != "--kind"
     assert "--effort" not in args
     assert "--thinking" not in args
-    assert "--dangerously-skip-permissions" in args
-    assert prompt.startswith("think harder\n\n")
+    assert "--dangerously-skip-permissions" not in args
+    assert "think harder\n\n" in prompt
 
 
 @pytest.mark.asyncio
@@ -229,7 +268,7 @@ async def test_launch_ergo_adopts_workspace_and_names_orchestrator():
     prompt = client.prompt_agent.await_args.args[1]
     body = load_skill_body("ergo").rstrip("\n")
     payload = _payload(prompt)
-    assert prompt.startswith(body)
+    assert body in prompt
     assert OLD_RECON not in prompt[len(body) :]
     assert payload["intent"] == intent
     assert payload["owns_workspace"] is False
@@ -334,7 +373,9 @@ async def test_launch_ergo_outside_uses_wrapper_and_does_not_close():
 
 
 @pytest.mark.asyncio
-async def test_inside_fresh_workspace_does_not_touch_inherited_workspace():
+async def test_inside_fresh_workspace_does_not_touch_inherited_workspace(monkeypatch):
+    # Run the non-delegated case regardless of the pane identity of this test process.
+    monkeypatch.delenv("HERDR_PANE_ID", raising=False)
     client = _client()
     client.create_workspace.return_value = {
         "workspace": {"workspace_id": "w_new"},
@@ -479,7 +520,7 @@ async def test_launch_council_delivers_canonical_skill_and_bootstrap():
 
     # Check prompt
     prompt = client.prompt_agent.await_args.args[1]
-    assert prompt.startswith(load_skill_body("council").rstrip("\n"))
+    assert load_skill_body("council").rstrip("\n") in prompt
     payload = _payload(prompt)
     assert payload["entrypoint"] == "council"
     assert payload["intent"] == "architect the cache layer"
@@ -520,9 +561,11 @@ async def test_launch_council_rejects_malformed_roster_before_allocation():
 
 
 @pytest.mark.asyncio
-async def test_launch_ergo_ai_head_tri_state():
+async def test_launch_ergo_ai_head_tri_state(monkeypatch):
+    monkeypatch.delenv("HERDR_PANE_ID", raising=False)
     client = _client()
     ctx = _inside()
+    ctx.pane_id = None  # intentional root; discovery is not a supervisor
 
     with (
         patch("herdr_master.pipeline.launcher.resolve_herdr_context", return_value=ctx),
@@ -563,9 +606,11 @@ async def test_launch_ergo_ai_head_tri_state():
 
 
 @pytest.mark.asyncio
-async def test_launch_ergo_ai_head_busy_propagates_status_and_actual_model():
+async def test_launch_ergo_ai_head_busy_propagates_status_and_actual_model(monkeypatch):
+    monkeypatch.delenv("HERDR_PANE_ID", raising=False)
     client = _client()
     ctx = _inside()
+    ctx.pane_id = None  # intentional root; discovery is not a supervisor
 
     head_info = {
         "tab_id": "w:t",
@@ -608,10 +653,12 @@ async def test_launch_ergo_ai_head_busy_propagates_status_and_actual_model():
     ],
 )
 async def test_launch_ergo_ai_head_state_reaches_bootstrap_instructions(
-    head_info, status, reconciled, model_is_bound, busy_text
+    head_info, status, reconciled, model_is_bound, busy_text, monkeypatch
 ):
+    monkeypatch.delenv("HERDR_PANE_ID", raising=False)
     client = _client()
     ctx = _inside()
+    ctx.pane_id = None  # intentional root; discovery is not a supervisor
     info = {"tab_id": "w:t", "pane_id": "w:p", "enabled": True, **head_info}
 
     with (
@@ -679,7 +726,7 @@ async def test_launch_orchestration_passes_role_efforts_not_worker_effort():
 
 
 @pytest.mark.asyncio
-async def test_launch_passes_herdr_parent_pane_id_and_caller_is_ai_head_not_busy(monkeypatch):
+async def test_launch_uses_exact_invoker_without_ai_head_discovery(monkeypatch):
     client = _client()
     ctx = _inside()  # ctx.pane_id == "w9:p1"
     monkeypatch.setenv("HERDR_PANE_ID", "w9:p1")
@@ -713,20 +760,11 @@ async def test_launch_passes_herdr_parent_pane_id_and_caller_is_ai_head_not_busy
     # 1. create_tab passed HERDR_PARENT_PANE_ID in env
     assert client.create_tab.await_args.kwargs["env"] == {"HERDR_PARENT_PANE_ID": "w9:p1"}
 
-    # 2. ensure_herdr_ai_head received caller_pane_id == "w9:p1"
-    assert mock_ensure.await_args.kwargs.get("caller_pane_id") == "w9:p1"
-
-    # 3. Because caller IS AiHead (w9:p1 == head_info["pane_id"]), discovery is ready (NOT busy!)
-    discovery = res["ai_head"]
-    assert discovery is not None
-    assert discovery.status == "ready"
-    assert discovery.reconciled is True
-
-    # 4. Bootstrap payload includes parent_pane_id and ready instructions
-    payload = _payload(client.prompt_agent.await_args.args[1])
-    assert payload["parent_pane_id"] == "w9:p1"
-    assert payload["ai_head"]["status"] == "ready"
-    assert "Do not consult AiHead" not in payload["ai_head"]["instructions"]
+    mock_ensure.assert_not_awaited()
+    assert res["ai_head"] is None
+    prompt = client.prompt_agent.await_args.args[1]
+    assert 'herdr agent prompt w9:p1 "<message>"' in prompt
+    assert _payload(prompt)["parent_pane_id"] == "w9:p1"
 
 
 PI_COORDINATOR_ARGS = [

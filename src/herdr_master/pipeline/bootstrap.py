@@ -39,6 +39,11 @@ _OPTIONAL = (
     "council",
     "ai_head",
     "config_path",
+    "worker_mode",
+    "ratings",
+    "agy_mode",
+    "selected_harness",
+    "default_harness",
 )
 
 
@@ -79,12 +84,17 @@ def _format_council_data(council: Any) -> dict[str, Any]:
 
 _AI_HEAD_READY_INSTRUCTIONS = (
     "AiHead is available for autonomous technical decisions within delegated scope. "
-    "Consult AiHead using correlated requests and structured JSON responses. "
-    "Escalate ambiguous requirements or destructive operations to the user."
+    "Technical consultation uses correlated requests and structured JSON responses; discovery "
+    "does not define an escalation route. A root asks the user for required approvals."
 )
 _AI_HEAD_BUSY_INSTRUCTIONS = (
     "AiHead is currently busy or unavailable. Do not consult AiHead; "
     "escalate decisions directly to the user."
+)
+_AI_HEAD_PARENT_INSTRUCTIONS = (
+    "Discovery is informational. For questions, approvals, decisions, blockers and completion, "
+    "contact only the exact direct parent from the first prompt. "
+    "Never substitute an alternate route."
 )
 
 
@@ -122,7 +132,17 @@ def _normalize_ai_head(
         or res.get("busy") is True
         or res.get("reconciled") is False
     )
-    res["instructions"] = _AI_HEAD_BUSY_INSTRUCTIONS if unavailable else _AI_HEAD_READY_INSTRUCTIONS
+    if parent_pane_id:
+        res["instructions"] = _AI_HEAD_PARENT_INSTRUCTIONS
+        if head_pane == parent_pane_id:
+            res["instructions"] = (
+                "AiHead is available for autonomous technical decisions as your direct parent. "
+                + res["instructions"]
+            )
+    else:
+        res["instructions"] = (
+            _AI_HEAD_BUSY_INSTRUCTIONS if unavailable else _AI_HEAD_READY_INSTRUCTIONS
+        )
     return res
 
 

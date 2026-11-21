@@ -20,7 +20,7 @@ from herdr_master.core.eval_sources import (
     parse_openrouter_models,
     parse_swebench_leaderboards,
 )
-from herdr_master.core.model_ratings import ModelEvaluationConfig, ModelRating, lookup_rating
+from herdr_master.core.model_ratings import ModelEvaluationConfig, ModelRating, derive_worker_tier, lookup_rating
 from herdr_master.pipeline.model_evaluator import (
     EvaluationResult,
     ProbeOutcome,
@@ -159,6 +159,10 @@ def test_incremental_evaluation_base_grouping_layer3_and_manual_override(tmp_pat
     assert res1.skipped_count == 0
     assert res1.unresolved_count == 0
     assert res1.saved_path == path.resolve()
+    for models in res1.evaluated.values():
+        for rating in models.values():
+            assert rating.worker_tier == derive_worker_tier(rating)
+            assert not rating.worker_tier_override
     # Layer-3 LLM evaluator called ONCE in a single batch (base-model grouped!)
     assert len(llm_calls) == 1
     assert "openai/gpt-5.4" not in llm_calls[0]  # matched deterministically in Layers 1-2!
@@ -200,6 +204,8 @@ def test_incremental_evaluation_base_grouping_layer3_and_manual_override(tmp_pat
     # Mark one model manual_override=True and verify refresh skips it while force updates it
     reloaded.models.ratings["pi"]["openai/gpt-5.4"].manual_override = True
     reloaded.models.ratings["pi"]["openai/gpt-5.4"].coding = 99
+    reloaded.models.ratings["pi"]["openai/gpt-5.4"].worker_tier = 1
+    reloaded.models.ratings["pi"]["openai/gpt-5.4"].worker_tier_override = True
     save_project_config(reloaded, path)
 
     res3 = evaluate_available_models(
@@ -224,6 +230,67 @@ def test_incremental_evaluation_base_grouping_layer3_and_manual_override(tmp_pat
     )
     assert res4.evaluated_count == 5
     assert res4.skipped_manual == {}
+    forced = res4.evaluated["pi"]["openai/gpt-5.4"]
+    assert forced.coding != 99
+    assert forced.worker_tier == 1 and forced.worker_tier_override
+    persisted = load_project_config(path).models.ratings["pi"]["openai/gpt-5.4"]
+    assert persisted.worker_tier == 1 and persisted.worker_tier_override
+
+
+def test_llm_effort_refresh_preserves_tier_until_explicit_clear():
+    cfg = HerdrMasterConfig()
+    cfg.models.available = AvailableModels(herdr={"agy": ["gemini-4-neon-high"]})
+    cfg.models.ratings = {"agy": {"gemini-4-neon-high": ModelRating(
+        intelligence=10, coding=10, agentic=10, speed=10, cost_efficiency=10,
+        context_handling=10, worker_tier=1, worker_tier_override=True,
+    )}}
+    def runner(binding, prompt):
+        return json.dumps({"agy:gemini-4-neon": {
+            "intelligence": 90, "coding": 91, "agentic": 90,
+            "speed": 70, "cost_efficiency": 70, "context_handling": 90,
+        }})
+
+    kwargs = dict(cfg=cfg, catalog=_make_catalog(cfg), source_catalog=SourceCatalog(),
+                  llm_eval_fn=runner, evaluator_binding="pi:openai/gpt-5.4",
+                  inherit_ancestors=False)
+    for flags in ({"refresh": True, "dry_run": True}, {"refresh": True}, {"force": True}):
+        result = evaluate_available_models(**kwargs, **flags)
+        rating = result.evaluated["agy"]["gemini-4-neon-high"]
+        assert rating.coding != 10
+        assert rating.worker_tier == 1 and rating.worker_tier_override
+    assert cfg.models.ratings["agy"]["gemini-4-neon-high"].worker_tier == 1
+    # Simulate explicit clear; subsequent refresh returns to automatic derivation.
+    cfg.models.ratings["agy"]["gemini-4-neon-high"].worker_tier_override = False
+    result = evaluate_available_models(**kwargs, refresh=True)
+    rating = result.evaluated["agy"]["gemini-4-neon-high"]
+    assert rating.worker_tier == derive_worker_tier(rating) == 3
+    assert not rating.worker_tier_override
+
+
+def test_inherited_locked_tier_survives_force_and_dry_run(tmp_path: Path):
+    parent = HerdrMasterConfig()
+    parent.models.available = AvailableModels(herdr={"pi": ["openai/gpt-5.4"]})
+    parent.models.ratings = {"pi": {"openai/gpt-5.4": ModelRating(
+        intelligence=10, coding=10, agentic=10, speed=10, cost_efficiency=10,
+        context_handling=10, worker_tier=3, worker_tier_override=True,
+        manual_override=True,
+    )}}
+    save_project_config(parent, tmp_path / ".herdr-master.toml")
+    project = tmp_path / "project"
+    project.mkdir()
+    path = save_project_config(HerdrMasterConfig(), project / ".herdr-master.toml")
+    kwargs = dict(project_path=path, catalog=_make_catalog(parent),
+                  source_catalog=_fixture_source_catalog(), force=True, use_llm=False)
+    before = path.read_bytes()
+    dry = evaluate_available_models(**kwargs, dry_run=True)
+    assert path.read_bytes() == before
+    actual = evaluate_available_models(**kwargs)
+    for result in (dry, actual):
+        rating = result.evaluated["pi"]["openai/gpt-5.4"]
+        assert rating.coding != 10
+        assert rating.worker_tier == 3 and rating.worker_tier_override
+    saved = load_project_config(path).models.ratings["pi"]["openai/gpt-5.4"]
+    assert saved.worker_tier == 3 and saved.worker_tier_override
 
 
 def test_no_llm_and_opt_in_probe_behavior(tmp_path: Path):

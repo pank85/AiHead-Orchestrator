@@ -20,7 +20,6 @@ from herdr_master.herdr.snapshot import (
     TabSnapshot,
     WorkspaceSnapshot,
 )
-from herdr_master.herdr.socket import HerdrRPCError
 from herdr_master.pipeline.ai_head import (
     CORE_WORKFLOWS,
     AiHeadDecisionReply,
@@ -120,12 +119,14 @@ async def test_reply_is_awaitable():
 
 
 def test_persona_prompt_uses_soul_and_guardrails():
+    from herdr_master.core.config import AiHeadConfig
+    assert "automode = true" in build_ai_head_system_prompt(AiHeadConfig(automode=True))
     # Default soul
     prompt_default = build_ai_head_system_prompt()
     assert DEFAULT_AI_HEAD_SOUL in prompt_default
     assert "Autonomous Decisions (status: 'decided')" in prompt_default
     assert "Plan Approval & Architectural Alignment Gate:" in prompt_default
-    assert "Plain-Language Plan Presentation:" in prompt_default
+    assert "consequential" in prompt_default
     assert "Mandatory Architectural Alignment:" in prompt_default
     assert "User Escalation When No Solution Exists:" in prompt_default
     assert "Escalation & Guardrails (status: 'needs_user')" in prompt_default
@@ -144,8 +145,12 @@ def test_persona_prompt_uses_soul_and_guardrails():
     assert "scale, ambiguity, and subtask structure" in prompt_default
 
     # Custom soul
-    custom_cfg = AiHeadConfig(soul="Principal Architect focused on security and clean architecture")
+    custom_cfg = AiHeadConfig(
+        soul="Principal Architect focused on security and clean architecture",
+        routing_profile="quality",
+    )
     prompt_custom = build_ai_head_system_prompt(custom_cfg)
+    assert "routing_profile = quality" in prompt_custom
     assert "Principal Architect focused on security and clean architecture" in prompt_custom
     assert "NEVER authorize destructive operations" in prompt_custom
     # Workflow knowledge persists regardless of customized soul
@@ -347,12 +352,11 @@ def test_build_headless_cli_argv_all_supported_harnesses():
         "gemini-3.8-flash-high",
         "--effort",
         "high",
-        "--dangerously-skip-permissions",
         "--prompt",
         "Prompt text",
     ]
     assert argv_agy.count("--effort") == 1
-    assert argv_agy.count("--dangerously-skip-permissions") == 1
+    assert argv_agy.count("--dangerously-skip-permissions") == 0
 
     # 3. claude
     cfg_claude = AiHeadConfig(
@@ -368,10 +372,9 @@ def test_build_headless_cli_argv_all_supported_harnesses():
         "-p",
         "--model",
         "claude-opus-4-6",
-        "--dangerously-skip-permissions",
         "Prompt text",
     ]
-    assert argv_claude.count("--dangerously-skip-permissions") == 1
+    assert argv_claude.count("--dangerously-skip-permissions") == 0
 
     # 4. pi
     cfg_pi = AiHeadConfig(
@@ -482,7 +485,7 @@ async def test_ensure_herdr_ai_head_reuses_existing_tab():
 
 
 @pytest.mark.asyncio
-async def test_ensure_herdr_ai_head_reconciles_stale_model_or_args(tmp_path: Path):
+async def test_ensure_herdr_ai_head_refuses_live_binding_changes(tmp_path: Path):
     """Verify state persistence and reconciliation for model-only and soul-only changes."""
     _clear_running_head_states()
     client = MagicMock(spec=HerdrClient)
@@ -557,68 +560,21 @@ async def test_ensure_herdr_ai_head_reconciles_stale_model_or_args(tmp_path: Pat
     client.start_agent.assert_not_called()
     client.prompt_agent.assert_not_called()
 
-    # b) Model-only change on same harness -> triggers client.start_agent with new args and prompt
-    cfg_new_model = AiHeadConfig(
-        enabled=True,
-        soul="Original Soul",
-        binding=HarnessBinding(
-            kind=HarnessKind.OPENCODE,
-            model="model-v2",
-            label="ai-head",
-        ),
-    )
-    client.start_agent.reset_mock()
-    client.prompt_agent.reset_mock()
-    res_new_model = await ensure_herdr_ai_head(
-        client, workspace_id="ws-1", head_config=cfg_new_model, origin_cwd=origin_cwd
-    )
-    assert res_new_model["reused"] is True
-    client.start_agent.assert_called_once()
-    assert "model-v2" in client.start_agent.call_args.kwargs["args"]
-    client.prompt_agent.assert_called_once()
-
-    # c) Soul-only change on same harness and model -> triggers start_agent and delivers new prompt
-    cfg_new_soul = AiHeadConfig(
-        enabled=True,
-        soul="Completely New Soul 2.0",
-        binding=HarnessBinding(
-            kind=HarnessKind.OPENCODE,
-            model="model-v2",
-            label="ai-head",
-        ),
-    )
-    client.start_agent.reset_mock()
-    client.prompt_agent.reset_mock()
-    res_new_soul = await ensure_herdr_ai_head(
-        client, workspace_id="ws-1", head_config=cfg_new_soul, origin_cwd=origin_cwd
-    )
-    assert res_new_soul["reused"] is True
-    client.start_agent.assert_called_once()
-    client.prompt_agent.assert_called_once()
-    assert "Completely New Soul 2.0" in client.prompt_agent.call_args.args[1]
-
-    # Calling again with cfg_new_soul now reuses without restarting
-    client.start_agent.reset_mock()
-    client.prompt_agent.reset_mock()
-    res_reused = await ensure_herdr_ai_head(
-        client, workspace_id="ws-1", head_config=cfg_new_soul, origin_cwd=origin_cwd
-    )
-    assert res_reused["reused"] is True
+    for binding, soul in [(cfg1.binding.model_copy(update={"model": "model-v2"}), cfg1.soul),
+                          (cfg1.binding, "Completely New Soul 2.0")]:
+        changed = cfg1.model_copy(update={"binding": binding, "soul": soul})
+        with pytest.raises(RuntimeError, match="reconcile it explicitly"):
+            await ensure_herdr_ai_head(
+                client, workspace_id="ws-1", head_config=changed, origin_cwd=origin_cwd
+            )
     client.start_agent.assert_not_called()
     client.prompt_agent.assert_not_called()
-
-    # Persistent state file was created and can be reloaded
-    state_file = tmp_path / ".herdr-master.ai-head-state.json"
-    assert state_file.exists()
-    loaded_state = _load_running_head_state(origin_cwd, "ws-1", "pane-ai-head")
-    assert loaded_state is not None
-    assert loaded_state["soul"] == "Completely New Soul 2.0"
-    assert loaded_state["model"] == "model-v2"
+    assert _load_running_head_state(origin_cwd, "ws-1", "pane-ai-head")["model"] == "model-v1"
 
 
 @pytest.mark.asyncio
-async def test_ensure_herdr_ai_head_reconciles_unknown_state_live_agent(tmp_path: Path):
-    """When a live agent runs but running_state is None, reconcile and restart agent."""
+async def test_ensure_herdr_ai_head_refuses_unknown_live_binding(tmp_path: Path):
+    """When a live agent runs but running_state is None, do not silently replace the agent."""
     _clear_running_head_states()
     client = MagicMock(spec=HerdrClient)
     origin_cwd = str(tmp_path)
@@ -653,24 +609,14 @@ async def test_ensure_herdr_ai_head_reconciles_unknown_state_live_agent(tmp_path
     # Verify no pre-existing state
     assert _load_running_head_state(origin_cwd, "ws-1", "pane-ai-head") is None
 
-    res = await ensure_herdr_ai_head(
-        client, workspace_id="ws-1", head_config=cfg, origin_cwd=origin_cwd
-    )
-
-    assert res["reused"] is True
-    assert res["reconciled"] is True
-    assert res["busy"] is False
+    with pytest.raises(RuntimeError, match="unknown binding"):
+        await ensure_herdr_ai_head(
+            client, workspace_id="ws-1", head_config=cfg, origin_cwd=origin_cwd
+        )
     client.create_tab.assert_not_called()
-    client.start_agent.assert_called_once()
-    assert "model-v1" in client.start_agent.call_args.kwargs["args"]
-    client.prompt_agent.assert_called_once()
-    assert "Known Desired Soul" in client.prompt_agent.call_args.args[1]
-
-    # Verify state was saved to persistence
-    saved_state = _load_running_head_state(origin_cwd, "ws-1", "pane-ai-head")
-    assert saved_state is not None
-    assert saved_state["model"] == "model-v1"
-    assert saved_state["soul"] == "Known Desired Soul"
+    client.start_agent.assert_not_called()
+    client.prompt_agent.assert_not_called()
+    assert _load_running_head_state(origin_cwd, "ws-1", "pane-ai-head") is None
 
 
 @pytest.mark.asyncio
@@ -765,6 +711,10 @@ async def test_ensure_herdr_ai_head_defers_reconcile_when_agent_busy(tmp_path: P
 async def test_ensure_herdr_ai_head_starts_agent_when_dead_or_missing():
     """Verify that when an ai-head tab exists but agent is dead or missing, it starts the agent."""
     client = MagicMock(spec=HerdrClient)
+    client.socket_path = Path("/tmp/test-herdr.sock")
+    client.get_agent = AsyncMock(
+        side_effect=lambda pane_id: {"agent": {"pane_id": pane_id, "agent_status": "idle"}}
+    )
     cfg = AiHeadConfig(enabled=True)
 
     # 1. Agent exists but is dead
@@ -826,6 +776,10 @@ async def test_ensure_herdr_ai_head_starts_agent_when_dead_or_missing():
 async def test_ensure_herdr_ai_head_tab_without_pane_creates_new():
     """Verify that if an existing tab has no pane, a new functional tab is created."""
     client = MagicMock(spec=HerdrClient)
+    client.socket_path = Path("/tmp/test-herdr.sock")
+    client.get_agent = AsyncMock(
+        side_effect=lambda pane_id: {"agent": {"pane_id": pane_id, "agent_status": "idle"}}
+    )
     cfg = AiHeadConfig(enabled=True)
 
     paneless_snap = SessionSnapshot(
@@ -858,6 +812,10 @@ async def test_ensure_herdr_ai_head_tab_without_pane_creates_new():
 @pytest.mark.asyncio
 async def test_ensure_herdr_ai_head_creates_new_tab_and_starts_agent():
     client = MagicMock(spec=HerdrClient)
+    client.socket_path = Path("/tmp/test-herdr.sock")
+    client.get_agent = AsyncMock(
+        side_effect=lambda pane_id: {"agent": {"pane_id": pane_id, "agent_status": "idle"}}
+    )
     initial_snap = SessionSnapshot(
         protocol=22,
         workspaces=[],
@@ -1086,7 +1044,11 @@ async def test_execute_cli_decision_raw_json_success():
 
 
 @pytest.mark.asyncio
-async def test_execute_cli_decision_markdown_fenced_json_success():
+async def test_execute_cli_decision_markdown_fenced_json_success(tmp_path, monkeypatch):
+    monkeypatch.setenv("HOME", str(tmp_path))
+    settings = tmp_path / ".gemini" / "antigravity-cli" / "settings.json"
+    settings.parent.mkdir(parents=True)
+    settings.write_text(json.dumps({"trustedWorkspaces": [str(Path.cwd().resolve())]}))
     cfg = AiHeadConfig(
         enabled=True,
         binding=HarnessBinding(
@@ -1354,6 +1316,10 @@ async def test_ensure_herdr_ai_head_reconciles_unknown_workspace_id():
     """Verify that if caller passes a non-existent workspace_id (e.g. ws-01),
     ensure_herdr_ai_head reconciles to the active workspace instead of failing."""
     client = MagicMock(spec=HerdrClient)
+    client.socket_path = Path("/tmp/test-herdr.sock")
+    client.get_agent = AsyncMock(
+        side_effect=lambda pane_id: {"agent": {"pane_id": pane_id, "agent_status": "idle"}}
+    )
     snap = SessionSnapshot(
         protocol=22,
         focused_workspace_id="ws-live-focused",
@@ -1382,8 +1348,8 @@ async def test_ensure_herdr_ai_head_reconciles_unknown_workspace_id():
 
 
 @pytest.mark.asyncio
-async def test_ensure_herdr_ai_head_falls_back_to_new_tab_on_stale_pane_failure():
-    """A failed start on a stale pane closes its tab and creates a new one."""
+async def test_ensure_herdr_ai_head_does_not_replay_ambiguous_start():
+    """An ambiguous start must not delete the pane or start an alternative."""
     client = MagicMock(spec=HerdrClient)
     cfg = AiHeadConfig(enabled=True)
 
@@ -1405,28 +1371,14 @@ async def test_ensure_herdr_ai_head_falls_back_to_new_tab_on_stale_pane_failure(
     client.create_tab = AsyncMock(return_value={"tab_id": "tab-new", "pane_id": "pane-new"})
     client.prompt_agent = AsyncMock(return_value={"type": "agent_prompted"})
 
-    # First start_agent call on pane-stale fails, second call on pane-new succeeds
-    call_count = 0
-
-    async def mock_start_agent(**kwargs):
-        nonlocal call_count
-        call_count += 1
-        if kwargs.get("pane_id") == "pane-stale":
-            raise HerdrRPCError("agent_launch_failed", "shell process died")
-        return {"status": "started"}
-
-    client.start_agent = AsyncMock(side_effect=mock_start_agent)
-
-    res = await ensure_herdr_ai_head(
-        client, workspace_id="ws-1", head_config=cfg, origin_cwd="/repo"
-    )
-
-    assert res["reused"] is False
-    assert res["tab_id"] == "tab-new"
-    assert res["pane_id"] == "pane-new"
-    client.close_tab.assert_called_once_with("tab-stale")
-    client.create_tab.assert_called_once()
-    assert client.start_agent.call_count == 2
+    client.socket_path = Path("/tmp/test-herdr.sock")
+    client.start_agent = AsyncMock(side_effect=TimeoutError("ambiguous start"))
+    with pytest.raises(TimeoutError, match="ambiguous start"):
+        await ensure_herdr_ai_head(client, "ws-1", cfg, "/tmp")
+    client.start_agent.assert_awaited_once()
+    client.close_tab.assert_not_called()
+    client.create_tab.assert_not_called()
+    client.prompt_agent.assert_not_called()
 
 
 def test_headless_catalog_tail_keeps_prompt_separators_and_does_not_duplicate_flags():
@@ -1574,8 +1526,8 @@ model = "gemini-3.8-flash-high"
 
 
 @pytest.mark.asyncio
-async def test_ensure_restarts_when_saved_permission_changes_agent_args(tmp_path: Path):
-    """Permission changes the stored catalog args, so the existing restart policy applies."""
+async def test_ensure_refuses_live_agent_with_legacy_bypass_args(tmp_path: Path):
+    """Do not silently reuse or replace a live head with legacy bypass args."""
     _clear_running_head_states()
     origin = str(tmp_path)
     cfg = AiHeadConfig(
@@ -1622,14 +1574,10 @@ async def test_ensure_restarts_when_saved_permission_changes_agent_args(tmp_path
     client.prompt_agent = AsyncMock(return_value={"type": "agent_prompted"})
     client.create_tab = AsyncMock()
 
-    with patch("herdr_master.pipeline.ai_head._ensure_agy_trusted"):
-        result = await ensure_herdr_ai_head(
+    with pytest.raises(RuntimeError, match="different or unknown binding"):
+        await ensure_herdr_ai_head(
             client, workspace_id="ws-1", head_config=cfg, origin_cwd=origin
         )
-
-    assert result["reconciled"] is True
-    assert result["reused"] is True
-    started = client.start_agent.await_args.kwargs["args"]
-    assert started == ["--model", "gemini-2.5-pro", "--effort", "high"]
-    assert "--dangerously-skip-permissions" not in started
-    assert started.count("--effort") == 1
+    client.start_agent.assert_not_called()
+    client.prompt_agent.assert_not_called()
+    client.create_tab.assert_not_called()

@@ -1,11 +1,4 @@
-"""Unit tests verifying caller pane adoption and delegation for aihead skills.
-
-When `aihead` is invoked from inside an active harness/Herdr pane (e.g., `HERDR_PANE_ID`
-is set or running inside a Herdr-managed agent pane), skill invocations (ergo, council,
-orchestration, herdr-master) must NOT spawn a new AiHead pane in the job workspace;
-instead they must use the existing caller pane (`HERDR_PANE_ID`) as the active
-AiHead / parent pane.
-"""
+"""Verify each skill uses the exact invoking pane, not inferred AiHead authority."""
 
 from __future__ import annotations
 
@@ -22,7 +15,6 @@ from herdr_master.core.config import (
 )
 from herdr_master.core.context import HerdrContext
 from herdr_master.core.models import HarnessKind, Squad
-from herdr_master.pipeline.ai_head import AiHeadDiscovery
 from herdr_master.pipeline.launcher import (
     _allocate_launch_target,
     _Allocated,
@@ -32,6 +24,14 @@ from herdr_master.pipeline.launcher import (
     launch_master,
     launch_orchestration,
 )
+
+
+@pytest.fixture(autouse=True)
+def _offline_launch(monkeypatch, tmp_path):
+    prefix = "herdr_master.pipeline.parent_contract."
+    monkeypatch.setattr(prefix + "_watch_run_dir", lambda *args: tmp_path)
+    monkeypatch.setattr(prefix + "_ensure_watcher", lambda *args: None)
+    monkeypatch.setattr(prefix + "require_existing_agy_trust", lambda *args, **kwargs: None)
 
 
 def _mock_client(workspace_id: str = "ws-owned-1") -> AsyncMock:
@@ -49,7 +49,15 @@ def _mock_client(workspace_id: str = "ws-owned-1") -> AsyncMock:
     }
     client.start_agent.return_value = {"type": "agent_started"}
     client.prompt_agent.return_value = {"type": "ok"}
-    client.get_agent.return_value = {"agent": {"agent_status": "idle"}}
+    async def get_agent(pane_id):
+        workspace, ordinal = pane_id.split(":p")
+        return {"agent": {
+            "pane_id": pane_id, "workspace_id": workspace,
+            "tab_id": f"{workspace}:t{ordinal}", "terminal_id": f"terminal-{pane_id}",
+            "agent": "pi", "agent_status": "idle",
+        }}
+
+    client.get_agent.side_effect = get_agent
     client.focus_workspace.return_value = {}
     client.focus_tab.return_value = {}
     client.get_snapshot.return_value = SimpleNamespace(
@@ -98,11 +106,11 @@ async def test_allocate_launch_target_with_explicit_parent_pane_id():
         cwd="/tmp/project",
         fresh_workspace=True,
         focus=True,
-        parent_pane_id="caller-pane-100",
+        parent_pane_id="w1:pA",
     )
 
     assert allocated.delegated is True
-    assert allocated.parent_pane_id == "caller-pane-100"
+    assert allocated.parent_pane_id == "w1:pA"
     assert allocated.owns_workspace is True
     assert allocated.workspace_id == "ws-alloc-1"
     assert allocated.pane_id == "ws-alloc-1:p2"
@@ -118,7 +126,7 @@ async def test_allocate_launch_target_with_explicit_parent_pane_id():
         label="job-tab",
         focus=True,
         cwd="/tmp/project",
-        env={"HERDR_PARENT_PANE_ID": "caller-pane-100"},
+        env={"HERDR_PARENT_PANE_ID": "w1:pA"},
     )
 
 
@@ -126,7 +134,7 @@ async def test_allocate_launch_target_with_explicit_parent_pane_id():
 async def test_allocate_launch_target_with_herdr_pane_id_env(monkeypatch):
     """When HERDR_PANE_ID is in environment, resolves eff_parent_pane from env,
     sets delegated=True, and creates tab with HERDR_PARENT_PANE_ID env var."""
-    monkeypatch.setenv("HERDR_PANE_ID", "caller-from-env-42")
+    monkeypatch.setenv("HERDR_PANE_ID", "w2:pA")
     client = _mock_client("ws-alloc-2")
     ctx = _ctx(inside=True, pane_id=None)
 
@@ -144,23 +152,23 @@ async def test_allocate_launch_target_with_herdr_pane_id_env(monkeypatch):
     )
 
     assert allocated.delegated is True
-    assert allocated.parent_pane_id == "caller-from-env-42"
+    assert allocated.parent_pane_id == "w2:pA"
     assert allocated.owns_workspace is True
     client.create_tab.assert_awaited_once_with(
         workspace_id="ws-alloc-2",
         label="job-tab",
         focus=True,
         cwd="/tmp/project",
-        env={"HERDR_PARENT_PANE_ID": "caller-from-env-42"},
+        env={"HERDR_PARENT_PANE_ID": "w2:pA"},
     )
 
 
 @pytest.mark.asyncio
 async def test_allocate_launch_target_explicit_parent_takes_precedence_over_env(monkeypatch):
     """Explicit parent_pane_id argument takes precedence over HERDR_PANE_ID env."""
-    monkeypatch.setenv("HERDR_PANE_ID", "caller-env-ignore")
+    monkeypatch.setenv("HERDR_PANE_ID", "w3:pB")
     client = _mock_client("ws-alloc-3")
-    ctx = _ctx(inside=True, pane_id="caller-ctx-ignore")
+    ctx = _ctx(inside=True, pane_id="w3:pC")
 
     allocated = await _allocate_launch_target(
         client,
@@ -171,59 +179,45 @@ async def test_allocate_launch_target_explicit_parent_takes_precedence_over_env(
         workspace_label="job-ws",
         cwd="/tmp/project",
         fresh_workspace=True,
-        parent_pane_id="caller-explicit-wins",
+        parent_pane_id="w3:pD",
     )
 
     assert allocated.delegated is True
-    assert allocated.parent_pane_id == "caller-explicit-wins"
+    assert allocated.parent_pane_id == "w3:pD"
     client.create_tab.assert_awaited_once_with(
         workspace_id="ws-alloc-3",
         label="job-tab",
         focus=True,
         cwd="/tmp/project",
-        env={"HERDR_PARENT_PANE_ID": "caller-explicit-wins"},
+        env={"HERDR_PARENT_PANE_ID": "w3:pD"},
     )
 
 
 @pytest.mark.asyncio
-async def test_allocate_launch_target_resolves_ctx_pane_id_when_env_unset(monkeypatch):
-    """When parent_pane_id is None and HERDR_PANE_ID is unset, resolves from ctx.pane_id."""
+async def test_allocate_launch_target_rejects_ctx_pane_id_when_env_unset(monkeypatch):
+    """A contextual pane is not evidence of the exact delegated caller."""
     monkeypatch.delenv("HERDR_PANE_ID", raising=False)
     client = _mock_client("ws-alloc-4")
-    ctx = _ctx(inside=True, pane_id="caller-from-ctx-77")
+    ctx = _ctx(inside=True, pane_id="w4:pA")
 
-    allocated = await _allocate_launch_target(
-        client,
-        ctx,
-        session="default",
-        isolated_name="job-alloc",
-        tab_label="job-tab",
-        workspace_label="job-ws",
-        cwd="/tmp/project",
-        fresh_workspace=True,
-        delegated=True,
-    )
-
-    assert allocated.delegated is True
-    assert allocated.parent_pane_id == "caller-from-ctx-77"
-    client.create_tab.assert_awaited_once_with(
-        workspace_id="ws-alloc-4",
-        label="job-tab",
-        focus=True,
-        cwd="/tmp/project",
-        env={"HERDR_PARENT_PANE_ID": "caller-from-ctx-77"},
-    )
+    with pytest.raises(ValueError, match="Cannot identify the immediate parent"):
+        await _allocate_launch_target(
+            client, ctx, session="default", isolated_name="job-alloc", tab_label="job-tab",
+            workspace_label="job-ws", cwd="/tmp/project", fresh_workspace=True, delegated=True,
+        )
+    client.create_workspace.assert_not_awaited()
+    client.create_tab.assert_not_awaited()
 
 
 @pytest.mark.asyncio
 async def test_allocate_launch_target_delegated_without_identifiable_parent_raises(monkeypatch):
-    """When delegated=True but no parent pane can be identified, aborts with RuntimeError."""
+    """When delegated=True but no parent pane can be identified, aborts before allocation."""
     monkeypatch.delenv("HERDR_PANE_ID", raising=False)
     monkeypatch.delenv("HERDR_PARENT_PANE_ID", raising=False)
     client = _mock_client("ws-alloc-5")
     ctx = _ctx(inside=True, pane_id=None)
 
-    with pytest.raises(RuntimeError, match="Cannot identify the caller or AiHead parent pane"):
+    with pytest.raises(ValueError, match="Cannot identify the immediate parent"):
         await _allocate_launch_target(
             client,
             ctx,
@@ -236,21 +230,19 @@ async def test_allocate_launch_target_delegated_without_identifiable_parent_rais
             delegated=True,
             parent_pane_id=None,
         )
-
-
+    client.create_workspace.assert_not_awaited()
+    client.create_tab.assert_not_awaited()
 @pytest.mark.asyncio
-async def test_allocate_launch_target_outside_herdr_delegated_creates_owned_workspace():
-    """Outside Herdr, when parent_pane_id is given, delegates to owned workspace."""
+async def test_allocate_launch_target_outside_herdr_rejects_delegated_parent():
+    """A pane ID without its inherited transport cannot be verified."""
     client = _mock_client("ws-alloc-ext")
     ctx = _ctx(inside=False, pane_id=None)
-
     with (
-        patch(
-            "herdr_master.pipeline.launcher.ensure_herdr_server", new_callable=AsyncMock
-        ) as mock_srv,
-        patch("herdr_master.pipeline.launcher.HerdrClient", return_value=client),
+        patch("herdr_master.pipeline.launcher.ensure_herdr_server", new_callable=AsyncMock)
+        as mock_srv,
+        pytest.raises(ValueError, match="must be on the inherited Herdr transport"),
     ):
-        allocated = await _allocate_launch_target(
+        await _allocate_launch_target(
             client,
             ctx,
             session=None,
@@ -259,31 +251,23 @@ async def test_allocate_launch_target_outside_herdr_delegated_creates_owned_work
             workspace_label="job-ws",
             cwd="/tmp/project",
             fresh_workspace=True,
-            parent_pane_id="caller-ext-p1",
+            parent_pane_id="w2Q:pE",
         )
-
-    mock_srv.assert_awaited_once()
-    assert allocated.delegated is True
-    assert allocated.parent_pane_id == "caller-ext-p1"
-    assert allocated.owns_workspace is True
-    client.create_tab.assert_awaited_once_with(
-        workspace_id="ws-alloc-ext",
-        label="job-tab",
-        focus=True,
-        cwd="/tmp/project",
-        env={"HERDR_PARENT_PANE_ID": "caller-ext-p1"},
-    )
+    mock_srv.assert_not_awaited()
+    client.create_workspace.assert_not_awaited()
+    client.create_tab.assert_not_awaited()
 
 
 # ============================================================================
 # 2. Unit tests for _resolve_and_wire_ai_head
 # ============================================================================
 
+# ============================================================================
+
 
 @pytest.mark.asyncio
 async def test_resolve_and_wire_ai_head_delegated_skips_ensure_herdr_ai_head(tmp_path: Path):
-    """When allocated.delegated is True, ensure_herdr_ai_head is NEVER called,
-    and the returned AiHeadDiscovery has pane_id set to the caller pane."""
+    """A delegated caller must not be implicitly promoted to AiHead."""
     client = _mock_client("ws-wire-1")
     allocated = _Allocated(
         client=client,
@@ -293,13 +277,13 @@ async def test_resolve_and_wire_ai_head_delegated_skips_ensure_herdr_ai_head(tmp
         pane_id="ws-wire-1:p2",
         tab_id="ws-wire-1:t2",
         owns_workspace=True,
-        parent_pane_id="caller-authoritative-p1",
+        parent_pane_id="w2Q:pE",
         delegated=True,
     )
 
     cfg = HerdrMasterConfig(ai_head=AiHeadConfig(enabled=False))
     with (
-        patch("herdr_master.pipeline.launcher.load_project_config", return_value=cfg),
+        patch("herdr_master.pipeline.launcher.load_effective_project_config", return_value=cfg),
         patch(
             "herdr_master.pipeline.launcher.ensure_herdr_ai_head", new_callable=AsyncMock
         ) as mock_ensure,
@@ -311,11 +295,7 @@ async def test_resolve_and_wire_ai_head_delegated_skips_ensure_herdr_ai_head(tmp
         )
 
     mock_ensure.assert_not_called()
-    assert discovery is not None
-    assert isinstance(discovery, AiHeadDiscovery)
-    assert discovery.pane_id == "caller-authoritative-p1"
-    assert discovery.enabled is True
-    assert discovery.mode == "herdr"
+    assert discovery is None
 
 
 @pytest.mark.asyncio
@@ -330,14 +310,14 @@ async def test_resolve_and_wire_ai_head_parent_pane_and_owns_workspace_skips_ens
         pane_id="ws-wire-2:p2",
         tab_id="ws-wire-2:t2",
         owns_workspace=True,
-        parent_pane_id="caller-owned-parent-p2",
+        parent_pane_id="w3H:pA",
         # parent_pane_id + owns_workspace triggers it even when delegated is false
         delegated=False,
     )
 
     cfg = HerdrMasterConfig(ai_head=AiHeadConfig(enabled=True))
     with (
-        patch("herdr_master.pipeline.launcher.load_project_config", return_value=cfg),
+        patch("herdr_master.pipeline.launcher.load_effective_project_config", return_value=cfg),
         patch(
             "herdr_master.pipeline.launcher.ensure_herdr_ai_head", new_callable=AsyncMock
         ) as mock_ensure,
@@ -349,9 +329,7 @@ async def test_resolve_and_wire_ai_head_parent_pane_and_owns_workspace_skips_ens
         )
 
     mock_ensure.assert_not_called()
-    assert discovery is not None
-    assert discovery.pane_id == "caller-owned-parent-p2"
-    assert discovery.enabled is True
+    assert discovery is None
 
 
 @pytest.mark.asyncio
@@ -381,7 +359,7 @@ async def test_resolve_and_wire_ai_head_non_delegated_without_parent_calls_ensur
         "enabled": True,
     }
     with (
-        patch("herdr_master.pipeline.launcher.load_project_config", return_value=cfg),
+        patch("herdr_master.pipeline.launcher.load_effective_project_config", return_value=cfg),
         patch(
             "herdr_master.pipeline.launcher.ensure_herdr_ai_head", AsyncMock(return_value=head_info)
         ) as mock_ensure,
@@ -415,7 +393,8 @@ async def test_resolve_and_wire_ai_head_returns_none_when_no_ai_head_config(tmp_
 
     with (
         patch(
-            "herdr_master.pipeline.launcher.load_project_config", side_effect=Exception("No config")
+            "herdr_master.pipeline.launcher.load_effective_project_config",
+            side_effect=Exception("No config"),
         ),
         patch(
             "herdr_master.pipeline.launcher.ensure_herdr_ai_head", new_callable=AsyncMock
@@ -440,11 +419,11 @@ async def test_resolve_and_wire_ai_head_returns_none_when_no_ai_head_config(tmp_
 async def test_launch_ergo_with_caller_pane(tmp_path: Path, monkeypatch):
     """launch_ergo with HERDR_PANE_ID set:
     - ensure_herdr_ai_head is never called
-    - AiHead discovery is wired to caller pane
-    - prompt contains the AiHead Parent Directive referencing the caller pane
+    - AiHead discovery does not promote the caller
+    - prompt contains the exact direct-parent directive referencing the caller pane
     - create_tab passes HERDR_PARENT_PANE_ID in env
     """
-    caller_pane = "caller-pane-ergo-1"
+    caller_pane = "w2Q:p1"
     monkeypatch.setenv("HERDR_PANE_ID", caller_pane)
     client = _mock_client("ws-ergo-job")
     ctx = _ctx(inside=True, pane_id=caller_pane)
@@ -470,20 +449,12 @@ async def test_launch_ergo_with_caller_pane(tmp_path: Path, monkeypatch):
     # 1. ensure_herdr_ai_head is NOT called
     mock_ensure.assert_not_called()
 
-    # 2. AiHead discovery is wired to caller pane
-    assert res["ai_head"] is not None
-    assert res["ai_head"].pane_id == caller_pane
-    assert res["ai_head"].enabled is True
+    assert res["ai_head"] is None
 
     # 3. Prompt contains AiHead Parent Directive
     prompt = client.prompt_agent.await_args.args[1]
-    assert "AiHead Parent Directive:" in prompt
-    assert (
-        f"AiHead is active at pane {caller_pane} as the authoritative technical decision-maker."
-        in prompt
-    )
-    assert f'herdr agent prompt {caller_pane} "<question / plan>"' in prompt
-    assert f"herdr agent prompt {caller_pane}:" in prompt
+    assert prompt.startswith(f"DIRECT PARENT CONTRACT — your immediate supervisor is pane {caller_pane}.")
+    assert f'herdr agent prompt {caller_pane} "<message>"' in prompt
 
     # 4. create_tab passed HERDR_PARENT_PANE_ID in env
     assert client.create_tab.await_args.kwargs["env"] == {"HERDR_PARENT_PANE_ID": caller_pane}
@@ -493,11 +464,11 @@ async def test_launch_ergo_with_caller_pane(tmp_path: Path, monkeypatch):
 async def test_launch_council_with_caller_pane(tmp_path: Path, monkeypatch):
     """launch_council with HERDR_PANE_ID set:
     - ensure_herdr_ai_head is never called
-    - AiHead discovery is wired to caller pane
-    - prompt contains the AiHead Parent Directive referencing the caller pane
+    - AiHead discovery does not promote the caller
+    - prompt contains the exact direct-parent directive referencing the caller pane
     - create_tab passes HERDR_PARENT_PANE_ID in env
     """
-    caller_pane = "caller-pane-council-1"
+    caller_pane = "w2Q:p2"
     monkeypatch.setenv("HERDR_PANE_ID", caller_pane)
     client = _mock_client("ws-council-job")
     ctx = _ctx(inside=True, pane_id=caller_pane)
@@ -523,18 +494,12 @@ async def test_launch_council_with_caller_pane(tmp_path: Path, monkeypatch):
     # 1. ensure_herdr_ai_head is NOT called
     mock_ensure.assert_not_called()
 
-    # 2. AiHead discovery is wired to caller pane
-    assert res["ai_head"] is not None
-    assert res["ai_head"].pane_id == caller_pane
+    assert res["ai_head"] is None
 
     # 3. Prompt contains AiHead Parent Directive
     prompt = client.prompt_agent.await_args.args[1]
-    assert "AiHead Parent Directive:" in prompt
-    assert (
-        f"AiHead is active at pane {caller_pane} as the authoritative technical decision-maker."
-        in prompt
-    )
-    assert f'herdr agent prompt {caller_pane} "<question / plan>"' in prompt
+    assert prompt.startswith(f"DIRECT PARENT CONTRACT — your immediate supervisor is pane {caller_pane}.")
+    assert f'herdr agent prompt {caller_pane} "<message>"' in prompt
 
     # 4. create_tab passed HERDR_PARENT_PANE_ID in env
     assert client.create_tab.await_args.kwargs["env"] == {"HERDR_PARENT_PANE_ID": caller_pane}
@@ -544,11 +509,11 @@ async def test_launch_council_with_caller_pane(tmp_path: Path, monkeypatch):
 async def test_launch_orchestration_with_caller_pane(tmp_path: Path, monkeypatch):
     """launch_orchestration with HERDR_PANE_ID set:
     - ensure_herdr_ai_head is never called
-    - AiHead discovery is wired to caller pane
-    - prompt contains the AiHead Parent Directive referencing the caller pane
+    - AiHead discovery does not promote the caller
+    - prompt contains the exact direct-parent directive referencing the caller pane
     - create_tab passes HERDR_PARENT_PANE_ID in env
     """
-    caller_pane = "caller-pane-orch-1"
+    caller_pane = "w2Q:p3"
     monkeypatch.setenv("HERDR_PANE_ID", caller_pane)
     client = _mock_client("ws-orch-job")
     ctx = _ctx(inside=True, pane_id=caller_pane)
@@ -577,18 +542,12 @@ async def test_launch_orchestration_with_caller_pane(tmp_path: Path, monkeypatch
     # 1. ensure_herdr_ai_head is NOT called
     mock_ensure.assert_not_called()
 
-    # 2. AiHead discovery is wired to caller pane
-    assert res["ai_head"] is not None
-    assert res["ai_head"].pane_id == caller_pane
+    assert res["ai_head"] is None
 
     # 3. Prompt contains AiHead Parent Directive
     prompt = client.prompt_agent.await_args.args[1]
-    assert "AiHead Parent Directive:" in prompt
-    assert (
-        f"AiHead is active at pane {caller_pane} as the authoritative technical decision-maker."
-        in prompt
-    )
-    assert f'herdr agent prompt {caller_pane} "<question / plan>"' in prompt
+    assert prompt.startswith(f"DIRECT PARENT CONTRACT — your immediate supervisor is pane {caller_pane}.")
+    assert f'herdr agent prompt {caller_pane} "<message>"' in prompt
 
     # 4. create_tab passed HERDR_PARENT_PANE_ID in env
     assert client.create_tab.await_args.kwargs["env"] == {"HERDR_PARENT_PANE_ID": caller_pane}
@@ -598,11 +557,11 @@ async def test_launch_orchestration_with_caller_pane(tmp_path: Path, monkeypatch
 async def test_launch_master_with_caller_pane(tmp_path: Path, monkeypatch):
     """launch_master with HERDR_PANE_ID set:
     - ensure_herdr_ai_head is never called
-    - AiHead discovery is wired to caller pane
-    - prompt contains the AiHead Parent Directive referencing the caller pane
+    - AiHead discovery does not promote the caller
+    - prompt contains the exact direct-parent directive referencing the caller pane
     - create_tab passes HERDR_PARENT_PANE_ID in env
     """
-    caller_pane = "caller-pane-master-1"
+    caller_pane = "w2Q:p4"
     monkeypatch.setenv("HERDR_PANE_ID", caller_pane)
     client = _mock_client("ws-master-job")
     ctx = _ctx(inside=True, pane_id=caller_pane)
@@ -628,18 +587,12 @@ async def test_launch_master_with_caller_pane(tmp_path: Path, monkeypatch):
     # 1. ensure_herdr_ai_head is NOT called
     mock_ensure.assert_not_called()
 
-    # 2. AiHead discovery is wired to caller pane
-    assert res["ai_head"] is not None
-    assert res["ai_head"].pane_id == caller_pane
+    assert res["ai_head"] is None
 
     # 3. Prompt contains AiHead Parent Directive
     prompt = client.prompt_agent.await_args.args[1]
-    assert "AiHead Parent Directive:" in prompt
-    assert (
-        f"AiHead is active at pane {caller_pane} as the authoritative technical decision-maker."
-        in prompt
-    )
-    assert f'herdr agent prompt {caller_pane} "<question / plan>"' in prompt
+    assert prompt.startswith(f"DIRECT PARENT CONTRACT — your immediate supervisor is pane {caller_pane}.")
+    assert f'herdr agent prompt {caller_pane} "<message>"' in prompt
 
     # 4. create_tab passed HERDR_PARENT_PANE_ID in env
     assert client.create_tab.await_args.kwargs["env"] == {"HERDR_PARENT_PANE_ID": caller_pane}

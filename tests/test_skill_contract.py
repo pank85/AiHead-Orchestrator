@@ -54,8 +54,11 @@ def test_ergo_skill_default_mode_is_herdr_and_uses_catalog():
     assert "Never fall back to an embedded table" in body
 
 
-def test_ergo_skill_product_squad_contract():
-    """Assert product default squad details in ergo skill and offline resolver."""
+def test_ergo_skill_product_squad_contract(monkeypatch, tmp_path):
+    """Assert product defaults without inheriting project or home overrides."""
+    monkeypatch.setenv("HOME", str(tmp_path / "home"))
+    monkeypatch.setenv("XDG_CONFIG_HOME", str(tmp_path / "xdg"))
+    monkeypatch.chdir(tmp_path)
     body = load_skill_body("ergo")
 
     # Product default in skill markdown
@@ -254,10 +257,10 @@ def test_herdr_master_skill_catalog_consumption_and_bindings():
     assert "gemini-4-argon" not in body
     assert "claude:opus" not in body
 
-    # Async watchers use catalog mechanism
-    assert "role watcher" in body
-    assert "herdr agent wait" in body
-    assert "must never send input or start a coordinator" in body
+    # Health observation is a parent-owned process, not a catalog role.
+    assert "Do not spawn a role watcher" in body
+    assert "python -m herdr_master.pipeline.child_watch" in body
+    assert "never closes panes, merges, pushes, or edits child work" in body
 
     # Resolves canonical /ergo from catalog, not dotfiles
     assert "aihead catalog show --json" in body
@@ -303,16 +306,17 @@ def test_orchestration_skill_is_herdr_free_and_keeps_every_gate():
     ):
         assert forbidden not in body, f"/orchestration must not reference {forbidden}"
 
-    # Precisely assert that any 'herdr agent' command is strictly a parent notification prompt
+    # Herdr is used only for parent notifications, and delegated targets come
+    # from the concrete pane in this coordinator's first prompt.
     import re
 
     prompt_targets = re.findall(r"herdr agent prompt\s+([^\s\"]+|\"[^\"]+\")", body)
     assert prompt_targets, "Expected delegated parent prompt notification"
-    allowed_parent_targets = {'"$HERDR_PARENT_PANE_ID"'}
+    allowed_parent_targets = {"<direct-parent-pane-id-from-first-prompt>"}
     for target in prompt_targets:
         assert target in allowed_parent_targets, (
             f"Forbidden herdr agent prompt target in /orchestration: {target}. "
-            f"Must target parent pane ID variable only."
+            f"Must use the concrete direct-parent pane from the first prompt."
         )
 
     # Ensure no other 'herdr agent' subcommands exist anywhere in the body
@@ -545,7 +549,7 @@ def test_aihead_delegation_limits_same_session_subagents_to_path_selection():
         in body
     )
     assert "or async background subagent" not in body
-    assert "not same-session subagents" in body
+    assert "they must not edit files, do the job, execute the task, monitor children" in body
 
 
 def test_job_workspace_and_question_tab_contract():
@@ -646,19 +650,17 @@ def test_pane_lifecycle_and_unmerged_ownership_contract_all_skills():
             "preserve it and report the blocker to the direct parent instead of deleting" in body
         ), skill
 
-    # Herdr-based parents run the 10-minute monitor and register it like a child
+    # Herdr parents run their own detached watcher; native Orchestration stays pane-free.
     for skill in ("aihead", "herdr-master", "ergo", "council"):
         body = load_skill_body(skill)
-        assert "registered in the same file like any child" in body, skill
-        assert "Every 10 minutes" in body, skill
-        assert "herdr agent get" in body and "herdr agent read" in body, skill
-        assert "finished-without-report" in body, skill
-        assert "background monitor is the polling mechanism" in body, skill
+        assert "Every 600 seconds" in body, skill
+        assert "python -m herdr_master.pipeline.child_watch" in body, skill
+        assert 'touch "$RUN_DIR/child-watch.stop"' in body, skill
+        assert "completion callback" in body, skill
 
-    # Orchestration is pane-free: its delegating parent registers and monitors it
     orchestration = load_skill_body("orchestration")
-    assert "checks it every 10 minutes" in orchestration
-    assert "Do not start a Herdr monitor pane here" in orchestration
+    assert "600-second intervals" in orchestration
+    assert "Never fabricate a pane mapping or spawn a monitor agent" in orchestration
 
     # Each orchestrator closes its own children and lets its parent close it
     assert "Ergo orchestrator closes its worker panes" in load_skill_body("aihead")
@@ -679,7 +681,7 @@ def test_aihead_initial_parent_directive_has_workflow_specific_completion():
     body = load_skill_body("aihead")
     directive = body.split("  AiHead Parent Directive:\n", 1)[1].split("  ```", 1)[0]
 
-    assert "herdr agent prompt $HERDR_PANE_ID" in directive
+    assert 'herdr agent prompt <DIRECT_PARENT_PANE_ID> "<question / plan / blocker>"' in directive
     assert (
         "For an implementation pipeline, upon completion of the assigned branch commit and review"
         in directive
@@ -740,12 +742,10 @@ def test_canonical_skills_hermes_support():
 
     hm_body = load_skill_body("herdr-master")
     assert "--kind hermes" in hm_body
-    assert "supports_native=False" in hm_body
-    assert 'terminal(command="herdr agent wait <target> --timeout <ms>"' in hm_body
-    assert "delegate_task" in hm_body
     assert "--reasoning" in hm_body
     assert "--yolo" in hm_body
-    assert "Async delivery is runtime/session-dependent" in hm_body
+    assert "--no-skip-permissions" in hm_body
+    assert "A bounded process callback from the exact session, if supported" in hm_body
     assert "Scope this check strictly to when a Hermes child route is selected" in hm_body
 
     ergo_body = load_skill_body("ergo")
@@ -806,8 +806,11 @@ def test_delegated_shared_session_parent_contract():
 
     orch = load_skill_body("orchestration")
     for command in re.findall(r"`(herdr agent prompt [^`]+)`", orch):
-        assert shlex.split(command)[3] == "$HERDR_PARENT_PANE_ID"
+        assert shlex.split(command)[3] == "<direct-parent-pane-id-from-first-prompt>"
+    assert 'herdr agent prompt "$HERDR_PARENT_PANE_ID"' not in orch
     assert "Never convert it to standalone" in orch
+    assert "parent_contract complete" in orch
+    assert "native return/message channel" in orch
     gate = orch.split("## 5. User Approval Gate", 1)[1].split("## 6.", 1)[0]
     for branch in ("Delegated parent gate", "Standalone AiHead gate", "Standalone human gate"):
         assert branch in gate
@@ -840,30 +843,44 @@ def test_strict_one_level_up_hierarchy_and_nonblocking_contract():
         ("orchestration", orch),
     ):
         assert "NEVER block or wait in polling loops" in body, f"{name} missing non-blocking rule"
-        assert "HERDR_PARENT_PANE_ID" in body, f"{name} missing HERDR_PARENT_PANE_ID"
+        assert "first prompt" in body.lower(), f"{name} missing first-prompt parent contract"
 
-    # Ergo Level 3 briefs (Scout, Architect, Coder, Reviewer) notify ONLY ORCHESTRATOR_PANE_ID
-    assert 'herdr agent prompt <ORCHESTRATOR_PANE_ID> "Scout finished:' in ergo
-    assert 'herdr agent prompt <ORCHESTRATOR_PANE_ID> "Scout blocked/decision needed:' in ergo
-    assert 'herdr agent prompt <ORCHESTRATOR_PANE_ID> "Architect finished:' in ergo
-    assert 'herdr agent prompt <ORCHESTRATOR_PANE_ID> "Architect blocked/decision needed:' in ergo
-    assert 'herdr agent prompt <ORCHESTRATOR_PANE_ID> "Coder <N> finished:' in ergo
-    assert 'herdr agent prompt <ORCHESTRATOR_PANE_ID> "Coder <N> blocked/decision needed:' in ergo
-    assert 'herdr agent prompt <ORCHESTRATOR_PANE_ID> "Reviewer finished:' in ergo
-    assert 'herdr agent prompt <ORCHESTRATOR_PANE_ID> "Reviewer blocked/decision needed:' in ergo
+    # Ergo uses one transport-specific directive with unchanged role payloads.
+    assert 'herdr agent prompt <ORCHESTRATOR_PANE_ID> "<message>"' in ergo
+    for role in ("Scout", "Architect", "Coder <N>", "Reviewer"):
+        assert f'"{role} finished:' in ergo
+        assert f'"{role} blocked/decision needed:' in ergo
     assert "NEVER AiHead" in ergo
 
-    # Council Level 3 notifies only COORDINATOR_PANE_ID; Level 2 notifies HERDR_PARENT_PANE_ID.
+    # Council Level 3 notifies only COORDINATOR_PANE_ID; Level 2 uses the
+    # concrete direct-parent pane named in its own first prompt.
     assert "COORDINATOR_PANE_ID" in council
     assert "herdr agent prompt <COORDINATOR_PANE_ID>" in council
-    assert 'herdr agent prompt "$HERDR_PARENT_PANE_ID" "Council deliberation finished:' in council
-    assert 'herdr agent prompt "$HERDR_PARENT_PANE_ID" "Council decision/blocker needed:' in council
-    assert "NEVER notify AiHead or Herdr-Master directly" in council
+    assert "concrete direct-parent pane named in its own first prompt" in council
+    council_terminal = council.split(
+        "**Hierarchical Parent Notification (One Level Up — Level 2 -> Level 1)**:", 1
+    )[1].split("---", 1)[0]
+    assert "verified direct parent" in council_terminal
+    assert "Launcher-tagged Herdr" in council_terminal
+    assert "parent_contract complete" in council_terminal
+    assert "Do not send a raw terminal `herdr agent prompt`" in council_terminal
+    assert 'herdr agent prompt <verified-direct-parent-pane-id> "Council deliberation finished:' in council_terminal
+    assert "exact invoking supervisor's native result channel" in council_terminal
+    assert "Only a verified parentless root reports directly to the user" in council_terminal
+    completion_gate = council.split("**Completion gate (Herdr children).**", 1)[1].splitlines()[0]
+    assert "via `herdr agent prompt <direct-parent-pane-id>" in completion_gate
+    assert "withholds `done`" in completion_gate and "until it receives that report" in completion_gate
+    assert "parent_contract complete --run-dir" in completion_gate
+    assert "parent_contract verify --run-dir" in completion_gate
+    assert '--message "<exact full received HERDR TERMINAL REPORT payload, including header>"' in completion_gate
+    assert 'herdr agent prompt "$HERDR_PARENT_PANE_ID" "Council deliberation finished:' not in council
+    assert 'herdr agent prompt "$HERDR_PARENT_PANE_ID" "Council decision/blocker needed:' not in council_terminal
+    assert "never contact any other pane or the user" in council
 
 
 def test_all_skills_require_pane_launch_verification():
     """Every skill that spawns panes must demand evidence of a successful launch."""
-    for skill in ("aihead", "herdr-master", "ergo", "orchestration", "council"):
+    for skill in ("aihead", "herdr-master", "ergo", "council"):
         body = load_skill_body(skill)
         assert "Pane launch verification" in body, skill
         assert "herdr agent get" in body, skill

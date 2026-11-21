@@ -13,7 +13,7 @@ from dataclasses import dataclass
 from datetime import datetime, timedelta, timezone
 from typing import Any, Dict, List, Literal, Mapping, Optional, Sequence, Tuple, Union
 
-from pydantic import BaseModel, ConfigDict, Field, field_validator
+from pydantic import BaseModel, ConfigDict, Field, field_validator, model_validator
 
 from herdr_master.core.catalog import (
     _AGY_TIERS,
@@ -35,6 +35,8 @@ __all__ = [
     "apply_effort_calibration",
     "clamp_score",
     "derive_recommended_roles",
+    "derive_worker_tier",
+    "effective_worker_tier",
     "detect_model_family",
     "find_unrated_models",
     "format_context_window",
@@ -168,6 +170,8 @@ class ModelRating(BaseModel):
 
     family: str = "unknown"
     billing_tier: BillingTier = "api"
+    worker_tier: Optional[Literal[1, 2, 3]] = None
+    worker_tier_override: bool = False
     context_window: Optional[int] = None
     input_price_per_1m: Optional[float] = None
     output_price_per_1m: Optional[float] = None
@@ -198,6 +202,19 @@ class ModelRating(BaseModel):
         if isinstance(value, bool) or not isinstance(value, (int, float)):
             raise ValueError(f"Rating score must be numeric, got {value!r}.")
         return clamp_score(value)
+
+    @field_validator("worker_tier", mode="before")
+    @classmethod
+    def _validate_worker_tier(cls, value: Any) -> Any:
+        if value is not None and (type(value) is not int or value not in (1, 2, 3)):
+            raise ValueError("worker_tier must be 1, 2, 3, or None.")
+        return value
+
+    @model_validator(mode="after")
+    def _validate_worker_tier_override(self) -> ModelRating:
+        if self.worker_tier_override and self.worker_tier is None:
+            raise ValueError("worker_tier_override requires worker_tier.")
+        return self
 
     @field_validator("billing_tier", mode="before")
     @classmethod
@@ -810,6 +827,21 @@ def find_unrated_models(
     return pending
 
 
+def derive_worker_tier(rating: ModelRating) -> int:
+    """Derive provisional routing class; tier 1 is cost/latency, not a quality guarantee."""
+    capability = (rating.coding + rating.intelligence + rating.agentic) / 3
+    if capability >= 88:
+        return 3
+    if capability < 75 or (rating.speed >= 80 and rating.cost_efficiency >= 80):
+        return 1
+    return 2
+
+
+def effective_worker_tier(rating: ModelRating) -> int:
+    """Use a stored tier, or lazily derive one for a legacy rating."""
+    return rating.worker_tier if rating.worker_tier is not None else derive_worker_tier(rating)
+
+
 def format_context_window(context_window: Optional[int]) -> str:
     """Format a token count compactly (e.g. ``200k``, ``1M``, ``?``)."""
     if context_window is None or context_window <= 0:
@@ -851,6 +883,9 @@ def format_rated_models_table(
                 f"- {slug} | fam={rating.family} | "
                 f"I:{rating.intelligence} C:{rating.coding} A:{rating.agentic} "
                 f"S:{rating.speed} $:{rating.cost_efficiency} Ctx:{ctx} | "
-                f"tier={rating.billing_tier} | effort: {eff} | roles={roles}"
+                f"billing_tier={rating.billing_tier} | "
+                f"worker_tier={effective_worker_tier(rating)} "
+                f"({'manual' if rating.worker_tier_override else 'derived' if rating.worker_tier is None else 'auto'}) | "
+                f"effort: {eff} | roles={roles}"
             )
     return "\n".join(lines) if lines else "(no models)"

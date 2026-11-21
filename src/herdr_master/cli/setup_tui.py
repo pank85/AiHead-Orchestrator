@@ -60,6 +60,7 @@ from herdr_master.core.model_ratings import (
     BILLING_TIERS,
     ModelEvaluationConfig,
     ModelRating,
+    effective_worker_tier,
     format_context_window,
     lookup_rating,
     merge_ratings,
@@ -2188,9 +2189,15 @@ class SetupTuiApp:
                 )
             )
             lines.append(Text(""))
+            tier_source = (
+                "manual" if r.worker_tier_override
+                else "derived" if r.worker_tier is None
+                else "auto"
+            )
             lines.append(
                 Text(
-                    f"  Family: {r.family}  |  Billing: {r.billing_tier}  |  "
+                    f"  Family: {r.family}  |  billing_tier={r.billing_tier}  |  "
+                    f"worker_tier={effective_worker_tier(r)} ({tier_source})  |  "
                     f"Context Window: {format_context_window(r.context_window)}",
                     style="cyan",
                 )

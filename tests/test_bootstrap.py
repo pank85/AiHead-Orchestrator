@@ -198,6 +198,31 @@ def test_bootstrap_ai_head_instructions_reflect_readiness(as_model, overrides, u
         assert "structured JSON responses" in instructions
 
 
+def test_bootstrap_carries_effective_pipeline_settings():
+    context = {
+        "entrypoint": "orchestration",
+        "intent": None,
+        "origin_cwd": "/tmp/project",
+        "session": "s",
+        "socket": "/tmp/sock",
+        "workspace_id": "w",
+        "owns_workspace": True,
+        "worker_mode": "quality",
+        "ratings": {"pi": {"model-a": {"intelligence": 90}}},
+        "agy_mode": "swarm",
+        "selected_harness": "agy",
+        "default_harness": "agy",
+    }
+    prompt = build_bootstrap_prompt("orchestration", context)
+    encoded = prompt.split(BOOTSTRAP_SENTINEL, 1)[1].split("```json", 1)[1].split("```", 1)[0]
+    document = json.loads(encoded)
+    assert document["worker_mode"] == "quality"
+    assert document["ratings"]["pi"]["model-a"]["intelligence"] == 90
+    assert document["agy_mode"] == "swarm"
+    assert document["selected_harness"] == "agy"
+    assert document["default_harness"] == "agy"
+
+
 def test_bootstrap_caller_is_ai_head_not_marked_busy_and_preserves_parent_pane_id():
     from herdr_master.pipeline.ai_head import AiHeadDiscovery
 

@@ -538,9 +538,9 @@ def test_prompt_injection_with_ask_autonomy_and_close_foreign_tabs():
         "1. Autonomous Decisions (status: 'decided'):"
     )
 
-    # Old sentinels remain present
+    # The structured decision remains available only within delegated authority.
     assert "Resolve routine technical and product choices autonomously" in sys_prompt
-    assert "Output status: 'decided'." in sys_prompt
+    assert "Output status: 'decided' only for an authorized technical decision." in sys_prompt
 
     # Verify decision prompt inherits the identical qualification and governing structure
     req = AiHeadDecisionRequest(
@@ -555,7 +555,7 @@ def test_prompt_injection_with_ask_autonomy_and_close_foreign_tabs():
         "1. Autonomous Decisions (status: 'decided'):"
     )
     assert "Resolve routine technical and product choices autonomously" in dec_prompt
-    assert "Output status: 'decided'." in dec_prompt
+    assert "Output status: 'decided' only for an authorized technical decision." in dec_prompt
 
 
 def test_utf8_bom_handling_and_credential_scan(tmp_path):

@@ -3,8 +3,10 @@
 from __future__ import annotations
 
 import json
+import re
 from pathlib import Path
 
+import pytest
 from typer.testing import CliRunner
 
 from herdr_master.cli.catalog import catalog_app
@@ -12,6 +14,7 @@ from herdr_master.cli.main import aihead_app
 from herdr_master.cli.setup_catalog import discover_model_catalog
 from herdr_master.cli.setup_tui import SetupTuiApp
 from herdr_master.core.available_models import AvailableModels
+from herdr_master.core.catalog import HarnessKind
 from herdr_master.core.config import (
     ErgoConfig,
     HerdrMasterConfig,
@@ -20,7 +23,19 @@ from herdr_master.core.config import (
     save_project_config,
 )
 from herdr_master.core.model_ratings import ModelRating, derive_recommended_roles
-from herdr_master.pipeline.squad import build_dynamic_coder_pool, resolve_squad
+from herdr_master.core.models import HarnessBinding, Squad
+from herdr_master.pipeline.squad import (
+    MODE_ROLE_TIER_GUIDANCE,
+    MODE_TIER_PREFERENCE,
+    WORKER_TIER_LABELS,
+    build_dynamic_coder_pool,
+    format_allowed_coder_models,
+    format_mode_tier_guidance,
+    preferred_coder_pool,
+    resolve_squad,
+    tier_preference_rank,
+    worker_tier_allowed,
+)
 from herdr_master.pipeline.triage import (
     RoutingPlan,
     parse_json_payload,
@@ -58,6 +73,84 @@ def _rating(
     )
     r.recommended_roles = derive_recommended_roles(r)
     return r
+
+
+def test_worker_tier_policy_helpers_and_mode_ordering():
+    assert WORKER_TIER_LABELS == {
+        1: "fast/cheap",
+        2: "decent/all-around",
+        3: "frontier/clever",
+    }
+    assert MODE_TIER_PREFERENCE == {
+        "balanced": (2, 1, 3),
+        "frugal": (1, 2, 3),
+        "quality": (3, 2, 1),
+        "fast": (1, 2, 3),
+    }
+    assert MODE_ROLE_TIER_GUIDANCE["quality"]["architect"] == (3,)
+    assert tier_preference_rank(3, "quality") == 0
+    assert tier_preference_rank(99, "balanced") == 3
+    assert worker_tier_allowed(3, very_hard=False, worker_mode="quality")
+    assert not worker_tier_allowed(3, very_hard=False, worker_mode="balanced")
+    assert worker_tier_allowed(3, very_hard=True, worker_mode="fast")
+    assert not worker_tier_allowed(0, very_hard=True, worker_mode="quality")
+    with pytest.raises(ValueError, match="very_hard"):
+        worker_tier_allowed(1, very_hard=1)  # type: ignore[arg-type]
+
+    pool = [
+        HarnessBinding(kind=HarnessKind.PI, model=f"model-{tier}")
+        for tier in (1, 2, 3)
+    ]
+    ratings = {
+        "pi": {
+            f"model-{tier}": _rating(
+                intel=70 + tier,
+                coding=70 + tier,
+                agentic=70 + tier,
+                speed=70 + tier,
+                cost=70 + tier,
+            ).model_copy(update={"worker_tier": tier})
+            for tier in (1, 2, 3)
+        }
+    }
+    assert [item.model for item in preferred_coder_pool(
+        pool, ratings, very_hard=False, worker_mode="balanced"
+    )] == ["model-2", "model-1"]
+    assert [item.model for item in preferred_coder_pool(
+        pool, ratings, very_hard=False, worker_mode="quality"
+    )] == ["model-3", "model-2", "model-1"]
+    assert [item.model for item in preferred_coder_pool(
+        pool, ratings, very_hard=True, worker_mode="frugal"
+    )] == ["model-1", "model-2", "model-3"]
+    guidance = format_mode_tier_guidance("fast")
+    for expected in (
+        "WORKER TIERS:", "1=fast/cheap", "2=decent/all-around",
+        "3=frontier/clever", "ROLE TIER GUIDANCE:", "not a one-to-one lock",
+    ):
+        assert expected in guidance
+    with pytest.raises(ValueError):
+        format_mode_tier_guidance("invalid")
+
+
+def test_allowed_coder_models_show_billing_and_effective_worker_tier():
+    rating = _rating(
+        intel=88,
+        coding=89,
+        agentic=87,
+        speed=70,
+        cost=65,
+        billing="subscription",
+    )
+    squad = Squad(
+        worker_pool=[HarnessBinding(kind=HarnessKind.PI, model="tiered-model")]
+    )
+
+    output = format_allowed_coder_models(
+        squad,
+        ratings={"pi": {"tiered-model": rating}},
+    )
+
+    assert "billing_tier=subscription | worker_tier=3 (derived)" in output
 
 
 def _seeded_config(tmp_path: Path) -> Path:
@@ -422,8 +515,9 @@ def test_run_triage_end_to_end_self_repair_and_cli(tmp_path: Path):
     # Verify top-level `aihead triage --help` is wired
     help_res = runner.invoke(aihead_app, ["triage", "--help"])
     assert help_res.exit_code == 0
-    assert "--task" in help_res.output
-    assert "--profile" in help_res.output
+    help_text = re.sub(r"\x1b\[[0-9;]*m", "", help_res.output)
+    assert "--task" in help_text
+    assert "--profile" in help_text
 
     # Verify ErgoConfig worker_mode round-trip
     cfg = load_project_config(cfg_path)

@@ -31,6 +31,7 @@ Covers:
 import asyncio
 import inspect
 import json
+import re
 import tempfile
 from pathlib import Path
 from types import SimpleNamespace
@@ -445,35 +446,23 @@ def test_build_interactive_ai_head_prompt_defaults():
 
     # Plan Approval & Architectural Alignment Gate
     assert "Plan Approval & Architectural Alignment Gate:" in prompt
-    assert "Plain-Language Plan Presentation:" in prompt
-    assert "Mandatory Architectural Alignment:" in prompt
-    assert "User Escalation When No Solution Exists:" in prompt
+    assert "one plain-language plan" in prompt
+    assert "Check alignment with existing architecture" in prompt
+    assert "while waiting continue only safe unrelated work" in prompt
 
-    # Hierarchical Parent Notification Protocol
-    assert "Hierarchical Parent-Child Notification Protocol (One Level Up):" in prompt
-    assert "HERDR_PARENT_PANE_ID" in prompt
-    assert "herdr agent prompt <PARENT_PANE_ID>" in prompt
-    assert (
-        "Level 3 (Coders / Reviewer / Council Members) notify Level 2 "
-        "(Ergo Orchestrator / Council Coordinator)" in prompt
-    )
-    assert (
-        "Level 2 (Ergo Orchestrator / Council Coordinator / Job Worker) notifies Level 1 "
-        "(AiHead / Master Coordinator)" in prompt
-    )
+    assert "Direct Parent and Child Watcher:" in prompt
+    assert "$HERDR_PANE_ID" in prompt
+    assert "herdr agent prompt <DIRECT_PARENT_PANE_ID>" in prompt
+    assert "not the requester's pane, inherited parent, or focused pane" in prompt
 
     assert "Update: <short>" in prompt
-    assert "Plan: <short>" in prompt
-    assert "Info: <short>" in prompt
-    assert "even when" in prompt and "approved automatically" in prompt
-    assert "User ack/reply for Update tab <tab-id>: <response>" in prompt
+    assert "Plan/Update/Info" in prompt
+    assert "acknowledgement is not approval" in prompt
     assert "interactive and stays open waiting for the user to see it" in prompt
     assert "--focus" in prompt
     assert "$HERDR_WORKSPACE_ID" in prompt
-    assert "herdr tab close <tab-id>" in prompt
-    assert "not a shell reader" in prompt
-    assert "A shell reader prints the text" not in prompt
-    assert "User answer for <qid> tab <tab-id>: <answer>" in prompt
+    assert "Verify an actual user reply" in prompt
+    assert "not proof of user origin" in prompt
 
     # Safety Guardrails
     assert "Safety Guardrails:" in prompt
@@ -482,7 +471,7 @@ def test_build_interactive_ai_head_prompt_defaults():
 
     # Greeting section when no task is provided
     assert "=== READINESS & GREETING ===" in prompt
-    assert "Greet the user" in prompt
+    assert "Identify yourself as AiHead and report readiness" in prompt
 
 
 def test_build_interactive_ai_head_prompt_with_custom_soul_and_cwd():
@@ -513,9 +502,9 @@ def test_build_interactive_ai_head_prompt_with_initial_task():
 
 @pytest.mark.asyncio
 async def test_launch_ai_head_inside_herdr_split_snapshot_fallback():
-    """When split_pane does not return pane_id, it should fall back to snapshot pane inspection."""
+    """A missing split target must never select one of several preexisting neighbors."""
     client = AsyncMock(spec=HerdrClient)
-    client.get_agent.return_value = {"agent": {"agent_status": "idle"}}
+    client.get_agent.side_effect = lambda pane_id: {"agent": {"pane_id": pane_id, "agent_status": "idle"}}
     # split_pane returns generic result without pane_id
     client.split_pane = AsyncMock(return_value={"status": "ok"})
     client.swap_panes = AsyncMock(return_value={"status": "ok"})
@@ -525,8 +514,9 @@ async def test_launch_ai_head_inside_herdr_split_snapshot_fallback():
 
     snap = SimpleNamespace(
         panes=[
-            SimpleNamespace(pane_id="orig-pane-1", tab_id="tab-20"),
-            SimpleNamespace(pane_id="discovered-split-pane", tab_id="tab-20"),
+            SimpleNamespace(pane_id="ws-10:p1", tab_id="tab-20"),
+            SimpleNamespace(pane_id="ws-10:p2", tab_id="tab-20"),
+            SimpleNamespace(pane_id="ws-10:p3", tab_id="tab-20"),
         ]
     )
     client.get_snapshot = AsyncMock(return_value=snap)
@@ -537,29 +527,23 @@ async def test_launch_ai_head_inside_herdr_split_snapshot_fallback():
         is_inside_herdr=True,
         workspace_id="ws-10",
         tab_id="tab-20",
-        pane_id="orig-pane-1",
+        pane_id="ws-10:p1",
     )
 
     with (
         patch("herdr_master.pipeline.launcher.resolve_launch_context", return_value=ctx),
-        patch("herdr_master.pipeline.launcher.load_project_config") as mock_load_cfg,
+        patch("herdr_master.pipeline.launcher.load_effective_project_config") as mock_load_cfg,
     ):
         mock_cfg = MagicMock()
         mock_cfg.ai_head = AiHeadConfig(split=True)
         mock_load_cfg.return_value = mock_cfg
 
-        res = await launch_ai_head(
-            client=client,
-            split=True,
-            cwd="/tmp/my-project",
-        )
+        with pytest.raises(RuntimeError, match="Could not determine new pane ID"):
+            await launch_ai_head(client=client, split=True, cwd="/tmp/my-project")
 
-    assert res["pane_id"] == "discovered-split-pane"
-    assert res["secondary_pane_id"] == "orig-pane-1"
-    client.swap_panes.assert_awaited_once_with(
-        source_pane_id="orig-pane-1",
-        target_pane_id="discovered-split-pane",
-    )
+    client.swap_panes.assert_not_awaited()
+    client.focus_pane.assert_not_awaited()
+    client.start_agent.assert_not_awaited()
 
 
 @pytest.mark.asyncio
@@ -567,7 +551,9 @@ async def test_launch_ai_head_inside_herdr_split_failure_raises_runtime_error():
     """When split_pane returns no new pane and snapshot cannot find one, RuntimeError is raised."""
     client = AsyncMock(spec=HerdrClient)
     client.split_pane = AsyncMock(return_value={"status": "empty"})
-    client.get_snapshot = AsyncMock(return_value=SimpleNamespace(panes=[]))
+    client.get_snapshot = AsyncMock(return_value=SimpleNamespace(panes=[
+        SimpleNamespace(pane_id="ws-10:p1", tab_id="tab-20")
+    ]))
 
     ctx = HerdrContext(
         session_name="work-session",
@@ -575,12 +561,12 @@ async def test_launch_ai_head_inside_herdr_split_failure_raises_runtime_error():
         is_inside_herdr=True,
         workspace_id="ws-10",
         tab_id="tab-20",
-        pane_id="orig-pane-1",
+        pane_id="ws-10:p1",
     )
 
     with (
         patch("herdr_master.pipeline.launcher.resolve_launch_context", return_value=ctx),
-        patch("herdr_master.pipeline.launcher.load_project_config") as mock_load_cfg,
+        patch("herdr_master.pipeline.launcher.load_effective_project_config") as mock_load_cfg,
     ):
         mock_cfg = MagicMock()
         mock_cfg.ai_head = AiHeadConfig(split=True)
@@ -603,9 +589,13 @@ async def test_launch_ai_head_inside_herdr_split_failure_raises_runtime_error():
 async def test_launch_ai_head_inside_herdr_split_applied():
     """Inside Herdr with split=True, split, swap, focus, and prompt the pane."""
     client = AsyncMock(spec=HerdrClient)
-    client.get_agent.return_value = {"agent": {"agent_status": "idle"}}
-    client.current_pane = AsyncMock(return_value={"pane_id": "orig-pane-1"})
-    client.split_pane = AsyncMock(return_value={"pane_id": "new-pane-2"})
+    client.get_snapshot = AsyncMock(return_value=SimpleNamespace(panes=[
+        SimpleNamespace(pane_id="ws-10:p1", tab_id="tab-20"),
+        SimpleNamespace(pane_id="ws-10:p8", tab_id="tab-20"),
+    ]))
+    client.get_agent.side_effect = lambda pane_id: {"agent": {"pane_id": pane_id, "agent_status": "idle"}}
+    client.current_pane = AsyncMock(return_value={"pane_id": "ws-10:p1"})
+    client.split_pane = AsyncMock(return_value={"pane_id": "ws-10:p2"})
     client.swap_panes = AsyncMock(return_value={"status": "ok"})
     client.focus_pane = AsyncMock(return_value={"status": "ok"})
     client.start_agent = AsyncMock(return_value={"status": "ok"})
@@ -619,12 +609,12 @@ async def test_launch_ai_head_inside_herdr_split_applied():
         is_inside_herdr=True,
         workspace_id="ws-10",
         tab_id="tab-20",
-        pane_id="orig-pane-1",
+        pane_id="ws-10:p1",
     )
 
     with (
         patch("herdr_master.pipeline.launcher.resolve_launch_context", return_value=ctx),
-        patch("herdr_master.pipeline.launcher.load_project_config") as mock_load_cfg,
+        patch("herdr_master.pipeline.launcher.load_effective_project_config") as mock_load_cfg,
     ):
         mock_cfg = MagicMock()
         mock_cfg.ai_head = AiHeadConfig(split=True)
@@ -643,8 +633,8 @@ async def test_launch_ai_head_inside_herdr_split_applied():
     # Verify return dict
     assert res["session"] == "work-session"
     assert res["workspace_id"] == "ws-10"
-    assert res["pane_id"] == "new-pane-2"
-    assert res["secondary_pane_id"] == "orig-pane-1"
+    assert res["pane_id"] == "ws-10:p2"
+    assert res["secondary_pane_id"] == "ws-10:p1"
     assert res["split"] is True
     assert res["harness"] == "pi"
     assert res["model"] == "openai-codex/gpt-6.1-sol"
@@ -653,17 +643,17 @@ async def test_launch_ai_head_inside_herdr_split_applied():
     # Verify execution sequence
     client.split_pane.assert_awaited_once_with(
         direction="right",
-        target_pane_id="orig-pane-1",
+        target_pane_id="ws-10:p1",
         cwd="/tmp/my-project",
         focus=True,
     )
     client.swap_panes.assert_awaited_once_with(
-        source_pane_id="orig-pane-1",
-        target_pane_id="new-pane-2",
+        source_pane_id="ws-10:p1",
+        target_pane_id="ws-10:p2",
     )
-    client.focus_pane.assert_awaited_once_with("new-pane-2")
+    client.focus_pane.assert_awaited_once_with("ws-10:p2")
     client.start_agent.assert_awaited_once()
-    assert client.start_agent.await_args.kwargs["pane_id"] == "new-pane-2"
+    assert client.start_agent.await_args.kwargs["pane_id"] == "ws-10:p2"
     assert client.start_agent.await_args.kwargs["kind"] == "pi"
 
     client.prompt_agent.assert_awaited_once()
@@ -675,9 +665,12 @@ async def test_launch_ai_head_inside_herdr_split_applied():
 async def test_launch_ai_head_inside_herdr_split_discovers_active_pane_via_current_pane():
     """When ctx.pane_id is None inside Herdr, discover the active pane via current_pane()."""
     client = AsyncMock(spec=HerdrClient)
-    client.get_agent.return_value = {"agent": {"agent_status": "idle"}}
-    client.current_pane = AsyncMock(return_value={"pane_id": "discovered-pane-5"})
-    client.split_pane = AsyncMock(return_value={"pane_id": "new-pane-9"})
+    client.get_snapshot = AsyncMock(return_value=SimpleNamespace(panes=[
+        SimpleNamespace(pane_id="ws-x:p5", tab_id="tab-x")
+    ]))
+    client.get_agent.side_effect = lambda pane_id: {"agent": {"pane_id": pane_id, "agent_status": "idle"}}
+    client.current_pane = AsyncMock(return_value={"pane_id": "ws-x:p5"})
+    client.split_pane = AsyncMock(return_value={"pane_id": "ws-x:p9"})
     client.swap_panes = AsyncMock(return_value={"status": "ok"})
     client.focus_pane = AsyncMock(return_value={"status": "ok"})
     client.start_agent = AsyncMock(return_value={"status": "ok"})
@@ -694,7 +687,7 @@ async def test_launch_ai_head_inside_herdr_split_discovers_active_pane_via_curre
 
     with (
         patch("herdr_master.pipeline.launcher.resolve_launch_context", return_value=ctx),
-        patch("herdr_master.pipeline.launcher.load_project_config") as mock_load_cfg,
+        patch("herdr_master.pipeline.launcher.load_effective_project_config") as mock_load_cfg,
     ):
         mock_cfg = MagicMock()
         mock_cfg.ai_head = AiHeadConfig(split=True)
@@ -709,12 +702,12 @@ async def test_launch_ai_head_inside_herdr_split_discovers_active_pane_via_curre
     client.current_pane.assert_awaited_once()
     client.split_pane.assert_awaited_once_with(
         direction="right",
-        target_pane_id="discovered-pane-5",
+        target_pane_id="ws-x:p5",
         cwd="/tmp/my-project",
         focus=True,
     )
-    assert res["pane_id"] == "new-pane-9"
-    assert res["secondary_pane_id"] == "discovered-pane-5"
+    assert res["pane_id"] == "ws-x:p9"
+    assert res["secondary_pane_id"] == "ws-x:p5"
     assert res["split"] is True
 
 
@@ -738,7 +731,7 @@ async def test_launch_ai_head_inside_herdr_no_split():
         is_inside_herdr=True,
         workspace_id="ws-10",
         tab_id="tab-20",
-        pane_id="orig-pane-1",
+        pane_id="ws-10:p1",
     )
 
     with (
@@ -823,11 +816,18 @@ async def test_launch_ai_head_with_explicit_workspace():
         (HarnessKind.HERMES, "openai-codex/gpt-6.1-terra"),
     ],
 )
-async def test_launch_ai_head_binding_overrides(harness, model):
+async def test_launch_ai_head_binding_overrides(harness, model, tmp_path, monkeypatch):
     """Overrides for harness, model, and effort should propagate into launch metadata."""
+    monkeypatch.setenv("HOME", str(tmp_path))
+    settings = tmp_path / ".gemini" / "antigravity-cli" / "settings.json"
+    settings.parent.mkdir(parents=True)
+    settings.write_text(json.dumps({"trustedWorkspaces": [str(Path('/tmp/my-project').resolve())]}))
     client = AsyncMock(spec=HerdrClient)
-    client.get_agent = AsyncMock(return_value={"agent": {"agent_status": "idle"}})
-    client.split_pane = AsyncMock(return_value={"pane_id": "pane-agy-1"})
+    client.get_agent = AsyncMock(side_effect=lambda pane_id: {"agent": {"pane_id": pane_id, "agent_status": "idle"}})
+    client.get_snapshot = AsyncMock(return_value=SimpleNamespace(panes=[
+        SimpleNamespace(pane_id="ws-b:p1", tab_id="tab-b")
+    ]))
+    client.split_pane = AsyncMock(return_value={"pane_id": "ws-b:p2"})
     client.swap_panes = AsyncMock(return_value={"status": "ok"})
     client.focus_pane = AsyncMock(return_value={"status": "ok"})
     client.start_agent = AsyncMock(return_value={"status": "ok"})
@@ -839,7 +839,7 @@ async def test_launch_ai_head_binding_overrides(harness, model):
         is_inside_herdr=True,
         workspace_id="ws-b",
         tab_id="tab-b",
-        pane_id="pane-orig-b",
+        pane_id="ws-b:p1",
     )
 
     with patch("herdr_master.pipeline.launcher.resolve_launch_context", return_value=ctx):
@@ -865,7 +865,6 @@ async def test_launch_ai_head_binding_overrides(harness, model):
             "gpt-6.1-terra",
             "--reasoning",
             "high",
-            "--yolo",
         ]
         assert "You are AiHead" in client.prompt_agent.await_args.args[1]
 
@@ -879,19 +878,22 @@ def test_cli_aihead_and_head_help():
     """Both 'aihead' and 'head' commands should produce valid help output."""
     res_aihead = runner.invoke(app, ["aihead", "--help"], env={"COLUMNS": "200"})
     assert res_aihead.exit_code == 0
-    assert "Launch an interactive AiHead terminal session" in res_aihead.output
-    assert "--split" in res_aihead.output
-    assert "--no-split" in res_aihead.output
-    assert "--skip-permissions" in res_aihead.output
-    assert "--no-skip-permissions" in res_aihead.output
-    assert "--secondary" in res_aihead.output
-    assert "--task" in res_aihead.output
+    # Rich may insert ANSI style sequences between the hyphens of an option.
+    aihead_help = re.sub(r"\x1b\[[0-9;]*m", "", res_aihead.output)
+    assert "Launch an interactive AiHead terminal session" in aihead_help
+    assert "--split" in aihead_help
+    assert "--no-split" in aihead_help
+    assert "--skip-permissions" in aihead_help
+    assert "--no-skip-permissions" in aihead_help
+    assert "--secondary" in aihead_help
+    assert "--task" in aihead_help
 
     res_head = runner.invoke(app, ["head", "--help"], env={"COLUMNS": "200"})
     assert res_head.exit_code == 0
-    assert "Launch an interactive AiHead terminal session" in res_head.output
-    assert "--skip-permissions" in res_head.output
-    assert "--no-skip-permissions" in res_head.output
+    head_help = re.sub(r"\x1b\[[0-9;]*m", "", res_head.output)
+    assert "Launch an interactive AiHead terminal session" in head_help
+    assert "--skip-permissions" in head_help
+    assert "--no-skip-permissions" in head_help
 
 
 def test_cli_aihead_default_invokes_split():
@@ -1187,9 +1189,12 @@ def _ai_head_toml(
 
 def _inside_launch_client() -> AsyncMock:
     client = AsyncMock(spec=HerdrClient)
-    client.get_agent.return_value = {"agent": {"agent_status": "idle"}}
-    client.current_pane = AsyncMock(return_value={"pane_id": "orig-pane-1"})
-    client.split_pane = AsyncMock(return_value={"pane_id": "new-pane-2"})
+    client.get_snapshot = AsyncMock(return_value=SimpleNamespace(panes=[
+        SimpleNamespace(pane_id="ws-10:p1", tab_id="tab-20")
+    ]))
+    client.get_agent.side_effect = lambda pane_id: {"agent": {"pane_id": pane_id, "agent_status": "idle"}}
+    client.current_pane = AsyncMock(return_value={"pane_id": "ws-10:p1"})
+    client.split_pane = AsyncMock(return_value={"pane_id": "ws-10:p2"})
     client.swap_panes = AsyncMock(return_value={"status": "ok"})
     client.focus_pane = AsyncMock(return_value={"status": "ok"})
     client.start_agent = AsyncMock(return_value={"status": "ok"})
@@ -1211,11 +1216,11 @@ async def _launch_args(
         is_inside_herdr=True,
         workspace_id="ws-10",
         tab_id="tab-20",
-        pane_id="orig-pane-1",
+        pane_id="ws-10:p1",
     )
     with (
         patch("herdr_master.pipeline.launcher.resolve_launch_context", return_value=ctx),
-        patch("herdr_master.pipeline.launcher.ensure_agy_trusted"),
+        patch("herdr_master.pipeline.parent_contract.require_existing_agy_trust"),
     ):
         await launch_ai_head(
             client=client,
@@ -1248,9 +1253,8 @@ async def test_launch_ai_head_permission_and_effort_precedence(tmp_path: Path):
         "gemini-2.5-pro",
         "--effort",
         "high",
-        "--dangerously-skip-permissions",
     ]
-    assert override_true.count("--dangerously-skip-permissions") == 1
+    assert "--dangerously-skip-permissions" not in override_true
     assert override_true.count("--effort") == 1
 
     override_false = await _launch_args(
@@ -1269,7 +1273,6 @@ async def test_launch_ai_head_permission_and_effort_precedence(tmp_path: Path):
     assert missing_key == [
         "--model",
         "gemini-2.5-pro",
-        "--dangerously-skip-permissions",
     ]
 
     broken = tmp_path / "broken.toml"
@@ -1281,11 +1284,11 @@ async def test_launch_ai_head_permission_and_effort_precedence(tmp_path: Path):
         is_inside_herdr=True,
         workspace_id="ws-10",
         tab_id="tab-20",
-        pane_id="orig-pane-1",
+        pane_id="ws-10:p1",
     )
     with (
         patch("herdr_master.pipeline.launcher.resolve_launch_context", return_value=ctx),
-        patch("herdr_master.pipeline.launcher.ensure_agy_trusted"),
+        patch("herdr_master.pipeline.parent_contract.require_existing_agy_trust"),
     ):
         await launch_ai_head(
             client=client,
@@ -1307,7 +1310,7 @@ async def test_launch_ai_head_permission_and_effort_precedence(tmp_path: Path):
     fallback_true, explicit_false = (
         call.kwargs["args"] for call in client.start_agent.await_args_list[-2:]
     )
-    assert "--dangerously-skip-permissions" in fallback_true
+    assert "--dangerously-skip-permissions" not in fallback_true
     assert "--dangerously-skip-permissions" not in explicit_false
 
     pi_args = await _launch_args(
@@ -1381,6 +1384,8 @@ async def test_launch_ai_head_legacy_positional_order_and_permission_keyword(tmp
         "name": "legacy-head",
         "focus": False,
         "dangerously_skip_permissions": None,
+        "delegated": False,
+        "parent_pane_id": None,
         "automode": None,
     }
 
@@ -1390,7 +1395,7 @@ async def test_launch_ai_head_legacy_positional_order_and_permission_keyword(tmp
         is_inside_herdr=True,
         workspace_id="ws-10",
         tab_id="tab-20",
-        pane_id="orig-pane-1",
+        pane_id="ws-10:p1",
     )
     allocated = _Allocated(
         client=legacy_values[0],
@@ -1436,13 +1441,16 @@ async def test_launch_ai_head_legacy_positional_order_and_permission_keyword(tmp
         cwd=str(tmp_path),
         fresh_workspace=False,
         focus=False,
+        parent_pane_id=None,
+        delegated=False,
+        adopt_invoker=False,
     )
 
     old_split_client = _inside_launch_client()
     explicit_override_client = _inside_launch_client()
     with (
         patch("herdr_master.pipeline.launcher.resolve_launch_context", return_value=ctx),
-        patch("herdr_master.pipeline.launcher.ensure_agy_trusted"),
+        patch("herdr_master.pipeline.parent_contract.require_existing_agy_trust"),
     ):
         await launch_ai_head(
             old_split_client,
@@ -1467,7 +1475,7 @@ async def test_launch_ai_head_legacy_positional_order_and_permission_keyword(tmp
     old_args = old_split_client.start_agent.await_args.kwargs["args"]
     assert "--dangerously-skip-permissions" not in old_args
     explicit_args = explicit_override_client.start_agent.await_args.kwargs["args"]
-    assert "--dangerously-skip-permissions" in explicit_args
+    assert "--dangerously-skip-permissions" not in explicit_args
 
 
 @pytest.mark.parametrize(
@@ -1563,3 +1571,54 @@ def test_cli_effort_override_does_not_discard_permission_override(tmp_path: Path
     kwargs = launch_mock.await_args.kwargs
     assert kwargs["effort"] is EffortLevel.LOW
     assert kwargs["dangerously_skip_permissions"] is False
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("result", [
+    {"pane_id": "ws-10:p8"},  # existing neighbor, not the invoking pane
+    {"pane_id": "ws-10:p2", "new_pane_id": "ws-10:p3"},
+    {"pane_id": "other:p2"},
+])
+async def test_split_rejects_preexisting_ambiguous_and_cross_workspace_results(result, tmp_path, monkeypatch):
+    monkeypatch.delenv("HERDR_PANE_ID", raising=False)
+    client = _inside_launch_client()
+    client.get_snapshot.return_value = SimpleNamespace(panes=[
+        SimpleNamespace(pane_id="ws-10:p1", tab_id="tab-20"),
+        SimpleNamespace(pane_id="ws-10:p8", tab_id="tab-20"),
+        SimpleNamespace(pane_id="ws-10:p9", tab_id="tab-20"),
+    ])
+    client.split_pane.return_value = result
+    ctx = HerdrContext(session_name="work-session", socket_path=Path("/tmp/herdr.sock"),
+                       is_inside_herdr=True, workspace_id="ws-10", tab_id="tab-20", pane_id="ws-10:p1")
+    with patch("herdr_master.pipeline.launcher.resolve_launch_context", return_value=ctx):
+        with pytest.raises(RuntimeError, match="Could not determine new pane ID"):
+            await launch_ai_head(client=client, split=True, cwd=str(tmp_path))
+    client.split_pane.assert_awaited_once()
+    client.swap_panes.assert_not_awaited()
+    client.focus_pane.assert_not_awaited()
+    client.start_agent.assert_not_awaited()
+
+
+@pytest.mark.asyncio
+async def test_split_snapshot_wrong_tab_fails_before_split(tmp_path, monkeypatch):
+    monkeypatch.delenv("HERDR_PANE_ID", raising=False)
+    client = _inside_launch_client()
+    client.get_snapshot.return_value = SimpleNamespace(panes=[SimpleNamespace(pane_id="ws-10:p1", tab_id="other")])
+    ctx = HerdrContext(session_name="work-session", socket_path=Path("/tmp/herdr.sock"),
+                       is_inside_herdr=True, workspace_id="ws-10", tab_id="tab-20", pane_id="ws-10:p1")
+    with patch("herdr_master.pipeline.launcher.resolve_launch_context", return_value=ctx):
+        with pytest.raises(RuntimeError, match="expected tab"):
+            await launch_ai_head(client=client, split=True, cwd=str(tmp_path))
+    client.split_pane.assert_not_awaited()
+    client.swap_panes.assert_not_awaited()
+    client.start_agent.assert_not_awaited()
+
+
+def test_adopt_client_rejects_mismatched_string_socket():
+    from herdr_master.pipeline.launcher import _adopt_client
+    ctx = HerdrContext(session_name="work-session", socket_path=Path("/tmp/right.sock"),
+                       is_inside_herdr=True, workspace_id="ws-10", tab_id="tab-20", pane_id="ws-10:p1")
+    client = SimpleNamespace(socket_path="/tmp/wrong.sock")
+    with patch("herdr_master.pipeline.launcher.HerdrClient") as factory:
+        assert _adopt_client(client, ctx) is factory.return_value
+        factory.assert_called_once_with(session="work-session", socket_path=Path("/tmp/right.sock"))

@@ -1002,3 +1002,35 @@ def test_ergo_coordinator_roundtrip_and_absent_default(tmp_path):
     save_project_config(HerdrMasterConfig(), default_path)
     with open(default_path, "rb") as handle:
         assert "ergo" not in tomllib.load(handle)
+
+
+def test_effective_project_config_inherits_only_omitted_values(tmp_path):
+    from herdr_master.core.config import load_effective_project_config, load_project_config
+
+    home = tmp_path / "home"
+    project = home / "projects" / "repo"
+    project.mkdir(parents=True)
+    (home / ".herdr-master.toml").write_text(
+        '[general]\ndefault_session = "home-session"\n'
+        '[ai_head]\nautomode = true\nrouting_profile = "quality"\n'
+        '[orchestration]\nagy_mode = "swarm"\nworker_mode = "fast"\n'
+        'default_harness = "pi"\n'
+        '[orchestration.harnesses.pi]\nscout_model = "openai/gpt-6.1-sol"\n',
+        encoding="utf-8",
+    )
+    config_path = project / ".herdr-master.toml"
+    config_path.write_text('[general]\ntarget_integration_branch = "release"\n', encoding="utf-8")
+
+    effective = load_effective_project_config(config_path)
+    raw = load_project_config(config_path)
+    assert effective.general.default_session == "home-session"
+    assert effective.general.target_integration_branch == "release"
+    assert effective.ai_head.automode is True
+    assert effective.ai_head.routing_profile == "quality"
+    assert effective.orchestration.agy_mode == "swarm"
+    assert effective.orchestration.worker_mode == "fast"
+    assert effective.orchestration.effective_default_harness.value == "pi"
+    assert effective.orchestration.for_harness("pi").scout_model == "openai/gpt-6.1-sol"
+    assert raw.ai_head.automode is False
+    assert raw.orchestration.agy_mode == "subagents"
+    assert "ai_head" not in config_path.read_text(encoding="utf-8")

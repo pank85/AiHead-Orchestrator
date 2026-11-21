@@ -769,7 +769,7 @@ def test_ergo_coordinator_flag_forwards_binding_and_defaults_to_none(monkeypatch
     assert launch.await_args_list[1].kwargs["coordinator"] is None
 
 
-def test_subcommands_always_request_fresh_workspace_and_delegate_inside_herdr(
+def test_subcommands_request_fresh_workspace_and_leave_caller_for_preflight(
     monkeypatch, tmp_path
 ):
     monkeypatch.chdir(tmp_path)
@@ -792,5 +792,6 @@ def test_subcommands_always_request_fresh_workspace_and_delegate_inside_herdr(
             result = runner.invoke(app, [*args, "--no-attach"])
         assert result.exit_code == 0, f"{subcmd}: {result.output}"
         assert launch.await_args.kwargs["fresh_workspace"] is True, subcmd
-        assert launch.await_args.kwargs["delegated"] is True, subcmd
-        assert launch.await_args.kwargs["parent_pane_id"] == "w-coord:p1", subcmd
+        assert "delegated" not in launch.await_args.kwargs, subcmd
+        assert "parent_pane_id" not in launch.await_args.kwargs, subcmd
+        assert os.environ["HERDR_PANE_ID"] == "w-coord:p1", subcmd

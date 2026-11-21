@@ -9,7 +9,7 @@ The `/aihead` skill positions **AiHead** as the authoritative interactive AI tec
 ### AiHead vs. Herdr-Master
 While both systems coordinate multi-agent engineering workflows, their relationship to the human operator differs fundamentally:
 
-- **Herdr-Master (`herdr-master`)**: An orchestration coordinator that acts as an assistant to the human. When trade-offs, ambiguities, model choices, or plan approvals arise, Herdr-Master escalates them to the human operator via interactive question tabs.
+- **Herdr-Master (`herdr-master`)**: An orchestration coordinator that acts as an assistant to the human. A verified parentless root may escalate trade-offs, ambiguities, model choices, or plan approvals to the human via interactive question tabs. When delegated, Herdr-Master routes those questions only to the concrete direct-parent pane named in its own first prompt and never opens user question tabs directly.
 - **AiHead (`aihead`)**: Acts as the **authoritative human technical lead** within the orchestration ecosystem. AiHead evaluates user objectives, selects execution paths, makes technical trade-offs, verifies architectural alignment, and approves implementation plans autonomously within its delegated scope—shielding the human operator from routine procedural overhead.
 
 ```
@@ -111,15 +111,15 @@ AiHead never ties up the main chat. Every delegated task launches into its own b
 3. The returned root pane serves as the job root. Sub-jobs of that job stay in that job workspace (`herdr tab create --workspace "$JOB_WORKSPACE_ID" ... --no-focus`) and must not call `herdr workspace create`.
 
 ### Mandatory AiHead Parent Directive
-Every delegated child receives AiHead's pane ID (`$HERDR_PANE_ID`) as its direct parent and must adhere to this instruction block:
+The first task prompt binds the actual immediate supervisor. A Herdr child receives that coordinator's concrete pane ID and sends every question, decision request, blocker, and completion only there; environment/bootstrap values corroborate the route. A missing delegated route stops before spawn. Only an intentional root handles user decisions directly. Substitute AiHead's actual pane ID for `<DIRECT_PARENT_PANE_ID>` in this first-task instruction block:
 
 ```text
 AiHead Parent Directive:
-AiHead is active at pane $HERDR_PANE_ID as the authoritative technical decision-maker.
+Your direct parent is AiHead at <DIRECT_PARENT_PANE_ID>. Contact only this pane, never another pane or the user.
 1. DO NOT prompt the human user for routine decisions, working-tree handling, unitTestsMode, or Plan Approval Gates, and do not open a user question tab.
 2. For every question, decision, or plan approval, prompt AiHead directly:
-   herdr agent prompt $HERDR_PANE_ID "<question / plan>"
-3. Notify AiHead immediately via herdr agent prompt $HERDR_PANE_ID:
+   herdr agent prompt <DIRECT_PARENT_PANE_ID> "<question / plan / blocker>"
+3. Notify AiHead immediately via herdr agent prompt <DIRECT_PARENT_PANE_ID>:
    - For an implementation pipeline, upon completion of the assigned branch commit and review, report the commit, review, and actual verification.
    - For plan-only Council, upon finalization report the outcome and RUN_DIR/final_plan.md; do not wait for or make an implementation commit.
    - If either workflow is blocked, report the blocker immediately.
@@ -128,6 +128,10 @@ AiHead is active at pane $HERDR_PANE_ID as the authoritative technical decision-
 ---
 
 ## 5. Plan Approval & Architectural Alignment Gate
+
+Automode handles routine reversible work without waiting for the user. Batch materially consequential choices into a plan checkpoint; keep non-automode and explicit gates. A technical `APPROVED` is not permission to bypass security or irreversibly destroy state. Those actions need explicit user approval for the specific target and action, relayed through the direct chain. Trust prompts and silence never grant it.
+
+Only AiHead within its authorized scope or the human may approve a gated plan. Record the exact run ID and plan version and who approved it, then return the decision to the requesting direct child for relay down the chain. An intermediary coordinator cannot self-approve or mint approval. A routine automode update outside a gate is not approval.
 
 Whenever a child pipeline submits a plan (from an Architect in `/ergo`, `/orchestration`, or a proposal from `/council`):
 
@@ -182,7 +186,7 @@ To eliminate orphaned finished jobs and prevent noisy cross-talk, all communicat
 ```
 Level 1: AiHead (Coordinator)
              ▲
-             │ herdr agent prompt $HERDR_PARENT_PANE_ID "..."
+             │ herdr agent prompt <direct-parent-pane-id-from-AiHead's-first-prompt> "..."
              ▼
 Level 2: Ergo Orchestrator / Council Coordinator / Orchestration Pane
              ▲
@@ -192,7 +196,7 @@ Level 3: Specialist Workers (Scout, Architect, Coders, Reviewer, Council Members
 ```
 
 - **Level 3 workers NEVER notify AiHead directly.** They notify only their direct Level 2 orchestrator (`ORCHESTRATOR_PANE_ID` or `COORDINATOR_PANE_ID`).
-- **Level 2 orchestrators notify Level 1 (AiHead)** for approval gates, blockers, and completed branch commits.
+- **Level 2 orchestrators notify Level 1 (AiHead)** using the concrete AiHead pane named in their own first prompt for approval gates, blockers, and completed branch commits. Environment/bootstrap values only corroborate that pane; if it is missing or ambiguous, fail closed. Launcher-tagged terminal reports use `parent_contract complete`.
 - **Non-Blocking Execution**: Parents NEVER poll or block in synchronous sleep loops. They dispatch instructions and return control immediately. Notifications wake the parent reactively.
 
 ---
@@ -208,12 +212,13 @@ pane_id	role	tab_id	branch	worktree	run_dir	status	last_heartbeat
 - Closing a child immediately updates the row to `status=closed`.
 - Rows are removed only after the child is closed and its work is integrated.
 
-### 10-Minute Read-Only Background Monitor
-A lightweight background monitor pane reconciles `children.tsv` against live sessions via `herdr agent get` and `herdr agent read` every 10 minutes. The monitor is strictly read-only: it detects stalled or finished-without-report panes without altering code or closing tabs.
+### Run-scoped child health
+
+After the first confirmed child is registered, the spawning coordinator starts one detached `python -m herdr_master.pipeline.child_watch --run-dir "$RUN_DIR" --parent-pane "$PARENT"` process for its private mode-700 run directory, in the verified session (pin `--parent-generation` for detached handoff). It checks confirmed child identities every 600 seconds and reports verified loss only to that coordinator, not to the user. Idle or blocked is not dead; RPC uncertainty is unknown. This is separate from startup checks and completion callbacks; files alone do not establish success and no child is automatically retried. Stop with `touch "$RUN_DIR/child-watch.stop"`; never reuse the run directory or kill by watcher PID. No monitor agent or pane is created.
 
 ### Tab Pruning & Mandatory Post-Landing Cleanup
-1. **Planning Pruning**: Close Scout and Architect tabs immediately once `plan.md` is approved and Coders have started.
-2. **Review Pruning**: Close individual Coder tabs immediately once their tasks pass review (`APPROVED`).
+1. **Planning Pruning**: The direct owner closes finished Scout and Architect sessions immediately once AiHead or the human approves the exact plan and Coders verifiably start.
+2. **Review Pruning**: The direct owner closes each Coder only after explicit per-Coder `APPROVED` and retaining the work and evidence. Keep unreviewed and `NEEDS FIXES` sessions open.
 3. **Mandatory Post-Landing Cleanup**: After squash-merging into `develop`:
    - Close child tabs and panes.
    - Close job workspace (`herdr workspace close "$JOB_WORKSPACE_ID"`).
@@ -253,7 +258,7 @@ aihead [MODE_FLAG] [OPTIONS]
 - `--session <str>`: Target Herdr session name.
 - `--split / --no-split`: Split active Herdr screen so AiHead is primary.
 - `--secondary`: Enforce screen split with active pane becoming secondary.
-- `--skip-permissions / --no-skip-permissions`: Override tool prompt confirmation bypass (`--yolo` in Hermes / `--dangerously-skip-permissions` in agy).
+- Keep tool confirmation enabled (`--no-skip-permissions` where supported). A legacy bypass setting does not authorize its use.
 
 ### Launcher Examples
 

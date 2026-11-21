@@ -4,7 +4,7 @@ from __future__ import annotations
 
 import sys
 from pathlib import Path
-from typing import Any, Dict, List, Mapping, Optional
+from typing import Any, Dict, List, Mapping, Optional, Tuple
 
 if sys.version_info >= (3, 11):
     import tomllib
@@ -34,6 +34,7 @@ from herdr_master.core.catalog import (
 from herdr_master.core.config import (
     find_project_config_path,
     load_effective_models_state,
+    load_effective_project_config,
     load_project_config,
     project_model_overrides,
     resolve_effective_worker_mode,
@@ -44,6 +45,7 @@ from herdr_master.core.config import (
 from herdr_master.core.model_ratings import (
     ModelRating,
     ModelRatingsMap,
+    effective_worker_tier,
     format_context_window,
     lookup_rating,
 )
@@ -52,6 +54,23 @@ from herdr_master.core.slug import InvalidBindingSlugError, parse_binding
 
 _ROLE_KEYS = ("scout", "architect", "reviewer")
 _SOURCE_KEYS = ("scout", "architect", "reviewer", "workers")
+WORKER_TIER_LABELS: Dict[int, str] = {
+    1: "fast/cheap",
+    2: "decent/all-around",
+    3: "frontier/clever",
+}
+MODE_TIER_PREFERENCE: Dict[str, Tuple[int, int, int]] = {
+    "balanced": (2, 1, 3),
+    "frugal": (1, 2, 3),
+    "quality": (3, 2, 1),
+    "fast": (1, 2, 3),
+}
+MODE_ROLE_TIER_GUIDANCE: Dict[str, Dict[str, Tuple[int, ...]]] = {
+    "balanced": {"scout": (1,), "architect": (3,), "reviewer": (2,), "worker": (2, 1)},
+    "frugal": {"scout": (1,), "architect": (2, 1), "reviewer": (1, 2), "worker": (1, 2)},
+    "quality": {"scout": (2, 1), "architect": (3,), "reviewer": (3, 2), "worker": (3, 2)},
+    "fast": {"scout": (1,), "architect": (2, 3), "reviewer": (2, 1), "worker": (1, 2)},
+}
 _COMPACT_ROLES = {
     "scout": "scout",
     "architect": "architect",
@@ -141,6 +160,102 @@ def worker_mode_rank_score(rating: Optional[ModelRating], worker_mode: str = "ba
         + 0.15 * rating.speed
         + 0.10 * rating.cost_efficiency
     )
+
+
+def tier_preference_rank(tier: int, worker_mode: str = "balanced") -> int:
+    """Return the preference index for a worker tier; unknown tiers sort last."""
+    mode = validate_routing_profile(worker_mode)
+    try:
+        return MODE_TIER_PREFERENCE[mode].index(tier)
+    except ValueError:
+        return 3
+
+
+def worker_tier_allowed(
+    tier: int, *, very_hard: bool, worker_mode: str = "balanced"
+) -> bool:
+    """Return whether a rated tier is eligible for the task and selected mode."""
+    if type(very_hard) is not bool:
+        raise ValueError("very_hard must be a boolean from the difficulty classifier")
+    mode = validate_routing_profile(worker_mode)
+    if tier not in (1, 2, 3):
+        return False
+    return tier != 3 or very_hard or mode == "quality"
+
+
+def preferred_coder_pool(
+    pool: List[HarnessBinding],
+    ratings: Optional[ModelRatingsMap],
+    *,
+    very_hard: bool,
+    worker_mode: str = "balanced",
+) -> List[HarnessBinding]:
+    """Filter enabled rated bindings by tier policy and order by mode preference."""
+    mode = validate_routing_profile(worker_mode)
+    ranked = []
+    for index, binding in enumerate(pool):
+        if not binding.enabled:
+            continue
+        rating = lookup_rating(ratings, binding.kind, binding.model)
+        if rating is None:
+            continue
+        tier = effective_worker_tier(rating)
+        if not worker_tier_allowed(tier, very_hard=very_hard, worker_mode=mode):
+            continue
+        ranked.append(
+            (
+                tier_preference_rank(tier, mode),
+                -worker_mode_rank_score(rating, mode),
+                index,
+                binding,
+            )
+        )
+    ranked.sort(key=lambda item: item[:3])
+    return [item[3] for item in ranked]
+
+
+def format_mode_tier_guidance(worker_mode: str = "balanced") -> str:
+    """Format tier definitions and nonbinding role preferences for a mode."""
+    mode = validate_routing_profile(worker_mode)
+    role_guidance = MODE_ROLE_TIER_GUIDANCE[mode]
+    lines = [
+        "WORKER TIERS:",
+        *(f"{tier}={label}" for tier, label in WORKER_TIER_LABELS.items()),
+        f"MODE PREFERENCE ({mode}): "
+        + " > ".join(str(tier) for tier in MODE_TIER_PREFERENCE[mode]),
+        "ROLE TIER GUIDANCE:",
+    ]
+    lines.extend(
+        f"{role}: {', '.join(str(tier) for tier in tiers)}"
+        for role, tiers in role_guidance.items()
+    )
+    lines.append("These are preferences, not a one-to-one lock.")
+    return "\n".join(lines)
+
+
+def eligible_coder_pool(
+    pool: List[HarnessBinding],
+    ratings: Optional[ModelRatingsMap],
+    *,
+    very_hard: bool,
+    worker_mode: str = "balanced",
+) -> List[HarnessBinding]:
+    """Filter a resolved pool per task; unknown and disabled routes never qualify."""
+    if type(very_hard) is not bool:
+        raise ValueError("very_hard must be a boolean from the difficulty classifier")
+    ranked = []
+    for index, binding in enumerate(pool):
+        if not binding.enabled:
+            continue
+        rating = lookup_rating(ratings, binding.kind, binding.model)
+        if rating is None:
+            continue
+        tier = effective_worker_tier(rating)
+        if tier not in (1, 2, 3) or (tier == 3 and not very_hard):
+            continue
+        ranked.append((tier, -worker_mode_rank_score(rating, worker_mode), index, binding))
+    ranked.sort(key=lambda item: item[:3])
+    return [item[3] for item in ranked]
 
 
 def build_dynamic_coder_pool(
@@ -293,11 +408,20 @@ def format_allowed_coder_models(
                 else "fixed/none"
             )
             roles = ",".join(rating.recommended_roles) if rating.recommended_roles else "-"
+            tier = effective_worker_tier(rating)
+            tier_source = (
+                "manual"
+                if rating.worker_tier_override
+                else "derived"
+                if rating.worker_tier is None
+                else "auto"
+            )
             lines.append(
                 f"- {slug} | fam={rating.family} | "
                 f"I:{rating.intelligence} C:{rating.coding} A:{rating.agentic} "
                 f"S:{rating.speed} $:{rating.cost_efficiency} Ctx:{ctx} | "
-                f"tier={rating.billing_tier} | effort: {eff} | roles={roles}"
+                f"billing_tier={rating.billing_tier} | "
+                f"worker_tier={tier} ({tier_source}) | effort: {eff} | roles={roles}"
             )
         else:
             hint = f" ({worker.label})" if worker.label else ""
@@ -741,18 +865,25 @@ def resolve_squad(
         if inherit_ancestors is not None
         else (project_path is None or Path(project_path).is_dir())
     )
+    effective_config_path = project_path
+    if effective_config_path is None:
+        effective_config_path = find_project_config_path()
     raw_project_cfg = (
-        load_project_config(project_path)
-        if project_path is not None and Path(project_path).exists()
+        load_effective_project_config(effective_config_path)
+        if effective_config_path is not None
+        and Path(effective_config_path).exists()
+        and should_inherit
+        else load_project_config(effective_config_path)
+        if effective_config_path is not None and Path(effective_config_path).exists()
         else None
     )
     effective_models = (
         load_effective_models_state(
-            project_path,
+            effective_config_path,
             project_cfg=raw_project_cfg,
             inherit_ancestors=should_inherit,
         )
-        if project_path is not None
+        if effective_config_path is not None
         else None
     )
     section_wmode: Optional[str] = None

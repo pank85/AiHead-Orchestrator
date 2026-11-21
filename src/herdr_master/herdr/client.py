@@ -207,6 +207,8 @@ class HerdrClient:
         pane_id: str,
         args: Optional[List[str]] = None,
         timeout_ms: int = 30000,
+        *,
+        recover_name_collision: bool = True,
     ) -> Dict[str, Any]:
         """Start a supported interactive agent in an existing pane.
 
@@ -234,7 +236,7 @@ class HerdrClient:
                     if attempt < 24:
                         await asyncio.sleep(0.3)
                         continue
-                if err.code == "agent_name_taken":
+                if err.code == "agent_name_taken" and recover_name_collision:
                     cand_panes = set(re.findall(r"pane_id=([^\s,]+)", err.message)) | {pane_id}
                     for p in cand_panes:
                         try:

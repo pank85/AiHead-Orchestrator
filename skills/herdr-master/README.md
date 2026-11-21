@@ -8,7 +8,7 @@ The `/herdr-master` skill manages concurrent, complex multi-job workstreams acro
 
 The fundamental difference between Herdr-Master and AiHead is their posture toward human escalation:
 
-- **Herdr-Master is a Coordinator that Escalates to the Human**: When trade-offs, ambiguities, model choices, plan approvals, or architectural decisions arise, Herdr-Master opens interactive question tabs to consult the human developer.
+- **User escalation depends on hierarchy**: A verified root Herdr-Master may open an interactive question tab for a human decision. When delegated under AiHead or another coordinator, Herdr-Master routes questions, blockers, and approval requests only to the concrete direct-parent pane named in its first prompt; it never opens user question tabs directly.
 - **AiHead is an Autonomous Technical Director**: AiHead acts as the human technical lead within the Herdr-Master flow, evaluating objectives, approving plans, making technical trade-offs, and directing execution without bothering the human user for routine choices.
 
 ```
@@ -22,7 +22,7 @@ The fundamental difference between Herdr-Master and AiHead is their posture towa
 +─────────────────────────────────────────────────────────────────────────────+
 |                     Herdr-Master Coordinator Session                        |
 |  - Manages concurrent jobs across isolated Git worktrees                    |
-|  - Launches bounded native async watchers (No busy polling loops)           |
+|  - Runs one child health process per owning run (no polling in parent)           |
 |  - Master Final Review Gate (inspects diffs, runs test suites)              |
 |  - Serial squash-merge into develop                                         |
 +─────────────────────────────────────────────────────────────────────────────+
@@ -39,7 +39,7 @@ The fundamental difference between Herdr-Master and AiHead is their posture towa
 ### The Cardinal Rule: Master Session Never Implements
 - The coordinator session **never directly edits files, runs build commands, or applies commits**.
 - Every task, including small edits, diagnosis, file changes, and skill updates, is delegated to its own new background Herdr workspace (`herdr workspace create --label "<job-name>" --cwd "$WORKTREE" --no-focus`).
-- Same-session subagents within the master session are restricted solely to evaluating skill choices or monitoring children; they must never implement code.
+- Same-session subagents within the master session are restricted solely to evaluating skill choices; they must never implement code.
 
 ---
 
@@ -68,21 +68,11 @@ Herdr-Master establishes clean process and workspace sandboxing:
 
 ---
 
-## 3. Native Asynchronous Watcher Mechanism (No Polling Loops)
+## 3. Direct-parent reports and run-scoped child health
 
-Herdr-Master parent sessions **never block or sleep in busy polling loops**. After launching and verifying a child agent, the coordinator dispatches a bounded **native async watcher** that sleeps non-blockingly and wakes the coordinator upon completion.
+The first submitted task prompt names the actual immediate parent and embeds its concrete `herdr agent prompt <pane-id> "<message>"` route. Send all decisions, questions, blockers and completion to that parent only; do not ask the user directly or notify another pane. Environment and bootstrap only corroborate the prompt. An unresolved delegated route stops before spawn. Automode resolves routine reversible decisions, batching consequential choices into a plan checkpoint; keep explicit and non-automode gates. Only explicit user approval for the particular action and target can authorize irreversible destruction or a security bypass. Technical approval and preselected trust dialogs do not count.
 
-### Harness-Specific Watcher Implementations
-
-| Harness | Mechanism | Execution Command & Parameters |
-| :--- | :--- | :--- |
-| **Antigravity (`agy`)** | Subagent or command | `define_subagent` (`herdr-watcher`, `Model: "flash_lite"`) + `invoke_subagent`, or `run_command("herdr agent wait <target> --timeout <ms>", WaitMsBeforeAsync=500)`. |
-| **Pi (`pi`)** | Subagent tool | `subagent` with read-only agent, `async: true`, executing `herdr agent wait <target> --timeout <ms>`. |
-| **Claude Code (`claude`)** | Subagent or Bash | `Agent(subagent_type="general-purpose", run_in_background=true)` or `Bash(run_in_background=true)` running `herdr agent wait <target> --timeout <ms>`. |
-| **OpenCode (`opencode`)** | Subagent tool | `subagent(agent="general", background=true, ...)` running `herdr agent wait <target> --timeout <ms>`. |
-| **Hermes (`hermes`)** | Direct background terminal | `terminal(command="herdr agent wait <target> --timeout <ms>", background=true, notify=true)` running in inherited Herdr environment. |
-
-*Rule*: Watchers have a single, strictly read-only task: execute `herdr agent wait <target> --timeout <ms>` and report the result. Watchers must never send input, edit files, or start coordinators.
+The parent registers its first confirmed child and detaches one `python -m herdr_master.pipeline.child_watch --run-dir "$RUN_DIR" --parent-pane "$PARENT" --parent-generation "$PARENT_GENERATION"` process in the exact verified session with a private mode-700 run directory. Every 600 seconds it checks those identities; a confirmed loss event is not a completion callback or permission to retry, and idle/blocked/transport uncertainty is not proof of exit. The parent stops it with `touch "$RUN_DIR/child-watch.stop"`; never reuse that run directory or kill by its PID. No watcher pane/subagent is launched.
 
 ---
 
@@ -107,12 +97,14 @@ All communication directed to the human developer occurs strictly inside the **c
 
 ## 5. Strict Hierarchical Parent Notification (One Level Up)
 
+Only AiHead acting within its authorized scope or the human can approve a gated exact plan version. A delegated coordinator sends that plan and its run/version to its direct parent and waits for explicit approval. Intermediaries can relay the original decision with provenance, but neither they nor the coordinator can self-approve. Standalone coordinators use enabled AiHead where supported, or ask the human and wait. A routine automode update outside a gate is not approval.
+
 Herdr-Master enforces strict hierarchical communication:
 
 ```
 Level 1: Herdr-Master Coordinator ($HERDR_PANE_ID)
              ▲
-             │ herdr agent prompt $HERDR_PARENT_PANE_ID "..."
+             │ herdr agent prompt <direct-parent-pane-id-from-first-prompt> "..."
              ▼
 Level 2: Job Root Worker / Forwarded Pipeline Orchestrator (/ergo, /orchestration)
              ▲
@@ -122,8 +114,8 @@ Level 3: Nested Specialist Sub-Jobs (Coders, Reviewers, Scouts)
 ```
 
 - **Level 3 workers notify ONLY Level 2** (`ORCHESTRATOR_PANE_ID`). They never message Herdr-Master directly.
-- **Level 2 workers notify ONLY Level 1** (`HERDR_PARENT_PANE_ID`) upon completion or blockers.
-- **When Herdr-Master is delegated under AiHead**: Herdr-Master notifies its direct parent AiHead (`herdr agent prompt "$HERDR_PARENT_PANE_ID" ...`) and does not open user tabs directly. AiHead manages user-facing interactions.
+- **Level 2 workers notify ONLY Level 1** using the concrete direct-parent pane named in their own first prompt. Environment/bootstrap values may corroborate but never replace that target; missing or ambiguous identity fails closed. Launcher-tagged terminal reports use `parent_contract complete`.
+- **When Herdr-Master is delegated under AiHead**: Herdr-Master notifies only the exact AiHead pane named in its first prompt (`herdr agent prompt <direct-parent-pane-id-from-first-prompt> ...` for an untagged decision or report; use `parent_contract complete` for a tagged terminal report). If that pane is missing or ambiguous, stop and report a blocker. Herdr-Master never opens user tabs directly; AiHead owns user-facing interactions.
 
 ---
 
@@ -147,7 +139,7 @@ Running full test suites is reserved solely for the master coordinator after chi
 ### 2. Master Final Review Gate
 - Inspect the full diff: `git diff develop...<child-branch>`.
 - Coordinator performs a rigorous review or delegates to a dedicated read-only Reviewer tab (`pi:xai/grok-4.7:high`).
-- If issues are detected (`NEEDS FIXES`), send findings back to the existing child session (`herdr agent prompt <child-pane-id> "<findings>"`), rearm the watcher, and await fixes.
+- If issues are detected (`NEEDS FIXES`), send findings back to the existing child session (`herdr agent prompt <child-pane-id> "<findings>"`), ensure the run watcher is active, and await fixes.
 
 ### 3. Serial Squash-Merge into `develop`
 - Only after Master Final Review is `APPROVED`:
@@ -179,4 +171,4 @@ pane_id	role	tab_id	branch	worktree	run_dir	status	last_heartbeat
 ```
 - Row added on spawn (`status=working`).
 - Row updated on close (`status=closed`).
-- A 10-minute read-only background monitor checks child health using `herdr agent get` and `herdr agent read` without touching code or closing tabs.
+- The run-scoped process in §3 reads the registry without altering it or closing tabs.

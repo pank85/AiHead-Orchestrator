@@ -47,6 +47,7 @@ from herdr_master.core.model_ratings import (
     apply_effort_calibration,
     clamp_score,
     derive_recommended_roles,
+    derive_worker_tier,
     find_unrated_models,
     infer_supported_efforts,
     lookup_rating,
@@ -939,6 +940,18 @@ def evaluate_available_models(
                             )
                             final_rating.recommended_roles = derive_recommended_roles(final_rating)
                         result.evaluated.setdefault(harness, {})[mid] = final_rating
+
+    # Apply the independent tier lock from the effective (possibly inherited)
+    # record after all score and effort calibration, even on force and dry-run.
+    for harness, models in result.evaluated.items():
+        for mid, rating in models.items():
+            existing = lookup_rating(effective.ratings, harness, mid)
+            if existing is not None and existing.worker_tier_override:
+                rating.worker_tier = existing.worker_tier
+                rating.worker_tier_override = True
+            else:
+                rating.worker_tier = derive_worker_tier(rating)
+                rating.worker_tier_override = False
 
     # 5. Atomic persistence into target .herdr-master.toml
     if not dry_run and result.evaluated:
