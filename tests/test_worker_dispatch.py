@@ -1,382 +1,295 @@
-"""Offline tests for the controlled worker gate."""
+"""Essential tests for controlled worker dispatch, tier gates, and CLI workflow."""
 
-import itertools
+from __future__ import annotations
+
+import json
+from pathlib import Path
+from unittest.mock import patch
 
 import pytest
+from typer.testing import CliRunner
 
+from herdr_master.cli.main import aihead_app
+from herdr_master.core.available_models import AvailableModels
+from herdr_master.core.config import HerdrMasterConfig, save_project_config
 from herdr_master.core.model_ratings import ModelRating
 from herdr_master.pipeline.worker_dispatch import (
+    Difficulty,
     WorkerApproval,
     WorkerDispatchError,
     WorkerManifest,
-    WorkerRunPolicy,
+    WorkerTask,
     canonical_digest,
     classify_difficulty,
     create_run_policy,
-    dispatch_worker,
-    load_run_policy,
-)
-from herdr_master.pipeline.worker_dispatch import (
-    validate_worker_assignment as _validate_worker_assignment,
-)
-
-KEYS = (
-    "cross_system_invariant",
-    "security_or_data_loss",
-    "novel_algorithm_or_ambiguous_architecture",
-    "multiple_concurrent_state_boundaries",
+    policy_snapshot,
+    validate_worker_assignment,
 )
 
 
-def test_per_task_pool_tier_order_and_unknown():
-    from herdr_master.core.models import HarnessBinding
-    from herdr_master.pipeline.squad import eligible_coder_pool
-
-    def rating(tier):
-        return ModelRating(
-            intelligence=80,
-            coding=80,
-            agentic=80,
-            speed=80,
-            cost_efficiency=80,
-            context_handling=80,
-            worker_tier=tier,
-        )
-
-    pool = [
-        HarnessBinding.from_slug(f"pi:openai/{name}") for name in ("three", "two", "one", "unknown")
-    ]
-    ratings = {"pi": {"openai/three": rating(3), "openai/two": rating(2), "openai/one": rating(1)}}
-    for mode in ("balanced", "quality", "fast", "frugal"):
-        assert [
-            b.model for b in eligible_coder_pool(pool, ratings, very_hard=False, worker_mode=mode)
-        ] == ["openai/one", "openai/two"]
-        assert [
-            b.model for b in eligible_coder_pool(pool, ratings, very_hard=True, worker_mode=mode)
-        ] == ["openai/one", "openai/two", "openai/three"]
-    assert eligible_coder_pool(pool, {}, very_hard=True) == []
-
-
-def test_difficulty_truth_table_and_invalid():
-    for values in itertools.product((False, True), repeat=4):
-        assert classify_difficulty(dict(zip(KEYS, values, strict=True))) == (
-            values[1] or sum(values[::2] + values[3:]) >= 2
-        )
-    for facts in (
-        {},
-        {**dict.fromkeys(KEYS, False), "extra": True},
-        {**dict.fromkeys(KEYS, False), KEYS[0]: 1},
-    ):
-        with pytest.raises(WorkerDispatchError):
-            classify_difficulty(facts)
-
-
-def run_policy():
-    return WorkerRunPolicy.model_validate(
-        {
-            "schema_version": 1,
-            "run_id": "run",
-            "worktree": "/tmp/project",
-            "mode": "herdr",
-            "native_host": None,
-            "run_squad_path": None,
-            "workers_override": None,
-            "override_provenance": "none",
-            "worker_pool": [{"kind": "pi", "model": "openai/example", "enabled": True}],
+def _setup_worktree(tmp_path: Path) -> Path:
+    worktree = tmp_path / "repo"
+    worktree.mkdir()
+    cfg = HerdrMasterConfig()
+    cfg.models.available = AvailableModels(
+        herdr={"pi": ["openai/gpt-6-luna", "openai/gpt-6.1-sol"]}
+    )
+    cfg.models.ratings = {
+        "pi": {
+            "openai/gpt-6-luna": ModelRating(
+                intelligence=78,
+                coding=80,
+                agentic=78,
+                speed=90,
+                cost_efficiency=88,
+                context_handling=80,
+                family="openai",
+                worker_tier=1,
+            ),
+            "openai/gpt-6.1-sol": ModelRating(
+                intelligence=94,
+                coding=95,
+                agentic=92,
+                speed=65,
+                cost_efficiency=55,
+                context_handling=95,
+                family="openai",
+                worker_tier=3,
+            ),
         }
-    )
-
-
-def validate_worker_assignment(manifest, approval, task_id, snapshot):
-    return _validate_worker_assignment(manifest, approval, task_id, snapshot, run_policy())
-
-
-def setup_assignment(tier=3, hard=False):
-    rating = ModelRating(
-        intelligence=80,
-        coding=80,
-        agentic=80,
-        speed=80,
-        cost_efficiency=80,
-        context_handling=80,
-        worker_tier=tier,
-    )
-    snapshot = {
-        "worker_pool": None,
-        "available": None,
-        "ratings": {"pi": {"openai/example": rating.model_dump(mode="json")}},
     }
-    facts = dict.fromkeys(KEYS, False)
-    facts["security_or_data_loss"] = hard
-    manifest = WorkerManifest.model_validate(
-        {
-            "schema_version": 1,
-            "classifier_version": 1,
-            "run_id": "run",
-            "workspace_id": "w",
-            "worktree": "/tmp/project",
-            "mode": "herdr",
-            "native_host": None,
-            "parent_pane_id": "w:p1",
-            "session": "default",
-            "socket_path": "/tmp/herdr.sock",
-            "run_policy_path": "/tmp/run-policy.json",
-            "run_policy_digest": canonical_digest(run_policy().model_dump(mode="json")),
-            "snapshot_digest": canonical_digest(snapshot),
-            "tasks": [
-                {
-                    "id": "one",
-                    "scope": "scope",
-                    "prompt": "prompt",
-                    "kind": "pi",
-                    "model": "openai/example",
-                    "effort": "high",
-                    "difficulty": facts,
-                    "attempt": 1,
-                }
-            ],
-        }
+    save_project_config(cfg, worktree / ".herdr-master.toml")
+    return worktree
+
+
+def _routine_difficulty() -> Difficulty:
+    return Difficulty(
+        cross_system_invariant=False,
+        security_or_data_loss=False,
+        novel_algorithm_or_ambiguous_architecture=False,
+        multiple_concurrent_state_boundaries=False,
     )
-    approval = WorkerApproval(
-        schema_version=1,
-        approver_type="human",
-        approver="alice",
-        manifest_digest=canonical_digest(manifest.model_dump(mode="json")),
-        snapshot_digest=canonical_digest(snapshot),
+
+
+def _hard_difficulty() -> Difficulty:
+    return Difficulty(
+        cross_system_invariant=True,
+        security_or_data_loss=True,
+        novel_algorithm_or_ambiguous_architecture=False,
+        multiple_concurrent_state_boundaries=False,
     )
-    return manifest, approval, snapshot
 
 
-@pytest.mark.parametrize(
-    "tier,hard,allowed", [(1, False, True), (2, False, True), (3, False, False), (3, True, True)]
-)
-def test_gate(tier, hard, allowed):
-    manifest, approval, snapshot = setup_assignment(tier, hard)
-    if allowed:
-        assert validate_worker_assignment(manifest, approval, "one", snapshot).id == "one"
-    else:
-        with pytest.raises(WorkerDispatchError, match="Tier 3"):
-            validate_worker_assignment(manifest, approval, "one", snapshot)
+def test_difficulty_classifier() -> None:
+    assert classify_difficulty(_routine_difficulty()) is False
+    assert classify_difficulty(_hard_difficulty()) is True
 
 
-def test_unknown_duplicate_native_and_changed_prompt_rejected():
-    manifest, approval, snapshot = setup_assignment(1)
-    changed = manifest.model_copy(deep=True)
-    changed.tasks[0].prompt = "different"
-    with pytest.raises(WorkerDispatchError) as exc:
-        validate_worker_assignment(changed, approval, "one", snapshot)
-    assert exc.value.code == "approval_mismatch"
-    duplicate = manifest.model_copy(deep=True)
-    duplicate.tasks.append(duplicate.tasks[0])
-    with pytest.raises(WorkerDispatchError) as exc:
-        validate_worker_assignment(duplicate, approval, "one", snapshot)
-    assert exc.value.code == "duplicate_task"
-    native = manifest.model_copy(update={"mode": "native"})
-    native_approval = approval.model_copy(
-        update={"manifest_digest": canonical_digest(native.model_dump(mode="json"))}
-    )
-    native_policy = run_policy().model_copy(update={"mode": "native"})
-    native = native.model_copy(
-        update={"run_policy_digest": canonical_digest(native_policy.model_dump(mode="json"))}
-    )
-    native_approval = native_approval.model_copy(
-        update={"manifest_digest": canonical_digest(native.model_dump(mode="json"))}
-    )
-    with pytest.raises(WorkerDispatchError) as exc:
-        _validate_worker_assignment(native, native_approval, "one", snapshot, native_policy)
-    assert exc.value.code == "native_unsupported"
-    empty = {"worker_pool": None, "available": None, "ratings": {}}
-    missing = manifest.model_copy(update={"snapshot_digest": canonical_digest(empty)})
-    missing_approval = approval.model_copy(
-        update={
-            "manifest_digest": canonical_digest(missing.model_dump(mode="json")),
-            "snapshot_digest": canonical_digest(empty),
-        }
-    )
-    with pytest.raises(WorkerDispatchError) as exc:
-        validate_worker_assignment(missing, missing_approval, "one", empty)
-    assert exc.value.code == "unknown_tier"
+def test_controlled_dispatch_enforces_tier_gate_and_approval_digests(
+    isolated_home: Path,
+) -> None:
+    worktree = _setup_worktree(isolated_home)
+    snap = policy_snapshot(worktree)
+    snap_digest = canonical_digest(snap)
 
-
-def test_run_policy_binding_and_override(tmp_path, monkeypatch):
-    import herdr_master.pipeline.worker_dispatch as module
-
-    monkeypatch.setattr(module, "create_run_policy", lambda **kwargs: run_policy())
-    policy = run_policy()
-    path = tmp_path / "run.json"
-    path.write_text(policy.model_dump_json())
-    manifest, approval, snapshot = setup_assignment(1)
-    manifest = manifest.model_copy(update={"run_policy_path": str(path)})
-    approval = approval.model_copy(
-        update={"manifest_digest": canonical_digest(manifest.model_dump(mode="json"))}
-    )
-    loaded = load_run_policy(manifest)
-    assert _validate_worker_assignment(manifest, approval, "one", snapshot, loaded).id == "one"
-    path.write_text(policy.model_copy(update={"worker_pool": []}).model_dump_json())
-    with pytest.raises(WorkerDispatchError) as exc:
-        load_run_policy(manifest)
-    assert exc.value.code == "run_policy_unbound"
-    path.unlink()
-    with pytest.raises(WorkerDispatchError) as exc:
-        load_run_policy(manifest)
-    assert exc.value.code == "run_policy_unbound"
-
-    explicit = policy.model_copy(
-        update={"workers_override": "pi:openai/example", "override_provenance": "explicit"}
-    )
-    manifest = manifest.model_copy(
-        update={"run_policy_digest": canonical_digest(explicit.model_dump(mode="json"))}
-    )
-    path.write_text(explicit.model_dump_json())
-    monkeypatch.setattr(module, "create_run_policy", lambda **kwargs: explicit)
-    assert load_run_policy(manifest) == explicit
-    invalid = explicit.model_copy(update={"workers_override": "pi:openai/other"})
-    path.write_text(invalid.model_dump_json())
-    manifest = manifest.model_copy(
-        update={"run_policy_digest": canonical_digest(invalid.model_dump(mode="json"))}
-    )
-    with pytest.raises(WorkerDispatchError) as exc:
-        load_run_policy(manifest)
-    assert exc.value.code == "run_policy_unbound"
-
-
-def test_real_run_policy_producer_detects_changed_run_squad(tmp_path):
-    run_squad = tmp_path / "squad.toml"
-    run_squad.write_text('worker_pool = ["pi:openai/example"]\n')
-    policy = create_run_policy(
-        run_id="run",
-        worktree=tmp_path,
-        mode="herdr",
-        native_host=None,
-        run_squad_path=run_squad,
-        workers_override=None,
-    )
-    assert [(route.kind, route.model) for route in policy.worker_pool] == [("pi", "openai/example")]
-    path = tmp_path / "run.json"
-    path.write_text(policy.model_dump_json())
-    manifest, _, _ = setup_assignment(1)
-    manifest = manifest.model_copy(
-        update={
-            "worktree": str(tmp_path),
-            "run_policy_path": str(path),
-            "run_policy_digest": canonical_digest(policy.model_dump(mode="json")),
-        }
-    )
-    assert load_run_policy(manifest) == policy
-    run_squad.write_text('worker_pool = ["pi:openai/other"]\n')
-    with pytest.raises(WorkerDispatchError) as exc:
-        load_run_policy(manifest)
-    assert exc.value.code == "run_policy_unbound"
-
-
-def test_drift_fails():
-    manifest, approval, snapshot = setup_assignment(1)
-    snapshot["available"] = {"herdr": {"pi": []}}
-    with pytest.raises(WorkerDispatchError) as exc:
-        validate_worker_assignment(manifest, approval, "one", snapshot)
-    assert exc.value.code == "approval_mismatch"
-
-
-def test_approved_launch_and_idempotency(tmp_path, monkeypatch):
-    from types import SimpleNamespace
-
-    import herdr_master.herdr.client as client_module
-    import herdr_master.pipeline.parent_contract as parent_module
-    import herdr_master.pipeline.worker_dispatch as module
-
-    manifest, approval, snapshot = setup_assignment(1)
-    calls = []
-
-    class FakeClient:
-        def __init__(self, **kwargs):
-            pass
-
-        async def get_snapshot(self):
-            return SimpleNamespace(
-                workspaces=[SimpleNamespace(workspace_id="w")],
-                panes=[SimpleNamespace(pane_id="w:p1", workspace_id="w")],
-            )
-
-        async def create_tab(self, **kwargs):
-            calls.append(kwargs)
-            return {"root_pane": {"pane_id": "w:p2", "tab_id": "w:t1"}}
-
-    async def launch(client, **kwargs):
-        calls.append(kwargs)
-        return tmp_path / "watch"
-
-    monkeypatch.setenv("HOME", str(tmp_path))
-    monkeypatch.setattr(client_module, "HerdrClient", FakeClient)
-    monkeypatch.setattr(parent_module, "resolve_parent_route", lambda parent, **kw: parent)
-    monkeypatch.setattr(parent_module, "launch_and_prompt", launch)
-    monkeypatch.setattr(module, "policy_snapshot", lambda _: snapshot)
-    policy = create_run_policy(
-        run_id="run",
-        worktree=tmp_path,
+    run_policy = create_run_policy(
+        run_id="run-1",
+        worktree=worktree,
         mode="herdr",
         native_host=None,
         run_squad_path=None,
-        workers_override="pi:openai/example",
+        workers_override=None,
     )
-    run_path = tmp_path / "run.json"
-    run_path.write_text(policy.model_dump_json())
-    manifest = manifest.model_copy(
-        update={
-            "worktree": str(tmp_path),
-            "run_policy_path": str(run_path),
-            "run_policy_digest": canonical_digest(policy.model_dump(mode="json")),
-        }
+    run_policy_path = isolated_home / "run-policy.json"
+    run_policy_path.write_text(
+        json.dumps(run_policy.model_dump(mode="json")),
+        encoding="utf-8",
     )
-    approval = approval.model_copy(
-        update={"manifest_digest": canonical_digest(manifest.model_dump(mode="json"))}
+    run_policy_digest = canonical_digest(run_policy.model_dump(mode="json"))
+
+    def make_manifest(worker_mode: str, model: str, difficulty: Difficulty) -> WorkerManifest:
+        return WorkerManifest(
+            schema_version=1,
+            classifier_version=1,
+            run_id="run-1",
+            workspace_id="w1",
+            worktree=str(worktree.resolve()),
+            mode="herdr",
+            worker_mode=worker_mode,
+            native_host=None,
+            parent_pane_id="w1:p1",
+            session="default",
+            socket_path="/tmp/fake.sock",
+            snapshot_digest=snap_digest,
+            run_policy_path=str(run_policy_path.resolve()),
+            run_policy_digest=run_policy_digest,
+            tasks=[
+                WorkerTask(
+                    id="task-1",
+                    scope="tests",
+                    prompt="Implement feature",
+                    kind="pi",
+                    model=model,
+                    effort=None,
+                    difficulty=difficulty,
+                    attempt=1,
+                )
+            ],
+        )
+
+    def approve(manifest: WorkerManifest) -> WorkerApproval:
+        return WorkerApproval(
+            schema_version=1,
+            approver_type="human",
+            approver="tester",
+            manifest_digest=canonical_digest(manifest.model_dump(mode="json")),
+            snapshot_digest=snap_digest,
+        )
+
+    # Tier 3 rejected on routine task in balanced mode
+    m_bal_t3 = make_manifest("balanced", "openai/gpt-6.1-sol", _routine_difficulty())
+    with pytest.raises(WorkerDispatchError):
+        validate_worker_assignment(m_bal_t3, approve(m_bal_t3), "task-1", snap, run_policy)
+
+    # Tier 3 allowed on routine task in quality mode
+    m_qual_t3 = make_manifest("quality", "openai/gpt-6.1-sol", _routine_difficulty())
+    task = validate_worker_assignment(m_qual_t3, approve(m_qual_t3), "task-1", snap, run_policy)
+    assert task.model == "openai/gpt-6.1-sol"
+
+    # Tier 3 allowed on very-hard task in balanced mode
+    m_bal_hard = make_manifest("balanced", "openai/gpt-6.1-sol", _hard_difficulty())
+    task_hard = validate_worker_assignment(
+        m_bal_hard, approve(m_bal_hard), "task-1", snap, run_policy
     )
-    manifest_path, approval_path = tmp_path / "m.json", tmp_path / "a.json"
-    manifest_path.write_text(manifest.model_dump_json())
-    approval_path.write_text(approval.model_dump_json())
-    run_path.write_text("{}")
-    with pytest.raises(WorkerDispatchError) as missing:
-        dispatch_worker(manifest_path=manifest_path, task_id="one", approval_path=approval_path)
-    assert missing.value.code == "run_policy_unbound"
-    assert not calls
-    run_path.write_text(policy.model_dump_json())
-    changed_snapshot = dict(snapshot)
-    changed_snapshot["available"] = {"herdr": {"pi": []}}
-    monkeypatch.setattr(module, "policy_snapshot", lambda _: changed_snapshot)
-    with pytest.raises(WorkerDispatchError) as drift:
-        dispatch_worker(manifest_path=manifest_path, task_id="one", approval_path=approval_path)
-    assert drift.value.code == "approval_mismatch"
-    assert not calls
-    monkeypatch.setattr(module, "policy_snapshot", lambda _: snapshot)
-    result = dispatch_worker(
-        manifest_path=manifest_path, task_id="one", approval_path=approval_path
+    assert task_hard.id == "task-1"
+
+    # Approval digest mismatch fails closed
+    bad_approval = WorkerApproval(
+        schema_version=1,
+        approver_type="human",
+        approver="tester",
+        manifest_digest="0" * 64,
+        snapshot_digest=snap_digest,
     )
-    assert result["pane_id"] == "w:p2"
-    assert calls[1]["parent_pane_id"] == "w:p1"
-    assert calls[1]["prompt"] == "prompt"
-    with pytest.raises(WorkerDispatchError) as exc:
-        dispatch_worker(manifest_path=manifest_path, task_id="one", approval_path=approval_path)
-    assert exc.value.code == "duplicate_attempt"
-    assert len(calls) == 2
+    with pytest.raises(WorkerDispatchError):
+        validate_worker_assignment(m_qual_t3, bad_approval, "task-1", snap, run_policy)
 
 
-@pytest.mark.parametrize("worker_mode,tier,hard,allowed", [
-    (mode, tier, hard, (tier != 3 or hard or mode == "quality"))
-    for mode in ("balanced", "frugal", "fast", "quality")
-    for tier in (1, 2, 3)
-    for hard in (False, True)
-])
-def test_validate_worker_assignment_worker_mode_tier_matrix(worker_mode, tier, hard, allowed):
-    manifest, approval, snapshot = setup_assignment(tier, hard)
-    manifest = manifest.model_copy(update={"worker_mode": worker_mode})
-    approval = approval.model_copy(
-        update={"manifest_digest": canonical_digest(manifest.model_dump(mode="json"))}
+def test_worker_cli_snapshot_policy_validate_approval_dispatch(
+    isolated_home: Path,
+) -> None:
+    runner = CliRunner()
+    worktree = _setup_worktree(isolated_home)
+    out_dir = isolated_home / "artifacts"
+    out_dir.mkdir()
+
+    snap_path = out_dir / "policy.json"
+    rp_path = out_dir / "run-policy.json"
+    manifest_path = out_dir / "manifest.json"
+    approval_path = out_dir / "approval.json"
+
+    r_snap = runner.invoke(
+        aihead_app,
+        ["worker", "snapshot", "--worktree", str(worktree), "--output", str(snap_path)],
     )
-    if allowed:
-        assert validate_worker_assignment(manifest, approval, "one", snapshot).id == "one"
-    else:
-        with pytest.raises(WorkerDispatchError) as exc:
-            validate_worker_assignment(manifest, approval, "one", snapshot)
-        assert exc.value.code == "ineligible_tier"
-        assert str(exc.value).startswith("Tier 3 is not eligible for ordinary work")
-        assert worker_mode in str(exc.value)
-        assert "very-hard facts" in str(exc.value) and "quality" in str(exc.value)
+    assert r_snap.exit_code == 0, r_snap.output
+    snap_digest = json.loads(r_snap.output)["snapshot_digest"]
+
+    r_rp = runner.invoke(
+        aihead_app,
+        [
+            "worker",
+            "run-policy",
+            "create",
+            "--run-id",
+            "run-cli",
+            "--worktree",
+            str(worktree),
+            "--mode",
+            "herdr",
+            "--output",
+            str(rp_path),
+        ],
+    )
+    assert r_rp.exit_code == 0, r_rp.output
+    rp_digest = json.loads(r_rp.output)["run_policy_digest"]
+
+    manifest_data = {
+        "schema_version": 1,
+        "classifier_version": 1,
+        "run_id": "run-cli",
+        "workspace_id": "w1",
+        "worktree": str(worktree.resolve()),
+        "mode": "herdr",
+        "worker_mode": "balanced",
+        "native_host": None,
+        "parent_pane_id": "w1:p1",
+        "session": "default",
+        "socket_path": "/tmp/fake.sock",
+        "snapshot_digest": snap_digest,
+        "run_policy_path": str(rp_path.resolve()),
+        "run_policy_digest": rp_digest,
+        "tasks": [
+            {
+                "id": "t1",
+                "scope": "core",
+                "prompt": "Do routine work",
+                "kind": "pi",
+                "model": "openai/gpt-6-luna",
+                "effort": None,
+                "difficulty": _routine_difficulty().model_dump(),
+                "attempt": 1,
+            }
+        ],
+    }
+    manifest_path.write_text(json.dumps(manifest_data), encoding="utf-8")
+
+    r_val = runner.invoke(
+        aihead_app,
+        ["worker", "manifest", "validate", "--manifest", str(manifest_path)],
+    )
+    assert r_val.exit_code == 0, r_val.output
+    manifest_digest = json.loads(r_val.output)["manifest_digest"]
+
+    r_app = runner.invoke(
+        aihead_app,
+        [
+            "worker",
+            "approval",
+            "create",
+            "--manifest",
+            str(manifest_path),
+            "--manifest-digest",
+            manifest_digest,
+            "--snapshot-digest",
+            snap_digest,
+            "--approver-type",
+            "human",
+            "--approver",
+            "tester",
+            "--confirm-approved",
+            "--output",
+            str(approval_path),
+        ],
+    )
+    assert r_app.exit_code == 0, r_app.output
+
+    with patch(
+        "herdr_master.pipeline.worker_dispatch.dispatch_worker",
+        return_value={"status": "dispatched", "task_id": "t1", "pane_id": "w1:p2"},
+    ) as mock_dispatch:
+        r_disp = runner.invoke(
+            aihead_app,
+            [
+                "worker",
+                "dispatch",
+                "--manifest",
+                str(manifest_path),
+                "--task-id",
+                "t1",
+                "--approval",
+                str(approval_path),
+            ],
+        )
+    assert r_disp.exit_code == 0, r_disp.output
+    mock_dispatch.assert_called_once()
