@@ -1335,6 +1335,38 @@ def load_effective_models_state(
     )
 
 
+def load_effective_project_config(
+    path: Optional[Union[str, Path]] = None,
+) -> HerdrMasterConfig:
+    """Load configuration with explicitly supplied ancestor fields inherited.
+
+    Raw ``load_project_config`` remains the source for round-trip editing; this
+    resolver merges serialized values before schema defaults can mask omissions.
+    """
+    resolved = Path(path).resolve() if path else find_project_config_path()
+    if resolved is not None and resolved.is_dir():
+        resolved = find_project_config_path(resolved)
+    if resolved is None:
+        return HerdrMasterConfig()
+    paths = find_ancestor_config_paths(resolved)
+    if resolved.is_file():
+        paths.append(resolved)
+    merged: Dict[str, Any] = {}
+    for config_path in paths:
+        with open(config_path, "rb") as stream:
+            data = tomllib.load(stream)
+        _merge_config_values(merged, data)
+    return HerdrMasterConfig.model_validate(merged)
+
+
+def _merge_config_values(target: Dict[str, Any], values: Dict[str, Any]) -> None:
+    for key, value in values.items():
+        if isinstance(value, dict) and isinstance(target.get(key), dict):
+            _merge_config_values(target[key], value)
+        else:
+            target[key] = value
+
+
 def load_project_config(path: Optional[Union[str, Path]] = None) -> HerdrMasterConfig:
     """Load HerdrMasterConfig from path or by searching upwards for .herdr-master.toml.
 

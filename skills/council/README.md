@@ -184,7 +184,11 @@ If 5 full cycles conclude without unanimous agreement:
 4. The plan with the highest tally wins. Deterministic tie-breaking applies based on configured roster order.
 
 ### Step 5: Finalization & Deliverable
-1. Finalize run: `aihead council-state finalize --run-dir "$RUN_DIR"`.
+Read-only discovery and deliberation do not require prior approval. The vote or consensus result selects a candidate only. Before final endorsement or action, get approval of the exact selected plan version.
+
+Only AiHead acting within its authorized scope or the human can approve a gated exact plan version. A delegated coordinator sends that plan and its run/version to its direct parent and waits for explicit approval. Intermediaries can relay the original decision with provenance, but neither they nor the coordinator can self-approve. Standalone coordinators use enabled AiHead where supported, or ask the human and wait. A routine automode update outside a gate is not approval.
+
+1. After approval, finalize the run: `aihead council-state finalize --run-dir "$RUN_DIR"`.
 2. Close all Council Member tabs immediately.
 3. Assembles `RUN_DIR/final_plan.md`, documenting:
    - Full architecture specification and task breakdown.
@@ -196,12 +200,18 @@ If 5 full cycles conclude without unanimous agreement:
 
 ## 4. Strict One-Level-Up Communication Hierarchy
 
+The first submitted task prompt names the actual immediate parent and embeds its concrete `herdr agent prompt <pane-id> "<message>"` route. Send all decisions, questions, blockers and completion to that parent only; do not ask the user directly or notify another pane. Environment and bootstrap only corroborate the prompt. An unresolved delegated route stops before spawn. Automode resolves routine reversible decisions, batching consequential choices into a plan checkpoint; keep explicit and non-automode gates. Only explicit user approval for the particular action and target can authorize irreversible destruction or a security bypass. Technical approval and preselected trust dialogs do not count.
+
+The parent registers its first confirmed child and detaches one `python -m herdr_master.pipeline.child_watch --run-dir "$RUN_DIR" --parent-pane "$PARENT" --parent-generation "$PARENT_GENERATION"` process in the exact verified session with a private mode-700 run directory. Every 600 seconds it checks those identities; a confirmed loss event is not a completion callback or permission to retry, and idle/blocked/transport uncertainty is not proof of exit. The parent stops it with `touch "$RUN_DIR/child-watch.stop"`; never reuse that run directory or kill by its PID. No watcher pane/subagent is launched.
+
+The initial prompt contract applies to the Scout, initial member drafts, and authorized replacements during feedback, revisions, and voting. Completion remains a plan artifact; Council never lands code.
+
 Council deliberation enforces strict hierarchical parent-child notifications:
 
 ```
-Level 1: AiHead / Master Coordinator ($HERDR_PARENT_PANE_ID)
+Level 1: AiHead / Master Coordinator (concrete direct-parent pane named in the Council Coordinator's first prompt)
              ▲
-             │ herdr agent prompt $HERDR_PARENT_PANE_ID "..."
+             │ herdr agent prompt <direct-parent-pane-id-from-Council's-first-prompt> "..."
              ▼
 Level 2: Council Coordinator ($HERDR_PANE_ID / COORDINATOR_PANE_ID)
              ▲
@@ -211,7 +221,7 @@ Level 3: Council Scout & Council Members
 ```
 
 - **Level 3 workers notify ONLY Level 2 (Council Coordinator)**. Level 3 workers **NEVER** message AiHead or grandparent coordinators directly.
-- **Level 2 Coordinator notifies Level 1** (`$HERDR_PARENT_PANE_ID`) upon completing deliberation or encountering a blocking specification issue.
+- **Level 2 Coordinator notifies Level 1** using the concrete direct-parent pane named in its first prompt upon completing deliberation or encountering a blocking specification issue. Environment/bootstrap values only corroborate, never replace, that target; missing or ambiguous identity fails closed. Launcher-tagged terminal reports use `parent_contract complete`.
 - **Non-blocking parents**: Parents dispatch prompts and return control immediately; wakeups occur reactively upon prompt notifications.
 
 ---

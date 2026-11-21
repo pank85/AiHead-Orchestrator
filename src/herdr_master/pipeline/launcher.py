@@ -4,7 +4,6 @@ from __future__ import annotations
 
 import asyncio
 import inspect
-import json
 import os
 from dataclasses import dataclass
 from pathlib import Path
@@ -24,7 +23,9 @@ from herdr_master.core.catalog import (
 from herdr_master.core.config import (
     CouncilConfig,
     find_project_config_path,
-    load_project_config,
+    load_effective_models_state,
+    load_effective_project_config,
+    resolve_effective_worker_mode,
 )
 from herdr_master.core.context import HerdrContext, resolve_herdr_context
 from herdr_master.core.models import EffortLevel, HarnessBinding, HarnessKind, Squad
@@ -36,6 +37,12 @@ from herdr_master.pipeline.ai_head import (
     ensure_herdr_ai_head,
 )
 from herdr_master.pipeline.bootstrap import build_bootstrap_prompt
+from herdr_master.pipeline.parent_contract import (
+    ParentRouteError,
+    classify_launch_caller,
+    launch_and_prompt,
+    validate_parent_pane,
+)
 from herdr_master.pipeline.squad import format_allowed_coder_models
 
 # Herdr agent names are RPC identifiers, not display labels: [a-z][a-z0-9_-]{0,31}.
@@ -46,25 +53,6 @@ COUNCIL_COORDINATOR_NAME = "council-coordinator"
 
 class LaunchContextError(RuntimeError):
     """Explicit session cannot adopt the inherited workspace."""
-
-
-def ensure_agy_trusted(cwd: str) -> None:
-    """Ensure cwd is in agy's trustedWorkspaces to bypass startup trust dialogs."""
-    settings_path = Path.home() / ".gemini" / "antigravity-cli" / "settings.json"
-    if not settings_path.exists():
-        return
-    try:
-        with open(settings_path, "r", encoding="utf-8") as handle:
-            data = json.load(handle)
-        trusted = data.get("trustedWorkspaces", [])
-        resolved_cwd = str(Path(cwd).resolve())
-        if resolved_cwd not in trusted:
-            trusted.append(resolved_cwd)
-            data["trustedWorkspaces"] = trusted
-            with open(settings_path, "w", encoding="utf-8") as handle:
-                json.dump(data, handle, indent=2)
-    except Exception:
-        return
 
 
 async def ensure_herdr_server(socket_path: Path, session_name: str = "default") -> None:
@@ -112,26 +100,6 @@ async def _safe_await(fn: Any, *args: Any, **kwargs: Any) -> Any:
     if inspect.isawaitable(res):
         return await res
     return res
-
-
-async def _auto_confirm_trust(client: HerdrClient, pane_id: str, stop_event: asyncio.Event) -> None:
-    """Background watcher that presses Enter if an agent displays a trust prompt."""
-    for _ in range(20):
-        if stop_event.is_set():
-            break
-        await asyncio.sleep(0.5)
-        try:
-            pane_out = await _safe_await(client.read_pane, pane_id)
-            if isinstance(pane_out, dict):
-                text = pane_out.get("text", "").lower()
-                if any(
-                    key in text
-                    for key in ["trust", "permission", "confirm", "proceed", "[y/n]", "allow"]
-                ):
-                    await _safe_await(client.send_keys, pane_id, "enter")
-                    await asyncio.sleep(0.5)
-        except Exception:
-            pass
 
 
 def resolve_launch_context(session: str | None = None) -> HerdrContext:
@@ -218,7 +186,7 @@ def resolve_coordinator_binding(
 
 def resolve_master_binding(harness=None, model=None, effort=None, *, config_path=None):
     """Use the configured master binding unless explicitly overridden."""
-    configured = load_project_config(config_path).master_coordinator
+    configured = load_effective_project_config(config_path).master_coordinator
     if configured is not None:
         if harness is not None and _kind_name(harness) != configured.kind.value:
             return resolve_coordinator_binding(harness, model, effort)
@@ -241,7 +209,7 @@ def resolve_ergo_coordinator(
     if override is not None:
         binding = HarnessBinding.from_slug(override, label="ergo-coordinator")
     else:
-        configured = load_project_config(config_path).ergo
+        configured = load_effective_project_config(config_path).ergo
         if configured is None or configured.coordinator is None:
             return None
         binding = configured.coordinator
@@ -268,7 +236,7 @@ def _build_agent_args(
     """
     kind = get_harness(harness).kind
     effort_text = effort.value if isinstance(effort, EffortLevel) else effort
-    tail = build_agent_args(kind, model, effort_text)
+    tail = build_agent_args(kind, model, effort_text, skip_permissions=False)
     return ["--kind", kind, "--", *tail]
 
 
@@ -278,7 +246,7 @@ def _host_launch(
     effort: EffortLevel | None,
     role: str,
     *,
-    dangerously_skip_permissions: bool = True,
+    dangerously_skip_permissions: bool = False,
 ) -> dict[str, Any]:
     effort_text = effort.value if isinstance(effort, EffortLevel) else effort
     descriptor = describe_herdr_agent(
@@ -331,7 +299,7 @@ def _session_socket(session_name: str) -> Path:
 
 def _adopt_client(client: HerdrClient, ctx: HerdrContext) -> HerdrClient:
     sock = getattr(client, "socket_path", None)
-    if isinstance(sock, Path) and sock != Path(ctx.socket_path):
+    if isinstance(sock, (str, Path)) and Path(sock) != Path(ctx.socket_path):
         return HerdrClient(session=ctx.session_name, socket_path=ctx.socket_path)
     return client
 
@@ -347,6 +315,8 @@ class _Allocated:
     owns_workspace: bool
     parent_pane_id: Optional[str] = None
     delegated: bool = False
+    parent_generation: str | None = None
+    child_watch_run_dir: Path | None = None
 
 
 def _pane_id(payload: dict[str, Any]) -> Optional[str]:
@@ -423,6 +393,7 @@ async def _allocate_launch_target(
     focus: bool = True,
     parent_pane_id: Optional[str] = None,
     delegated: bool = False,
+    adopt_invoker: bool = True,
 ) -> _Allocated:
     """Adopt an inside workspace, or provision an isolated outside session.
 
@@ -432,31 +403,16 @@ async def _allocate_launch_target(
     the current session and leaves the caller's workspace untouched. Failures
     propagate to the caller.
     """
-    caller_pane = parent_pane_id
-    if caller_pane:
-        delegated = True
-
-    eff_parent_pane = (
-        parent_pane_id
-        if parent_pane_id is not None
-        else (
-            os.environ.get("HERDR_PANE_ID")
-            or getattr(ctx, "pane_id", None)
-            or (
-                os.environ.get("HERDR_PARENT_PANE_ID")
-                if getattr(ctx, "is_inside_herdr", False)
-                else None
-            )
-        )
+    delegated = delegated or parent_pane_id is not None
+    inside = getattr(ctx, "is_inside_herdr", False)
+    if parent_pane_id is not None and not inside:
+        raise ParentRouteError("A delegated parent must be on the inherited Herdr transport.")
+    caller = os.environ.get("HERDR_PANE_ID") if inside and adopt_invoker else None
+    active_client = _adopt_client(client, ctx) if inside else client
+    eff_parent_pane, parent_generation = await classify_launch_caller(
+        active_client, caller_pane_id=caller, parent_pane_id=parent_pane_id, delegated=delegated,
     )
-    if delegated and not eff_parent_pane and ctx.is_inside_herdr:
-        snapshot = await client.get_snapshot()
-        head_tabs = {tab.tab_id for tab in snapshot.tabs if (tab.label or "").strip() == "ai-head"}
-        head_panes = [pane.pane_id for pane in snapshot.panes if pane.tab_id in head_tabs]
-        if len(head_panes) == 1:
-            eff_parent_pane = head_panes[0]
-    if delegated and not eff_parent_pane:
-        raise RuntimeError("Cannot identify the caller or AiHead parent pane; launch aborted.")
+    delegated = eff_parent_pane is not None
     tab_env = {"HERDR_PARENT_PANE_ID": str(eff_parent_pane)} if eff_parent_pane else None
 
     if not fresh_workspace and "open_pane" in getattr(client, "__dict__", {}):
@@ -481,11 +437,12 @@ async def _allocate_launch_target(
             owns_workspace=False,
             parent_pane_id=eff_parent_pane,
             delegated=delegated,
+            parent_generation=parent_generation,
         )
 
     if fresh_workspace and ctx.is_inside_herdr:
         active = _adopt_client(client, ctx)
-        return await _create_owned_workspace(
+        allocated = await _create_owned_workspace(
             active,
             session_name=str(ctx.session_name),
             socket_path=Path(ctx.socket_path),
@@ -495,6 +452,8 @@ async def _allocate_launch_target(
             parent_pane_id=eff_parent_pane,
             tab_label=tab_label if delegated else None,
         )
+        allocated.parent_generation = parent_generation
+        return allocated
 
     if ctx.is_inside_herdr:
         active = _adopt_client(client, ctx)
@@ -517,6 +476,7 @@ async def _allocate_launch_target(
             owns_workspace=False,
             parent_pane_id=eff_parent_pane,
             delegated=delegated,
+            parent_generation=parent_generation,
         )
 
     session_name = _isolated_session_name(session, isolated_name)
@@ -572,56 +532,22 @@ async def _start_and_prompt(
 
     ``args`` is the agent argv after ``--``. ``kind`` is a separate RPC field.
     """
-    if kind == "agy":
-        ensure_agy_trusted(cwd)
-    stop_event = asyncio.Event()
-    watcher = asyncio.create_task(
-        _auto_confirm_trust(allocated.client, allocated.pane_id or "", stop_event)
+    if not allocated.pane_id:
+        raise RuntimeError("Launch allocation has no child pane ID.")
+    allocated.child_watch_run_dir = await launch_and_prompt(
+        allocated.client,
+        pane_id=allocated.pane_id,
+        tab_id=allocated.tab_id,
+        socket_path=allocated.socket_path,
+        parent_pane_id=allocated.parent_pane_id,
+        delegated=allocated.delegated,
+        bound_parent_generation=allocated.parent_generation,
+        name=name,
+        kind=kind,
+        args=args,
+        cwd=cwd,
+        prompt=prompt,
     )
-    try:
-        await _safe_await(
-            allocated.client.start_agent,
-            name=name,
-            kind=kind,
-            pane_id=allocated.pane_id or "",
-            args=args,
-            timeout_ms=30000,
-        )
-    finally:
-        stop_event.set()
-        watcher.cancel()
-        try:
-            await watcher
-        except asyncio.CancelledError:
-            pass
-
-    # Ensure agent has booted and registered with Herdr before prompting
-    pane_target = allocated.pane_id or ""
-    for _ in range(30):
-        try:
-            res = await _safe_await(allocated.client.get_agent, pane_target)
-            agent_obj = res.get("agent") if isinstance(res, dict) else None
-            if agent_obj and agent_obj.get("agent_status") in ("idle", "working", "blocked"):
-                break
-        except Exception:
-            pass
-        await asyncio.sleep(0.5)
-
-    if allocated.delegated and allocated.parent_pane_id:
-        parent = allocated.parent_pane_id
-        prompt = (
-            f"AiHead Parent Directive:\n"
-            f"AiHead is active at pane {parent} as the authoritative technical decision-maker.\n"
-            "1. DO NOT prompt the human user for routine decisions, working-tree handling, "
-            "unitTestsMode, or Plan Approval Gates, and do not open a user question tab.\n"
-            f"2. For every question, decision, or plan approval, prompt AiHead directly: "
-            f'herdr agent prompt {parent} "<question / plan>"\n'
-            f"3. Notify AiHead immediately via herdr agent prompt {parent}: "
-            "on implementation completion report commit, review and actual verification; "
-            "for plan-only Council report the outcome and RUN_DIR/final_plan.md; "
-            "report blockers immediately.\n\n" + prompt
-        )
-    await _safe_await(allocated.client.prompt_agent, allocated.pane_id or "", prompt)
     if not focus:
         return
     try:
@@ -640,7 +566,7 @@ async def _resolve_and_wire_ai_head(
 ) -> tuple[Optional[AiHeadDiscovery], Optional[Path]]:
     config_path = find_project_config_path(target_cwd)
     try:
-        project_cfg = load_project_config(target_cwd)
+        project_cfg = load_effective_project_config(target_cwd)
         head_config = project_cfg.ai_head
     except Exception:
         head_config = None
@@ -648,22 +574,10 @@ async def _resolve_and_wire_ai_head(
     if head_config is None:
         return None, config_path
 
-    caller_pane = allocated.parent_pane_id or (
-        os.environ.get("HERDR_PANE_ID") if not allocated.owns_workspace else None
-    )
-
-    if allocated.delegated or (allocated.parent_pane_id and allocated.owns_workspace):
-        # The caller is authoritative; do not create a second AiHead in the child workspace.
-        head_config = head_config.model_copy(update={"enabled": True})
-        return build_ai_head_discovery(
-            head_config,
-            target_cwd,
-            mode="herdr",
-            session_name=allocated.session_name,
-            socket_path=allocated.socket_path,
-            workspace_id=os.environ.get("HERDR_WORKSPACE_ID") or allocated.workspace_id,
-            pane_id=allocated.parent_pane_id or caller_pane,
-        ), config_path
+    if allocated.parent_pane_id is not None or allocated.delegated:
+        # The immediate caller may not be AiHead. Never replace its route with discovery
+        # or create an unrelated supervisor for a delegated child.
+        return None, config_path
 
     if ai_head_override is not None:
         head_config = head_config.model_copy(update={"enabled": ai_head_override})
@@ -673,39 +587,22 @@ async def _resolve_and_wire_ai_head(
 
     if allocated.workspace_id and allocated.client:
         try:
-            try:
-                head_info = await ensure_herdr_ai_head(
-                    allocated.client,
-                    allocated.workspace_id,
-                    head_config,
-                    target_cwd,
-                    caller_pane_id=caller_pane,
-                    available=project_cfg.models.available,
-                )
-            except TypeError:
-                head_info = await ensure_herdr_ai_head(
-                    allocated.client,
-                    allocated.workspace_id,
-                    head_config,
-                    target_cwd,
-                    available=project_cfg.models.available,
-                )
-            head_pane_id = head_info.get("pane_id")
-            caller_is_ai_head = bool(
-                caller_pane and head_pane_id and str(caller_pane) == str(head_pane_id)
+            head_info = await ensure_herdr_ai_head(
+                allocated.client,
+                allocated.workspace_id,
+                head_config,
+                target_cwd,
+                available=project_cfg.models.available,
             )
-            is_busy = False if caller_is_ai_head else bool(head_info.get("busy", False))
-            is_reconciled = True if caller_is_ai_head else bool(head_info.get("reconciled", True))
+            head_pane_id = head_info.get("pane_id")
+            is_busy = bool(head_info.get("busy", False))
+            is_reconciled = bool(head_info.get("reconciled", True))
             actual_model = (
                 head_info.get("model")
                 if (is_busy or not is_reconciled)
                 else head_config.binding.model
             )
-            discovery_status = (
-                "ready"
-                if caller_is_ai_head
-                else ("busy" if is_busy else ("ready" if is_reconciled else "pending"))
-            )
+            discovery_status = "busy" if is_busy else ("ready" if is_reconciled else "pending")
 
             discovery = build_ai_head_discovery(
                 head_config,
@@ -780,6 +677,31 @@ def _handoff_context(
         context["council"] = council
     if ai_head is not None:
         context["ai_head"] = ai_head
+    config = load_effective_project_config(cwd)
+    models_state = load_effective_models_state(cwd, project_cfg=config)
+    is_orchestration = entrypoint == "orchestration"
+    worker_mode = resolve_effective_worker_mode(
+        section_mode=(
+            config.orchestration.worker_mode
+            if is_orchestration
+            else (config.ergo.worker_mode if config.ergo else None)
+        ),
+        ai_head_profile=config.ai_head.routing_profile,
+    )
+    context["worker_mode"] = worker_mode
+    context["ratings"] = {
+        harness: {
+            model: rating.model_dump(exclude_none=True)
+            for model, rating in ratings.items()
+        }
+        for harness, ratings in models_state.ratings.items()
+    }
+    if is_orchestration:
+        context["agy_mode"] = config.orchestration.agy_mode
+        context["default_harness"] = config.orchestration.effective_default_harness.value
+        context["selected_harness"] = (
+            native_harness or config.orchestration.effective_default_harness.value
+        )
     if config_path is not None:
         context["config_path"] = config_path
     return context
@@ -862,6 +784,7 @@ async def launch_master(
         "workspace_id": allocated.workspace_id,
         "pane_id": allocated.pane_id,
         "tab_id": allocated.tab_id,
+        "child_watch_run_dir": allocated.child_watch_run_dir,
         "agent_name": name,
         "owns_workspace": allocated.owns_workspace,
         "origin_cwd": target_cwd,
@@ -954,6 +877,7 @@ async def launch_ergo(
         "orchestrator_pane_id": allocated.pane_id,
         "scout_pane_id": allocated.pane_id,
         "tab_id": allocated.tab_id,
+        "child_watch_run_dir": allocated.child_watch_run_dir,
         "agent_name": ORCHESTRATOR_NAME,
         "owns_workspace": allocated.owns_workspace,
         "origin_cwd": target_cwd,
@@ -983,7 +907,7 @@ async def launch_orchestration(
     architect_effort: EffortLevel | str | None = None,
     reviewer_effort: EffortLevel | str | None = None,
     ai_head: bool | None = None,
-    dangerously_skip_permissions: bool = True,
+    dangerously_skip_permissions: bool = False,
     fresh_workspace: bool = False,
     focus: bool = True,
     delegated: bool = False,
@@ -1065,8 +989,7 @@ async def launch_orchestration(
     formatted_intent = f"{models_arg} {stripped_intent}".strip() if stripped_intent else models_arg
 
     if kind_str == "agy" and _is_agy_tier(scout_m):
-        spec = get_harness("agy")
-        argv = list(spec.herdr.permission_flags) if dangerously_skip_permissions else []
+        argv: list[str] = []
         descriptor = {
             "schema_version": 1,
             "mode": "herdr",
@@ -1085,7 +1008,6 @@ async def launch_orchestration(
             scout_m,
             scout_eff,
             "scout",
-            dangerously_skip_permissions=dangerously_skip_permissions,
         )
 
     ctx = resolve_launch_context(session)
@@ -1117,7 +1039,7 @@ async def launch_orchestration(
         mode="native",
         native_harness=kind_str,
         models=models_arg,
-        dangerously_skip_permissions=dangerously_skip_permissions,
+        dangerously_skip_permissions=False,
         ai_head=head_discovery,
         config_path=config_path,
     )
@@ -1147,6 +1069,7 @@ async def launch_orchestration(
         "orchestrator_pane_id": allocated.pane_id,
         "scout_pane_id": allocated.pane_id,
         "tab_id": allocated.tab_id,
+        "child_watch_run_dir": allocated.child_watch_run_dir,
         "agent_name": ORCHESTRATION_NAME,
         "owns_workspace": allocated.owns_workspace,
         "origin_cwd": target_cwd,
@@ -1155,7 +1078,7 @@ async def launch_orchestration(
         "model": scout_m,
         "effort": scout_eff.value if scout_eff else None,
         "squad": squad,
-        "dangerously_skip_permissions": dangerously_skip_permissions,
+        "dangerously_skip_permissions": False,
         "ai_head": head_discovery if (head_discovery and head_discovery.enabled) else None,
     }
 
@@ -1184,7 +1107,7 @@ async def launch_council(
     if council is not None:
         council_cfg = council
     else:
-        project_cfg = load_project_config(target_cwd)
+        project_cfg = load_effective_project_config(target_cwd)
         council_cfg = project_cfg.council
 
     if not isinstance(council_cfg, CouncilConfig):
@@ -1263,6 +1186,7 @@ async def launch_council(
         "pane_id": allocated.pane_id,
         "coordinator_pane_id": allocated.pane_id,
         "tab_id": allocated.tab_id,
+        "child_watch_run_dir": allocated.child_watch_run_dir,
         "agent_name": COUNCIL_COORDINATOR_NAME,
         "owns_workspace": allocated.owns_workspace,
         "ownership": allocated.owns_workspace,
@@ -1292,6 +1216,8 @@ async def launch_ai_head(
     focus: bool = True,
     dangerously_skip_permissions: Optional[bool] = None,
     automode: Optional[bool] = None,
+    parent_pane_id: Optional[str] = None,
+    delegated: bool = False,
 ) -> Dict[str, Any]:
     """Launch an interactive AiHead terminal session.
 
@@ -1320,7 +1246,7 @@ async def launch_ai_head(
     head_config = None
     project_cfg = None
     try:
-        project_cfg = load_project_config(config_path or initial_cwd)
+        project_cfg = load_effective_project_config(config_path or initial_cwd)
         head_config = project_cfg.ai_head
     except Exception:
         head_config = None
@@ -1344,11 +1270,6 @@ async def launch_ai_head(
         if effort is not None
         else (head_config.binding.effort if head_config and head_config.binding else None)
     )
-    eff_skip = (
-        dangerously_skip_permissions
-        if dangerously_skip_permissions is not None
-        else (head_config.dangerously_skip_permissions if head_config is not None else True)
-    )
     effective_split = (
         split if split is not None else (head_config.split if head_config is not None else True)
     )
@@ -1366,10 +1287,18 @@ async def launch_ai_head(
         model_slug,
         effort_level,
         "master",
-        dangerously_skip_permissions=eff_skip,
     )
 
     ctx = resolve_launch_context(session)
+    if (parent_pane_id is not None or delegated) and not ctx.is_inside_herdr:
+        raise ParentRouteError("A delegated parent must be on the inherited Herdr transport.")
+    active_client = _adopt_client(client, ctx) if ctx.is_inside_herdr else client
+    parent, parent_generation = await classify_launch_caller(
+        active_client,
+        caller_pane_id=os.environ.get("HERDR_PANE_ID") if ctx.is_inside_herdr else None,
+        parent_pane_id=parent_pane_id, delegated=delegated,
+    )
+    delegated = parent is not None
 
     is_split_applied = False
     secondary_pane_id: Optional[str] = None
@@ -1378,62 +1307,77 @@ async def launch_ai_head(
     active_pane = ctx.pane_id
     if not active_pane and ctx.is_inside_herdr:
         try:
-            curr = await _safe_await(client.current_pane)
+            curr = await _safe_await(active_client.current_pane)
             if isinstance(curr, dict):
                 active_pane = curr.get("pane_id") or (curr.get("pane") or {}).get("pane_id")
         except Exception:
             pass
 
     if effective_split and not workspace and ctx.is_inside_herdr and active_pane:
+        active = _adopt_client(client, ctx)
+        snapshot = await _safe_await(active.get_snapshot)
+        panes = getattr(snapshot, "panes", None)
+        if not isinstance(panes, list):
+            raise RuntimeError("Cannot verify pre-split pane inventory; no split attempted.")
+        inventory = {}
+        for pane in panes:
+            pane_id = (
+                pane.get("pane_id")
+                if isinstance(pane, dict)
+                else getattr(pane, "pane_id", None)
+            )
+            tab_id = (
+                pane.get("tab_id")
+                if isinstance(pane, dict)
+                else getattr(pane, "tab_id", None)
+            )
+            if not isinstance(pane_id, str) or pane_id in inventory:
+                raise RuntimeError("Ambiguous pre-split pane inventory; no split attempted.")
+            inventory[pane_id] = tab_id
+        if active_pane not in inventory or (ctx.tab_id and inventory[active_pane] != ctx.tab_id):
+            raise RuntimeError(
+                "Cannot verify pre-split target in the expected tab; no split attempted."
+            )
         split_res = await _safe_await(
-            client.split_pane,
+            active.split_pane,
             direction="right",
             target_pane_id=active_pane,
             cwd=target_cwd,
             focus=True,
         )
-        new_pane_id = None
+        candidates = []
         if isinstance(split_res, dict):
-            new_pane_id = (
-                split_res.get("pane_id")
-                or split_res.get("new_pane_id")
-                or split_res.get("id")
-                or (split_res.get("pane") if isinstance(split_res.get("pane"), dict) else {}).get(
-                    "pane_id"
-                )
-                or (
-                    split_res.get("root_pane")
-                    if isinstance(split_res.get("root_pane"), dict)
-                    else {}
-                ).get("pane_id")
-            )
-        if not new_pane_id:
-            snap = await _safe_await(client.get_snapshot)
-            if hasattr(snap, "panes") and isinstance(snap.panes, list):
-                for p in snap.panes:
-                    p_id = getattr(p, "pane_id", None) or (
-                        p.get("pane_id") if isinstance(p, dict) else None
-                    )
-                    p_tab = getattr(p, "tab_id", None) or (
-                        p.get("tab_id") if isinstance(p, dict) else None
-                    )
-                    if p_tab == ctx.tab_id and p_id != active_pane:
-                        new_pane_id = p_id
-                        break
-
-        if not new_pane_id:
+            candidates.extend(split_res.get(key) for key in ("pane_id", "new_pane_id", "id"))
+            for key in ("pane", "root_pane"):
+                if isinstance(split_res.get(key), dict):
+                    candidates.append(split_res[key].get("pane_id"))
+        candidates = [value for value in candidates if value is not None]
+        new_pane_id = (
+            candidates[0]
+            if candidates and all(value == candidates[0] for value in candidates)
+            else None
+        )
+        try:
+            validate_parent_pane(new_pane_id)
+            validate_parent_pane(active_pane)
+            if (
+                new_pane_id in inventory
+                or new_pane_id.split(':', 1)[0] != active_pane.split(':', 1)[0]
+            ):
+                raise ValueError("Split returned a pre-existing or cross-workspace pane")
+        except (ValueError, TypeError) as exc:
             raise RuntimeError(
                 f"Could not determine new pane ID from split_pane result: {split_res}"
-            )
+            ) from exc
 
-        await _safe_await(client.swap_panes, source_pane_id=active_pane, target_pane_id=new_pane_id)
+        await _safe_await(active.swap_panes, source_pane_id=active_pane, target_pane_id=new_pane_id)
         if focus:
-            await _safe_await(client.focus_pane, new_pane_id)
+            await _safe_await(active.focus_pane, new_pane_id)
 
         is_split_applied = True
         secondary_pane_id = active_pane
         allocated = _Allocated(
-            client=client,
+            client=active,
             session_name=str(ctx.session_name or "default"),
             socket_path=Path(ctx.socket_path or "/tmp/herdr.sock"),
             workspace_id=ctx.workspace_id,
@@ -1532,8 +1476,15 @@ async def launch_ai_head(
                 cwd=target_cwd,
                 fresh_workspace=False,
                 focus=focus,
+                parent_pane_id=parent,
+                delegated=delegated,
+                adopt_invoker=False,
             )
 
+    if parent is not None:
+        allocated.parent_generation = parent_generation
+        allocated.parent_pane_id = parent
+        allocated.delegated = True
     if not allocated.pane_id:
         raise RuntimeError(f"Could not allocate AiHead pane in workspace {allocated.workspace_id}")
 
@@ -1562,6 +1513,7 @@ async def launch_ai_head(
         "workspace_id": allocated.workspace_id,
         "pane_id": allocated.pane_id,
         "tab_id": allocated.tab_id,
+        "child_watch_run_dir": allocated.child_watch_run_dir,
         "agent_name": name,
         "split": is_split_applied,
         "origin_cwd": target_cwd,

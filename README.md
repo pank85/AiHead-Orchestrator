@@ -133,11 +133,13 @@ You no longer need to maintain redundant static worker lists (`[models.worker_po
 
 | Mode | Behavior |
 | :--- | :--- |
-| **`balanced`** *(default)* | Matches model strength and effort to task complexity; cheap/fast for mechanical tasks, frontier for hard tasks. |
-| **`quality`** | Prioritizes top `coding`, `intelligence`, and `agentic` ratings with higher effort. |
-| **`fast`** | Prioritizes top `speed` and low latency while maintaining adequate coding skill. |
-| **`frugal`** | Prioritizes `cost_efficiency` / free routes and lower effort; reserves heavy models for complex tasks only. |
+| **`balanced`** *(default)* | balanced: prefers tier 2 and tier 1; tier 3 (frontier) only when truly necessary. Role tiers: scout tier 1, architect tier 3, reviewer tier 2. |
+| **`quality`** | quality: uses tier 3 (frontier); uses tier 2 (all-around) only when quality will not be lost. Role tiers shift up (tier 3, tier 2 only when quality will not be lost). |
+| **`fast`** | fast: prefers fast tier 1/2 models. |
+| **`frugal`** | frugal: normally tier 1; may rise to tier 2. Role tiers shift down (tier 1, at most tier 2). |
 | **`inherit`** *(Ergo & Orchestration default)* | Follows `ai_head.routing_profile` when dispatched by AiHead, or `balanced` standalone. |
+
+Tier 1 = fast/cheap, Tier 2 = decent/all-around, Tier 3 = frontier/clever. Thinking effort is guidance, not a one-to-one lock: AiHead or the Architect combines worker tier and effort. Option 1: tiers are enforced only on the controlled dispatch path (aihead worker dispatch); a direct agent launch is not intercepted or blocked.
 
 *(Legacy `.herdr-master.toml` files containing `[models.worker_pool]` or `worker_models` still load cleanly without error, and explicit one-off CLI `--workers` / `--models coder=...` overrides continue to work.)*
 
@@ -184,9 +186,49 @@ aihead catalog ratings --project ~/.herdr-master.toml
 # Manually override a model's score (locks manual_override=true against auto-refresh)
 aihead catalog rate --binding pi:openai/gpt-6.1-sol --coding 96 --billing-tier api
 
+# Lock or explicitly unlock the independent worker routing tier (1, 2 or 3)
+aihead catalog rate --binding pi:openai/gpt-6.1-sol --worker-tier 2
+aihead catalog rate --binding pi:openai/gpt-6.1-sol --clear-worker-tier-override
+
 # Preview a full two-stage triage decision without dispatching
 aihead triage --task "Add rate-limiting middleware and tests" --project ~/.herdr-master.toml --dry-run
 ```
+
+Worker tiers are separate from `billing_tier`. Tier-only changes do not lock scores;
+`--clear-worker-tier-override` recomputes the tier locally without clearing the score
+lock. Conversely, `--clear-override` unlocks score refresh without clearing a tier
+lock. Set and clear of the worker tier cannot be combined; score edits may be
+combined with either. In TOML, `worker_tier = 1` (or 2/3) and
+`worker_tier_override = true` explicitly lock a tier; `false` marks it automatic.
+Legacy ratings without a tier derive one lazily.
+
+For controlled worker dispatch, resolve a run-policy record using the **exact actual**
+run inputs and capture the effective ratings/allowlist snapshot. Bind both in the
+versioned manifest and validate against current policy:
+
+```bash
+aihead worker run-policy create --run-id RUN_ID --worktree /absolute/project --mode herdr \
+  --output /tmp/run-policy.json
+# Include --run-squad /absolute/squad.toml and --workers EXACT_OVERRIDE if actually used.
+aihead worker snapshot --worktree /absolute/project --output /tmp/policy.json
+aihead worker manifest schema  # exact required fields and versioned task facts
+# Write the manifest with returned snapshot_digest, absolute run_policy_path,
+# returned run_policy_digest and all exact task facts.
+aihead worker manifest validate --manifest /tmp/manifest.json
+# Only after the human or AiHead has reviewed and approved BOTH printed digests:
+aihead worker approval create --manifest /tmp/manifest.json \
+  --manifest-digest APPROVED_MANIFEST_SHA256 --snapshot-digest APPROVED_POLICY_SHA256 \
+  --approver-type human --approver NAME --confirm-approved --output /tmp/approval.json
+aihead worker dispatch --manifest /tmp/manifest.json --task-id TASK_ID --approval /tmp/approval.json
+```
+
+Validation is not approval. The approval command records an operator's attestation
+of prior approval; it does **not** authenticate the named approver or provide a
+cryptographic identity. Run inputs are caller-supplied, not independently authenticated;
+the caller must pass the real inputs. Missing or changed run-policy bindings fail closed,
+and policy drift requires a new snapshot, manifest and external approval. Artifacts are
+never overwritten. Unmediated launches outside the controlled path are outside this
+application-level guarantee; this is not a sandbox.
 
 ### 4. Launch Autonomous AiHead
 
@@ -233,7 +275,7 @@ aihead --herdr-master                     # Dispatch /herdr-master multi-job coo
 # Incremental model evaluation & rating management
 aihead catalog evaluate [--project PATH] [--harness KIND] [--refresh] [--force] [--max-age DAYS] [--probe] [--no-llm] [--evaluator SLUG] [--dry-run] [--json]
 aihead catalog ratings  [--project PATH] [--harness KIND] [--json]
-aihead catalog rate     --binding <harness:model> [--intelligence N] [--coding N] [--agentic N] [--speed N] [--cost-efficiency N] [--context-handling N] [--billing-tier free|subscription|api] [--notes TEXT]
+aihead catalog rate     --binding <harness:model> [--intelligence N] [--coding N] [--agentic N] [--speed N] [--cost-efficiency N] [--context-handling N] [--billing-tier free|subscription|api] [--worker-tier 1|2|3 | --clear-worker-tier-override] [--clear-override] [--notes TEXT]
 
 # Allowlist inspection (includes ratings & unrated_models)
 aihead catalog available [--project PATH] [--json]
@@ -360,6 +402,14 @@ enabled = true
 | **Kilo (`kilo`)** | ✅ | Headless triage fallback (`aihead triage`) | `~/.config/kilo/skills/<skill>/SKILL.md` |
 
 ### Core Operating Invariants
+
+The first task prompt binds the actual immediate supervisor. A Herdr child receives that coordinator's concrete pane ID and sends every question, decision request, blocker, and completion only there; environment/bootstrap values corroborate the route. A missing delegated route stops before spawn. Only an intentional root handles user decisions directly.
+
+Only AiHead acting within its authorized scope or the human can approve a gated exact plan version. A delegated coordinator sends that plan and its run/version to its direct parent and waits for explicit approval. Intermediaries can relay the original decision with provenance, but neither they nor the coordinator can self-approve. Standalone coordinators use enabled AiHead where supported, or ask the human and wait. A routine automode update outside a gate is not approval.
+
+Automode handles routine reversible work without waiting for the user. Batch materially consequential choices into a plan checkpoint; keep non-automode and explicit gates. A technical `APPROVED` is not permission to bypass security or irreversibly destroy state. Those actions need explicit user approval for the specific target and action, relayed through the direct chain. Trust prompts and silence never grant it.
+
+After the first confirmed child is registered, the spawning coordinator starts one detached `python -m herdr_master.pipeline.child_watch --run-dir "$RUN_DIR" --parent-pane "$PARENT"` process for its private mode-700 run directory, in the verified session (pin `--parent-generation` for detached handoff). It checks confirmed child identities every 600 seconds and reports verified loss only to that coordinator, not to the user. Idle or blocked is not dead; RPC uncertainty is unknown. This is separate from startup checks and completion callbacks; files alone do not establish success and no child is automatically retried. Stop with `touch "$RUN_DIR/child-watch.stop"`; never reuse the run directory or kill by watcher PID. No monitor agent or pane is created. Native workers use only the invoking supervisor's return/message channel, even when the coordinator itself has a Herdr parent. A blocking tool's terminal result/error is its supervision; background launches require queryable exact native run IDs and one run-scoped 600-second health watcher. Stop on teardown or all children terminal. Without the adapter, do not dispatch in the background. Health alerts do not replace result callbacks.
 - **Main chat stays always free**: AiHead never edits files or blocks in polling loops—every job runs in a background Herdr workspace with push notifications (`herdr agent prompt`) one level up.
 - **User-facing inspection tabs**: Approved plans (`Plan: <short>`), completion summaries (`Update: <short>`), escalations (`Info: <short>`), and blocking questions (`Q: <short>`) open in interactive tabs in the coordinator workspace.
 - **Zero fabricated models**: Every automated routing decision passes through `validate_route()` against `[models.available]` and `core/catalog.py`.

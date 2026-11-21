@@ -24,13 +24,15 @@ from herdr_master.core.catalog import (
 from herdr_master.core.config import (
     find_project_config_path,
     load_effective_models_state,
-    load_project_config,
+    load_effective_project_config,
     save_project_config,
 )
 from herdr_master.core.model_ratings import (
     ModelRating,
     derive_recommended_roles,
+    derive_worker_tier,
     detect_model_family,
+    effective_worker_tier,
     find_unrated_models,
     format_rated_models_table,
     infer_supported_efforts,
@@ -194,7 +196,7 @@ def squad_cmd(
                 reviewer=reviewer,
             )
             resolved = resolve_squad(
-                project,
+                project if project is not None else (find_project_config_path() or Path.cwd()),
                 mode=mode,
                 native_harness=harness,
                 run_squad_path=run_squad,
@@ -288,7 +290,7 @@ def available_cmd(
         cfg = None
         resolved_path = _resolve_explicit_project_path(project)
         if resolved_path is not None:
-            cfg = load_project_config(resolved_path)
+            cfg = load_effective_project_config(resolved_path)
 
         if resolved_path is not None:
             effective = load_effective_models_state(resolved_path, project_cfg=cfg)
@@ -318,8 +320,7 @@ def available_cmd(
         unrated_models = find_unrated_models(target_models, effective_ratings)
         ratings_data = {
             harness: {
-                mid: rating.model_dump(exclude_none=True)
-                for mid, rating in model_map.items()
+                mid: rating.model_dump(exclude_none=True) for mid, rating in model_map.items()
             }
             for harness, model_map in effective_ratings.items()
         }
@@ -458,6 +459,19 @@ def evaluate_cmd(
     _guard(run)
 
 
+def _rating_document(rating: ModelRating) -> dict:
+    result = rating.model_dump(exclude_none=True)
+    result["effective_worker_tier"] = effective_worker_tier(rating)
+    result["worker_tier_source"] = (
+        "manual"
+        if rating.worker_tier_override
+        else "derived"
+        if rating.worker_tier is None
+        else "auto"
+    )
+    return result
+
+
 @catalog_app.command("ratings")
 def ratings_cmd(
     project: Annotated[
@@ -486,7 +500,7 @@ def ratings_cmd(
                 "inherited_paths": [str(p) for p in effective.inherited_paths],
                 "billing": dict(effective.evaluation.billing),
                 "ratings": {
-                    h: {mid: r.model_dump(exclude_none=True) for mid, r in mmap.items()}
+                    h: {mid: _rating_document(r) for mid, r in mmap.items()}
                     for h, mmap in ratings.items()
                 },
             }
@@ -501,6 +515,13 @@ def ratings_cmd(
             return
         models_by_harness = {h: list(m.keys()) for h, m in ratings.items()}
         sys.stdout.write(format_rated_models_table(models_by_harness, ratings) + "\n")
+        for h, mmap in ratings.items():
+            for mid, rating in mmap.items():
+                doc = _rating_document(rating)
+                sys.stdout.write(
+                    f"{h}:{mid} billing_tier={rating.billing_tier} "
+                    f"worker_tier={doc['effective_worker_tier']} ({doc['worker_tier_source']})\n"
+                )
 
     _guard(run)
 
@@ -521,6 +542,16 @@ def rate_cmd(
         Optional[str],
         typer.Option("--billing-tier", help="free, subscription, or api."),
     ] = None,
+    worker_tier: Annotated[
+        Optional[int], typer.Option("--worker-tier", help="Lock worker tier: 1, 2, or 3.")
+    ] = None,
+    clear_worker_tier_override: Annotated[
+        bool,
+        typer.Option(
+            "--clear-worker-tier-override",
+            help="Unlock and recompute worker tier from current scores.",
+        ),
+    ] = False,
     family: Annotated[Optional[str], typer.Option("--family")] = None,
     context_window: Annotated[Optional[int], typer.Option("--context-window")] = None,
     notes: Annotated[Optional[str], typer.Option("--notes")] = None,
@@ -537,6 +568,10 @@ def rate_cmd(
     """Manually set or override stored evaluation ratings for a single model."""
 
     def run() -> None:
+        if worker_tier is not None and worker_tier not in (1, 2, 3):
+            raise ValueError("--worker-tier must be 1, 2, or 3.")
+        if worker_tier is not None and clear_worker_tier_override:
+            raise ValueError("Cannot combine --worker-tier and --clear-worker-tier-override.")
         if ":" not in binding:
             raise ValueError("Expected --binding <harness>:<model> (for example pi:xai/grok-4.7).")
         harness_raw, model_raw = binding.split(":", 1)
@@ -547,9 +582,9 @@ def rate_cmd(
 
         resolved_path = _resolve_explicit_project_path(project) or find_project_config_path()
         cfg = (
-            load_project_config(resolved_path)
+            load_effective_project_config(resolved_path)
             if resolved_path and resolved_path.is_file()
-            else load_project_config()
+            else load_effective_project_config()
         )
         effective = load_effective_models_state(resolved_path, project_cfg=cfg)
         existing = lookup_rating(effective.ratings, harness_key, model_id)
@@ -561,6 +596,25 @@ def rate_cmd(
                 return getattr(existing, attr)
             return default
 
+        tier_only = (
+            (worker_tier is not None or clear_worker_tier_override)
+            and all(
+                value is None
+                for value in (
+                    intelligence,
+                    coding,
+                    agentic,
+                    speed,
+                    cost_efficiency,
+                    context_handling,
+                    billing_tier,
+                    family,
+                    context_window,
+                    notes,
+                )
+            )
+            and not clear_override
+        )
         updated = ModelRating(
             intelligence=pick(intelligence, "intelligence"),
             coding=pick(coding, "coding"),
@@ -603,7 +657,46 @@ def rate_cmd(
             evaluated_at=utc_now_iso(),
             manual_override=not clear_override,
         )
-        updated.recommended_roles = derive_recommended_roles(updated)
+        # Re-validate a merge with the complete effective record to retain extra fields and
+        # provenance. model_copy(update=...) alone does not validate pydantic updates.
+        data = existing.model_dump() if existing else {}
+        generated = updated.model_dump()
+        if existing:
+            generated = {
+                key: value
+                for key, value in {
+                    "intelligence": intelligence,
+                    "coding": coding,
+                    "agentic": agentic,
+                    "speed": speed,
+                    "cost_efficiency": cost_efficiency,
+                    "context_handling": context_handling,
+                    "billing_tier": billing_tier,
+                    "family": family,
+                    "context_window": context_window,
+                    "notes": notes,
+                }.items()
+                if value is not None
+            }
+            if not tier_only:
+                generated["manual_override"] = not clear_override
+        data.update(generated)
+        if existing:
+            data["worker_tier"] = existing.worker_tier
+            data["worker_tier_override"] = existing.worker_tier_override
+        if worker_tier is not None:
+            data.update(worker_tier=worker_tier, worker_tier_override=True)
+        elif clear_worker_tier_override:
+            data.update(worker_tier=None, worker_tier_override=False)
+        if tier_only and not existing:
+            data["manual_override"] = False
+        updated = ModelRating.model_validate(data)
+        if clear_worker_tier_override:
+            data = updated.model_dump()
+            data["worker_tier"] = derive_worker_tier(updated)
+            updated = ModelRating.model_validate(data)
+        if not tier_only:
+            updated.recommended_roles = derive_recommended_roles(updated)
 
         cfg.models.ratings = merge_ratings(cfg.models.ratings, {harness_key: {model_id: updated}})
         saved_path = save_project_config(cfg, resolved_path)
@@ -614,7 +707,7 @@ def rate_cmd(
                     "ok": True,
                     "binding": f"{harness_key}:{model_id}",
                     "saved_path": str(saved_path),
-                    "rating": updated.model_dump(exclude_none=True),
+                    "rating": _rating_document(updated),
                 }
             )
             return
@@ -650,9 +743,9 @@ def triage_models_cmd(
     def run() -> None:
         resolved_path = _resolve_explicit_project_path(project) or find_project_config_path()
         cfg = (
-            load_project_config(resolved_path)
+            load_effective_project_config(resolved_path)
             if resolved_path and resolved_path.is_file()
-            else load_project_config()
+            else load_effective_project_config()
         )
         effective = load_effective_models_state(resolved_path, project_cfg=cfg)
         catalog = discover_model_catalog(cfg, probe_live=False)
@@ -701,9 +794,9 @@ def validate_route_cmd(
         plan = RoutingPlan.model_validate(json.loads(raw_text))
         resolved_path = _resolve_explicit_project_path(project) or find_project_config_path()
         cfg = (
-            load_project_config(resolved_path)
+            load_effective_project_config(resolved_path)
             if resolved_path and resolved_path.is_file()
-            else load_project_config()
+            else load_effective_project_config()
         )
         effective = load_effective_models_state(resolved_path, project_cfg=cfg)
         res = validate_route(

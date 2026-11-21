@@ -29,11 +29,13 @@ from herdr_master.cli.aihead_setup import run_aihead_setup
 from herdr_master.cli.catalog import catalog_app
 from herdr_master.cli.skills import install_skills as run_install_skills
 from herdr_master.cli.skills import skills_app
+from herdr_master.cli.worker import worker_app
 from herdr_master.core.catalog import CatalogError, supported_harnesses
 from herdr_master.core.config import (
     DEFAULT_ORCHESTRATION_MODELS,
     CouncilConfig,
     find_project_config_path,
+    load_effective_project_config,
     load_project_config,
 )
 from herdr_master.core.context import HerdrContext
@@ -109,10 +111,12 @@ app.add_typer(master_app, name="master")
 app.add_typer(pipeline_app, name="pipeline")
 app.add_typer(skills_app, name="skills")
 app.add_typer(catalog_app, name="catalog")
+app.add_typer(worker_app, name="worker")
 aihead_app.add_typer(master_app, name="master")
 aihead_app.add_typer(pipeline_app, name="pipeline")
 aihead_app.add_typer(skills_app, name="skills")
 aihead_app.add_typer(catalog_app, name="catalog")
+aihead_app.add_typer(worker_app, name="worker")
 aihead_app.add_typer(core_app, name="core")
 
 console = Console()
@@ -411,8 +415,6 @@ def master_start(
     except _RESOLVE_ERRORS as err:
         _abort(str(err))
     client = HerdrClient(session=ctx.session_name, socket_path=ctx.socket_path)
-    caller_pane_id = os.environ.get("HERDR_PANE_ID") or getattr(ctx, "pane_id", None)
-    is_delegated = bool(caller_pane_id)
 
     async def _run():
         return await launch_master(
@@ -424,8 +426,6 @@ def master_start(
             session=session,
             effort=effort_level,
             fresh_workspace=True,
-            delegated=is_delegated,
-            parent_pane_id=caller_pane_id if is_delegated else None,
         )
 
     shown = f"{kind.value} {model_slug}"
@@ -433,6 +433,7 @@ def master_start(
         shown = f"{shown} effort {effort_level.value}"
     console.print(f"[bold cyan]👑 Launching Herdr Master[/bold cyan] ({name} on {shown})...")
     res = asyncio.run(_run())
+    _print_child_watch_dir(res)
     ws_id = res.get("workspace_id")
     pane_id = res.get("pane_id")
     target_session = res.get("session", ctx.session_name)
@@ -528,8 +529,6 @@ def run_ergo(
         _abort(str(err))
     client = HerdrClient(session=ctx.session_name, socket_path=ctx.socket_path)
     ws_label = label or f"ergo-{datetime.now().strftime('%Y%m%d-%H%M')}"
-    caller_pane_id = os.environ.get("HERDR_PANE_ID") or getattr(ctx, "pane_id", None)
-    is_delegated = bool(caller_pane_id)
 
     async def _run():
         return await launch_ergo(
@@ -541,12 +540,11 @@ def run_ergo(
             ai_head=ai_head,
             coordinator=coordinator_binding,
             fresh_workspace=True,
-            delegated=is_delegated,
-            parent_pane_id=caller_pane_id if is_delegated else None,
         )
 
     console.print(f"[bold magenta]⚡ Launching Ergo orchestrator[/bold magenta] ('{intent}')...")
     res = asyncio.run(_run())
+    _print_child_watch_dir(res)
     ws_id = res.get("workspace_id")
     pane_id = res.get("pane_id") or res.get("orchestrator_pane_id") or res.get("scout_pane_id")
     target_session = res.get("session", ctx.session_name)
@@ -588,7 +586,7 @@ def run_orchestration(
     dangerously_skip_permissions: bool = typer.Option(
         True,
         "--skip-permissions/--no-skip-permissions",
-        help="Skip interactive permissions prompts.",
+        help="Compatibility option; orchestration always starts with normal permissions.",
     ),
     ai_head: Optional[bool] = typer.Option(
         None,
@@ -638,8 +636,6 @@ def run_orchestration(
 
     client = HerdrClient(session=ctx.session_name, socket_path=ctx.socket_path)
     ws_label = label or f"orchestration-{datetime.now().strftime('%Y%m%d-%H%M')}"
-    caller_pane_id = os.environ.get("HERDR_PANE_ID") or getattr(ctx, "pane_id", None)
-    is_delegated = bool(caller_pane_id)
 
     async def _run():
         return await launch_orchestration(
@@ -658,12 +654,11 @@ def run_orchestration(
             ai_head=ai_head,
             dangerously_skip_permissions=dangerously_skip_permissions,
             fresh_workspace=True,
-            delegated=is_delegated,
-            parent_pane_id=caller_pane_id if is_delegated else None,
         )
 
     console.print(f"[bold cyan]🚀 Launching native orchestration[/bold cyan] ('{intent}')...")
     res = asyncio.run(_run())
+    _print_child_watch_dir(res)
     ws_id = res.get("workspace_id")
     pane_id = res.get("pane_id") or res.get("orchestrator_pane_id")
     target_session = res.get("session", ctx.session_name)
@@ -716,8 +711,6 @@ def run_council(
 
     client = HerdrClient(session=ctx.session_name, socket_path=ctx.socket_path)
     ws_label = label or f"council-{datetime.now().strftime('%Y%m%d-%H%M')}"
-    caller_pane_id = os.environ.get("HERDR_PANE_ID") or getattr(ctx, "pane_id", None)
-    is_delegated = bool(caller_pane_id)
 
     async def _run():
         return await launch_council(
@@ -728,12 +721,11 @@ def run_council(
             session=session,
             ai_head=ai_head,
             fresh_workspace=True,
-            delegated=is_delegated,
-            parent_pane_id=caller_pane_id if is_delegated else None,
         )
 
     console.print(f"[bold cyan]🏛️ Launching AI Council[/bold cyan] ('{intent}')...")
     res = asyncio.run(_run())
+    _print_child_watch_dir(res)
     ws_id = res.get("workspace_id")
     pane_id = res.get("pane_id") or res.get("coordinator_pane_id")
     target_session = res.get("session", ctx.session_name)
@@ -772,7 +764,7 @@ def run_aihead(
     dangerously_skip_permissions: Optional[bool] = typer.Option(
         None,
         "--skip-permissions/--no-skip-permissions",
-        help="Override AiHead dangerously_skip_permissions. Omitted uses saved config, then True.",
+        help="Compatibility option; AiHead always starts with normal permissions.",
     ),
     split: Optional[bool] = typer.Option(
         None,
@@ -828,7 +820,7 @@ def run_aihead(
     """Launch an interactive AiHead terminal session."""
     try:
         ctx = resolve_launch_context(session)
-        project_cfg = load_project_config(config)
+        project_cfg = load_effective_project_config(config)
         head_cfg = project_cfg.ai_head
 
         eff_harness = (
@@ -892,6 +884,7 @@ def run_aihead(
         shown = f"{shown} effort {effort_level.value}"
     console.print(f"[bold cyan]🤖 Launching AiHead[/bold cyan] ({shown})...")
     res = asyncio.run(_run())
+    _print_child_watch_dir(res)
 
     if isinstance(res, dict):
         ws_id = res.get("workspace_id")
@@ -971,7 +964,7 @@ def aihead_cli_cmd(
         execute_cli_decision_sync,
     )
 
-    head_config = load_project_config(config_path).ai_head
+    head_config = load_effective_project_config(config_path).ai_head
 
     if discover:
         discovery = build_ai_head_discovery(head_config, str(os.getcwd()), mode="cli")
@@ -1702,7 +1695,24 @@ async def _dispatch_standalone_aihead(
         )
 
 
+def _print_child_watch_dir(result: Any) -> None:
+    if isinstance(result, dict) and (run_dir := result.get("child_watch_run_dir")):
+        from shlex import quote
+
+        typer.echo(f"Child watcher run directory: {run_dir}")
+        typer.echo(
+            "Require the incoming HERDR TERMINAL REPORT and verify its receipt before marking "
+            "done. "
+            "Replace the message placeholder with the exact full received payload, including the "
+            "HERDR TERMINAL REPORT header, preserving all characters and newlines:\n"
+            f'{quote(sys.executable)} -m herdr_master.pipeline.parent_contract verify '
+            f'--run-dir {quote(str(run_dir))} --report-id "<id from incoming report>" '
+            "--message '<exact full received HERDR TERMINAL REPORT payload>'"
+        )
+
+
 def _print_standalone_launch_result(res: Any, fallback_session: str) -> str:
+    _print_child_watch_dir(res)
     if isinstance(res, dict):
         ws_id = res.get("workspace_id")
         pane_id = res.get("pane_id")
@@ -1760,16 +1770,12 @@ def _launch_skill(
             _require_herdr_executable("start or attach to the Herdr session")
         client = HerdrClient(session=ctx.session_name, socket_path=ctx.socket_path)
         label = f"{skill}-{datetime.now().strftime('%Y%m%d-%H%M%S')}"
-        caller_pane_id = os.environ.get("HERDR_PANE_ID") or getattr(ctx, "pane_id", None)
-        is_delegated = bool(caller_pane_id)
         common = dict(
             client=client,
             cwd=str(cwd.resolve()) if cwd else None,
             session=session,
             fresh_workspace=True,
             focus=True,
-            delegated=is_delegated,
-            parent_pane_id=caller_pane_id if is_delegated else None,
         )
         if skill == "ergo":
             resolved = _resolve_ergo_once(
@@ -1793,19 +1799,20 @@ def _launch_skill(
             operation = launch_council(
                 intent=intent or "",
                 workspace_label=label,
-                council=load_project_config(config or cwd).council,
+                council=load_effective_project_config(config or cwd).council,
                 **common,
             )
         elif skill == "orchestration":
-            orch = load_project_config(config or cwd).orchestration
-            if harness and harness != orch.harness.value:
-                orch.harnesses.setdefault(harness, orch.for_harness(harness))
-                orch.sync_harness_to_active(harness)
-            defaults = DEFAULT_ORCHESTRATION_MODELS.get(orch.harness.value, {})
+            orch = load_effective_project_config(config or cwd).orchestration
+            selected_harness = harness or orch.effective_default_harness.value
+            if selected_harness != orch.harness.value:
+                orch.harnesses.setdefault(selected_harness, orch.for_harness(selected_harness))
+                orch.sync_harness_to_active(selected_harness)
+            defaults = DEFAULT_ORCHESTRATION_MODELS.get(selected_harness, {})
             operation = launch_orchestration(
                 intent=intent or "",
                 workspace_label=label,
-                harness=harness or orch.harness,
+                harness=selected_harness,
                 scout_model=orch.scout_model or defaults.get("scout", ""),
                 architect_model=orch.architect_model or defaults.get("architect", ""),
                 coder_model=" | ".join(orch.worker_models) or defaults.get("coder", ""),
@@ -1826,6 +1833,7 @@ def _launch_skill(
                 **common,
             )
         result = asyncio.run(operation)
+        _print_child_watch_dir(result)
         target_session = str((result or {}).get("session") or ctx.session_name)
         typer.echo(
             f"Started {skill}: workspace {result.get('workspace_id')}, pane {result.get('pane_id')}"
@@ -1879,7 +1887,7 @@ def launch_standalone_aihead(
     dangerously_skip_permissions: Optional[bool] = typer.Option(
         None,
         "--skip-permissions/--no-skip-permissions",
-        help="Override AiHead dangerously_skip_permissions. Omitted uses saved config, then True.",
+        help="Compatibility option; AiHead always starts with normal permissions.",
     ),
     split: Optional[bool] = typer.Option(
         None,
@@ -2039,7 +2047,7 @@ def launch_standalone_aihead(
     if config is not None and not Path(config).expanduser().exists():
         _abort(f"Configuration file not found: {config}")
     try:
-        project_cfg = load_project_config(config if config is not None else cwd)
+        project_cfg = load_effective_project_config(config if config is not None else cwd)
     except tomllib.TOMLDecodeError as err:
         _abort(f"Invalid AiHead configuration: {err}")
     except _RESOLVE_ERRORS as err:

@@ -33,7 +33,7 @@ from herdr_master.core.catalog import (
 from herdr_master.core.config import (
     AiHeadConfig,
     load_effective_models_state,
-    load_project_config,
+    load_effective_project_config,
     validate_routing_profile,
 )
 from herdr_master.core.model_ratings import (
@@ -768,9 +768,9 @@ def run_triage(
     """Execute Stage-1 Mini-Scout -> Stage-2 Router -> Deterministic Validation Gate."""
     work_dir = Path(cwd or Path.cwd()).resolve()
     raw_cfg = (
-        load_project_config(project_path)
+        load_effective_project_config(project_path)
         if project_path is not None
-        else load_project_config(work_dir)
+        else load_effective_project_config(work_dir)
     )
     effective = load_effective_models_state(
         project_path or work_dir,
