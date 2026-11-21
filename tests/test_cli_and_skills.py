@@ -137,3 +137,53 @@ def test_skill_composition_and_install_remove_in_isolated_home(isolated_home: Pa
     r_remove = runner.invoke(aihead_app, ["skills", "remove"])
     assert r_remove.exit_code == 0, r_remove.output
     assert not installed.exists()
+
+
+def test_setup_tui_worker_tier_picker_and_save_stays_open(isolated_home: Path) -> None:
+    from herdr_master.cli.setup_catalog import ChoiceOption, ModelCatalog
+    from herdr_master.cli.setup_tui import SetupTuiApp
+
+    cfg_path = isolated_home / ".herdr-master.toml"
+    cfg = HerdrMasterConfig()
+    cfg.models.available = AvailableModels(herdr={"pi": ["openai/gpt-6.1-sol"]})
+    save_project_config(cfg, cfg_path)
+
+    catalog = ModelCatalog(
+        herdr_harnesses=[ChoiceOption("pi", "pi")],
+        native_harnesses=[],
+        herdr_models={"pi": [ChoiceOption("openai/gpt-6.1-sol", "openai/gpt-6.1-sol")]},
+        native_models={},
+    )
+    app = SetupTuiApp(config_path=cfg_path, catalog=catalog)
+    app.handle_key("6")
+    assert app.current_section == "models"
+    app.focus_pane = "options"
+    rows = app._current_rows()
+    model_idx = next(i for i, r in enumerate(rows) if r.key == "available.toggle.0")
+    app.field_cursors["models"] = model_idx
+
+    # Open tier picker with 't', pick Tier 3 (Frontier), confirm with Enter
+    app.handle_key("t")
+    assert app.picker is not None
+    assert [opt.value for opt in app.picker.options] == [1, 2, 3, "auto"]
+    app.handle_key("DOWN")
+    app.handle_key("DOWN")
+    app.handle_key("ENTER")
+    assert app.picker is None
+    assert app.dirty is True
+
+    # Save with 's' must persist and NOT close
+    app.handle_key("s")
+    assert app.done is False
+    assert app.saved is True
+    assert app.dirty is False
+
+    reloaded = load_project_config(cfg_path)
+    saved_rating = reloaded.models.ratings["pi"]["openai/gpt-6.1-sol"]
+    assert saved_rating.worker_tier == 3
+    assert saved_rating.worker_tier_override is True
+
+    # Only 'q' closes, preserving saved=True
+    app.handle_key("q")
+    assert app.done is True
+    assert app.saved is True
