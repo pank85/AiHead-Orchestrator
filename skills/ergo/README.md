@@ -218,7 +218,7 @@ fast: prefers fast tier 1/2 models
 
 Thinking effort is guidance, not a one-to-one lock: AiHead or the Architect combines worker tier and effort.
 
-Role tiers (guidance): balanced = scout tier 1, architect tier 3, reviewer tier 2; frugal shifts roles down (tier 1, at most tier 2); quality shifts roles up (tier 3, tier 2 only when quality will not be lost).
+Role tiers (guidance): balanced = scout tier 1, architect tier 3 (mid/value pick, or tier 2 if simple), reviewer tier 2; frugal = scout tier 1, architect tier 2, reviewer tier 1–2; quality = scout tier 2, architect tier 3, reviewer tier 3. The Architect is never Tier 1 in any mode.
 
 Option 1: tiers are enforced only on the controlled dispatch path (aihead worker dispatch); a direct agent launch is not intercepted or blocked.
 

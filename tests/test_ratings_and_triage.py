@@ -20,7 +20,11 @@ from herdr_master.core.model_ratings import (
     find_unrated_models,
 )
 from herdr_master.pipeline.model_evaluator import evaluate_available_models
-from herdr_master.pipeline.squad import build_dynamic_coder_pool, worker_tier_allowed
+from herdr_master.pipeline.squad import (
+    build_dynamic_coder_pool,
+    worker_mode_rank_score,
+    worker_tier_allowed,
+)
 from herdr_master.pipeline.triage import RoutingPlan, select_triage_models, validate_route
 
 
@@ -266,3 +270,72 @@ def test_dynamic_coder_pool_and_triage_route_validation() -> None:
 )
 def test_provider_default_worker_tier_presets(model_id: str, expected_tier: int) -> None:
     assert default_worker_tier_for_model(model_id) == expected_tier
+
+
+def test_intra_tier_ranking_respects_subscription_cost_and_mode() -> None:
+    # Both on subscription within Tier 2: quota-light value model vs heavier top model
+    quota_light = ModelRating(
+        intelligence=84,
+        coding=86,
+        agentic=84,
+        speed=86,
+        cost_efficiency=88,
+        context_handling=90,
+        billing_tier="subscription",
+        worker_tier=2,
+    )
+    heavy_top = ModelRating(
+        intelligence=93,
+        coding=94,
+        agentic=92,
+        speed=62,
+        cost_efficiency=50,
+        context_handling=95,
+        billing_tier="subscription",
+        worker_tier=2,
+    )
+
+    assert worker_mode_rank_score(quota_light, "frugal") > worker_mode_rank_score(
+        heavy_top, "frugal"
+    )
+    assert worker_mode_rank_score(quota_light, "balanced") > worker_mode_rank_score(
+        heavy_top, "balanced"
+    )
+    assert worker_mode_rank_score(heavy_top, "quality") > worker_mode_rank_score(
+        quota_light, "quality"
+    )
+
+
+def test_validate_route_rejects_tier_one_architect() -> None:
+    available = AvailableModels(
+        herdr={"pi": ["openai/gpt-6-luna", "openai/gpt-6.1-terra", "openai/gpt-6.1-sol"]}
+    )
+    ratings = {
+        "pi": {
+            "openai/gpt-6-luna": _rating(
+                intelligence=70, coding=68, agentic=66, worker_tier=1, family="openai"
+            ),
+            "openai/gpt-6.1-terra": _rating(
+                intelligence=82, coding=80, agentic=81, worker_tier=2, family="openai"
+            ),
+            "openai/gpt-6.1-sol": _rating(
+                intelligence=92, coding=93, agentic=91, worker_tier=3, family="openai"
+            ),
+        }
+    }
+
+    def plan(architect: str) -> RoutingPlan:
+        return RoutingPlan(
+            workflow="ergo",
+            target_mode="herdr",
+            scout="pi:openai/gpt-6-luna",
+            architect=architect,
+            reviewer="pi:openai/gpt-6.1-terra",
+        )
+
+    bad = validate_route(plan("pi:openai/gpt-6-luna"), available=available, ratings=ratings)
+    assert bad.valid is False
+    assert any("Architect must be Tier 2 or Tier 3" in err for err in bad.errors)
+
+    for ok_model in ("pi:openai/gpt-6.1-terra", "pi:openai/gpt-6.1-sol"):
+        assert validate_route(plan(ok_model), available=available, ratings=ratings).valid is True

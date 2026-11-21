@@ -71,13 +71,15 @@ Do NOT maintain or consult hardcoded default model tables. The single authority 
    The block reports `worker_tier` alongside `billing_tier`; these are distinct.
    Harnesses disabled in `[models.harnesses]` (`aihead --setup` → `[7] Harnesses`) are excluded from `ALLOWED CODER MODELS` and blocked on dispatch; never select a disabled harness.
 
-   Tier 1 = fast/cheap, Tier 2 = decent/all-around, Tier 3 = frontier/clever
+   Tier 1 = Cheap/Fast, Tier 2 = Everyday/All-rounder, Tier 3 = Frontier
 
-   Mode guidance: balanced: prefers tier 2 and tier 1; tier 3 (frontier) only when truly necessary. frugal: normally tier 1; may rise to tier 2. quality: uses tier 3 (frontier); uses tier 2 (all-around) only when quality will not be lost. fast: prefers fast tier 1/2 models.
+   Mode & intra-tier guidance (baseline outline — AiHead/Architect make the final call; `cost_efficiency` / price matters even on subscription limits):
+   - `frugal`: always pick the **cheapest** model in the minimum viable tier (T1 default, T2 only if required; low effort). Roles: Scout T1 cheapest, Architect T2 cheapest, Reviewer T1–T2 cheapest cross-family.
+   - `balanced`: pick **best value** within the task's required tier (T1 mechanical, T2 standard, T3 only if very hard). Roles: Scout T1 cheapest, Reviewer T2 best-value cross-family, Architect mid/value T3 (low/medium effort, or T2 if simple).
+   - `quality`: pick **best capability** within the task's required tier (T2 default, T3 for hard/core). Roles: Scout T2 best, Architect top T3, Reviewer top T3 cross-family.
+   - `fast`: pick **fastest** within T1/T2 with low effort.
 
    Thinking effort is guidance, not a one-to-one lock: AiHead or the Architect combines worker tier and effort.
-
-   Role tiers (guidance): balanced = scout tier 1, architect tier 3, reviewer tier 2; frugal shifts roles down (tier 1, at most tier 2); quality shifts roles up (tier 3, tier 2 only when quality will not be lost).
 
 4. **Resolving Agent Launch Descriptors**:
    For each role/task launch, resolve the exact launch arguments or native tool call from:

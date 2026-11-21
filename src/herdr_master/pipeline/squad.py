@@ -66,9 +66,9 @@ MODE_TIER_PREFERENCE: Dict[str, Tuple[int, int, int]] = {
     "fast": (1, 2, 3),
 }
 MODE_ROLE_TIER_GUIDANCE: Dict[str, Dict[str, Tuple[int, ...]]] = {
-    "balanced": {"scout": (1,), "architect": (3,), "reviewer": (2,), "worker": (2, 1)},
-    "frugal": {"scout": (1,), "architect": (2, 1), "reviewer": (1, 2), "worker": (1, 2)},
-    "quality": {"scout": (2, 1), "architect": (3,), "reviewer": (3, 2), "worker": (3, 2)},
+    "balanced": {"scout": (1,), "architect": (3, 2), "reviewer": (2,), "worker": (2, 1)},
+    "frugal": {"scout": (1,), "architect": (2,), "reviewer": (1, 2), "worker": (1, 2)},
+    "quality": {"scout": (2,), "architect": (3,), "reviewer": (3,), "worker": (3, 2)},
     "fast": {"scout": (1,), "architect": (2, 3), "reviewer": (2, 1), "worker": (1, 2)},
 }
 _COMPACT_ROLES = {
@@ -124,41 +124,62 @@ def validate_squad(squad: Squad) -> List[str]:
 
 _WORKER_MODE_GUIDANCE: Dict[str, str] = {
     "balanced": (
-        "match model strength & effort to task complexity; use fast/cheap models for "
-        "mechanical work and high-coding/intelligence models for complex tasks"
+        "pick best value within the target tier (balance capability against cost_efficiency — "
+        "price/quota matters even on subscription); scout T1 cheapest, reviewer T2 best-value "
+        "cross-family, architect mid/value T3 (or T2 if simple), workers best value per task"
     ),
     "quality": (
-        "prioritize highest coding, intelligence, and agentic ratings with higher effort "
-        "even on medium tasks"
+        "pick highest capability within the target tier (intelligence/coding/agentic with higher "
+        "effort); scout T2 best, architect top T3, reviewer top T3 cross-family, workers best "
+        "in their required tier"
     ),
     "fast": (
-        "prioritize highest speed and low latency while maintaining adequate coding skill "
-        "for each task"
+        "pick fastest within T1/T2 (highest speed with adequate coding skill and low effort)"
     ),
     "frugal": (
-        "prioritize highest cost_efficiency / free routes and lower effort; reserve heavy "
-        "models strictly for high-complexity tasks"
+        "always pick the cheapest option in the minimum viable tier (highest cost_efficiency; "
+        "price/quota matters even on subscription; low effort)"
     ),
 }
 
 
 def worker_mode_rank_score(rating: Optional[ModelRating], worker_mode: str = "balanced") -> float:
-    """Compute a sorting score for a candidate coder model under ``worker_mode``."""
+    """Compute an intra-tier sorting score for a candidate model under ``worker_mode``.
+
+    ``cost_efficiency`` always weighs in ``frugal`` and ``balanced`` even on
+    ``subscription`` because expensive models consume subscription limits faster.
+    """
     if rating is None:
         return -1.0
     mode = validate_routing_profile(worker_mode)
+    billing_bonus = 3.0 if rating.billing_tier == "free" else (
+        1.5 if rating.billing_tier == "subscription" else 0.0
+    )
     if mode == "quality":
-        return 0.45 * rating.coding + 0.35 * rating.intelligence + 0.20 * rating.agentic
+        return (
+            0.42 * rating.coding
+            + 0.36 * rating.intelligence
+            + 0.20 * rating.agentic
+            + 0.02 * rating.cost_efficiency
+        )
     if mode == "fast":
         return 0.50 * rating.speed + 0.30 * rating.coding + 0.20 * rating.cost_efficiency
     if mode == "frugal":
-        return 0.55 * rating.cost_efficiency + 0.25 * rating.coding + 0.20 * rating.speed
+        return (
+            0.65 * rating.cost_efficiency
+            + 0.15 * rating.speed
+            + 0.15 * rating.coding
+            + 0.05 * rating.agentic
+            + billing_bonus
+        )
+    # balanced: best value within tier (capability balanced with cost/quota efficiency)
     return (
-        0.35 * rating.coding
+        0.30 * rating.coding
         + 0.25 * rating.intelligence
         + 0.15 * rating.agentic
-        + 0.15 * rating.speed
-        + 0.10 * rating.cost_efficiency
+        + 0.20 * rating.cost_efficiency
+        + 0.10 * rating.speed
+        + (billing_bonus * 0.5)
     )
 
 
@@ -229,7 +250,8 @@ def format_mode_tier_guidance(worker_mode: str = "balanced") -> str:
         f"{role}: {', '.join(str(tier) for tier in tiers)}"
         for role, tiers in role_guidance.items()
     )
-    lines.append("These are preferences, not a one-to-one lock.")
+    lines.append(f"INTRA-TIER PICK ({mode}): {_WORKER_MODE_GUIDANCE[mode]}")
+    lines.append("These are baseline guidelines; AiHead / Architect make the final call per task.")
     return "\n".join(lines)
 
 
