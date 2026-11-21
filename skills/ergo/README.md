@@ -206,15 +206,17 @@ pane_id	role	tab_id	branch	worktree	run_dir	status	last_heartbeat
 
 ## Worker tiers & controlled dispatch
 
-Tier 1 = fast/cheap, Tier 2 = decent/all-around, Tier 3 = frontier/clever
+Tier 1 = Cheap/Fast, Tier 2 = Everyday/All-rounder, Tier 3 = Frontier
 
-balanced: prefers tier 2 and tier 1; tier 3 (frontier) only when truly necessary
+frugal: cheapest model in the minimum viable tier (T1 default, T2 if required; low effort)
 
-frugal: normally tier 1; may rise to tier 2
+balanced: best value in the task's tier; tier 3 (frontier) only when truly necessary
 
-quality: uses tier 3 (frontier); uses tier 2 (all-around) only when quality will not be lost
+quality: best capability in the task's tier (T2 default, T3 for hard/core work)
 
-fast: prefers fast tier 1/2 models
+fast: fastest tier 1/2 models
+
+`cost_efficiency` counts even on subscription models because expensive models burn quota faster.
 
 Thinking effort is guidance, not a one-to-one lock: AiHead or the Architect combines worker tier and effort.
 

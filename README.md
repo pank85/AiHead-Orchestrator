@@ -133,13 +133,13 @@ You no longer need to maintain redundant static worker lists (`[models.worker_po
 
 | Mode | Behavior |
 | :--- | :--- |
-| **`balanced`** *(default)* | balanced: prefers tier 2 and tier 1; tier 3 (frontier) only when truly necessary. Role tiers: scout tier 1, architect tier 3, reviewer tier 2. |
-| **`quality`** | quality: uses tier 3 (frontier); uses tier 2 (all-around) only when quality will not be lost. Role tiers shift up (tier 3, tier 2 only when quality will not be lost). |
-| **`fast`** | fast: prefers fast tier 1/2 models. |
-| **`frugal`** | frugal: normally tier 1; may rise to tier 2. Role tiers shift down (tier 1, at most tier 2). |
+| **`frugal`** | **Cheapest** model in the minimum viable tier (`cost_efficiency` first, low effort). Scout T1 · Architect T2 · Reviewer T1–T2 (cross-family) · Workers T1, else T2. |
+| **`balanced`** *(default)* | **Best value** in the task's tier. Scout T1 (cheapest) · Reviewer T2 (best value, cross-family) · Architect a mid/value T3 (low/medium effort, or T2 for simple tasks) · Workers T2/T1 per task, T3 only for very hard work. |
+| **`quality`** | **Best capability** in the tier. Scout T2 · Architect top T3 · Reviewer top T3 (cross-family) · Workers T3/T2 per task. |
+| **`fast`** | **Fastest** model in T1/T2 with low effort. |
 | **`inherit`** *(Ergo & Orchestration default)* | Follows `ai_head.routing_profile` when dispatched by AiHead, or `balanced` standalone. |
 
-Tier 1 = fast/cheap, Tier 2 = decent/all-around, Tier 3 = frontier/clever. Thinking effort is guidance, not a one-to-one lock: AiHead or the Architect combines worker tier and effort. Option 1: tiers are enforced only on the controlled dispatch path (aihead worker dispatch); a direct agent launch is not intercepted or blocked.
+Tier 1 = **Cheap/Fast**, Tier 2 = **Everyday/All-rounder**, Tier 3 = **Frontier**. Set each model's tier in `aihead --setup` → `[6] Available` (`T`); built-in provider presets seed the initial tiers (Claude haiku/sonnet/opus, GPT luna/terra/sol, Gemini hydrogen/neon/carbon+argon). `cost_efficiency` counts even on subscription models because expensive models burn quota faster. **The Architect is never Tier 1 in any mode** (`validate-route` rejects it). These modes are a baseline: AiHead and the Architect make the final decision per task. Thinking effort is guidance, not a one-to-one lock. Option 1: tiers are enforced only on the controlled dispatch path (aihead worker dispatch); a direct agent launch is not intercepted or blocked.
 
 *(Legacy `.herdr-master.toml` files containing `[models.worker_pool]` or `worker_models` still load cleanly without error, and explicit one-off CLI `--workers` / `--models coder=...` overrides continue to work.)*
 
@@ -169,10 +169,11 @@ aihead --setup
 ```
 
 Inside `aihead --setup`:
-- **`[6] Available`**: Toggle the models you want to allow per harness, set each harness's **Billing Tier** (`api` / `subscription` / `free`), press **`E`** to evaluate all unrated models live, and press **`V`** on any model to inspect its full rating breakdown.
+- **`[6] Available`**: Toggle the models you want to allow per harness (`agy` effort variants are grouped into one row per base model), set each harness's **Billing Tier** (`api` / `subscription` / `free`), press **`T`** on a model to assign its worker tier (Cheap/Fast, Everyday, Frontier, or Auto), press **`E`** to evaluate all unrated models live, and press **`V`** on any model to inspect its full rating breakdown.
 - **`[1] aihead`**: Enable **Automode = true** and choose your default **Routing Profile** (`balanced` | `quality` | `fast` | `frugal`).
 - **`[2] ergo` / `[3] orchestration`**: Choose **Worker Mode** (`inherit` | `balanced` | `quality` | `fast` | `frugal`) — no manual worker lists required.
-- Press **`S`** to save atomically to `.herdr-master.toml`.
+- **`[7] Harnesses`**: See every supported harness with its `[installed]` / `[not installed]` status and switch it **on/off** (`[models.harnesses]`); disabled harnesses are excluded from model and worker selection, route validation, and controlled dispatch.
+- Press **`S`** to save atomically to the config file shown in the header (saving keeps the TUI open); press **`Q`** to quit.
 
 ### 3. Evaluate Models & Test Smart Routing from CLI
 
