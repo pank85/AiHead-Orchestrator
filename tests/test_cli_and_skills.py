@@ -187,3 +187,71 @@ def test_setup_tui_worker_tier_picker_and_save_stays_open(isolated_home: Path) -
     app.handle_key("q")
     assert app.done is True
     assert app.saved is True
+
+
+def test_setup_tui_harnesses_tab_and_agy_grouped_models(isolated_home: Path) -> None:
+    from herdr_master.cli.setup_catalog import ChoiceOption, ModelCatalog
+    from herdr_master.cli.setup_tui import SetupTuiApp
+
+    cfg_path = isolated_home / ".herdr-master.toml"
+    cfg = HerdrMasterConfig()
+    cfg.models.available = AvailableModels(
+        herdr={
+            "agy": [
+                "gemini-4-neon-low",
+                "gemini-4-neon-medium",
+                "gemini-4-neon-high",
+                "claude-opus-5-5-high",
+            ]
+        }
+    )
+    save_project_config(cfg, cfg_path)
+
+    catalog = ModelCatalog(
+        herdr_harnesses=[ChoiceOption("agy", "agy")],
+        native_harnesses=[],
+        herdr_models={
+            "agy": [
+                ChoiceOption("gemini-4-neon-low", "gemini-4-neon-low"),
+                ChoiceOption("gemini-4-neon-medium", "gemini-4-neon-medium"),
+                ChoiceOption("gemini-4-neon-high", "gemini-4-neon-high"),
+                ChoiceOption("claude-opus-5-5-high", "claude-opus-5-5-high"),
+            ]
+        },
+        native_models={},
+    )
+    app = SetupTuiApp(config_path=cfg_path, catalog=catalog)
+
+    # Header shows resolved path (~/.herdr-master.toml), not bare filename
+    rendered = app.render(width=100, height=30)
+    assert "~/.herdr-master.toml" in rendered
+
+    # [6] Available groups agy effort variants into base models
+    app.handle_key("6")
+    model_rows = [r for r in app._current_rows() if r.key.startswith("available.toggle.")]
+    assert [r.label for r in model_rows] == ["gemini-4-neon", "claude-opus-5-5"]
+    assert "T2 Everyday" in model_rows[0].badge
+    assert "T3 Frontier" in model_rows[1].badge
+
+    # Toggling base model off removes all its effort variants
+    neon_idx = next(
+        i for i, r in enumerate(app._current_rows()) if r.key == "available.toggle.0"
+    )
+    app.field_cursors["models"] = neon_idx
+    app.handle_key("SPACE")
+    assert app.cfg.models.available is not None
+    assert app.cfg.models.available.herdr["agy"] == ["claude-opus-5-5-high"]
+
+    # [7] Harnesses shows installed/not installed and toggles harness on/off
+    app.handle_key("7")
+    assert app.current_section == "harnesses"
+    h_rows = app._current_rows()
+    assert len(h_rows) >= 7
+    assert all(r.badge in ("[installed]", "[not installed]") for r in h_rows)
+    first_harness = h_rows[0].key.split(".", 1)[1]
+    app.handle_key("SPACE")
+    assert app.cfg.models.harnesses[first_harness] is False
+
+    app.handle_key("s")
+    reloaded = load_project_config(cfg_path)
+    assert reloaded.models.harnesses[first_harness] is False

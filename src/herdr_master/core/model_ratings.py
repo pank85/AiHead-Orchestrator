@@ -34,6 +34,8 @@ __all__ = [
     "NormalizedModel",
     "apply_effort_calibration",
     "clamp_score",
+    "PROVIDER_DEFAULT_WORKER_TIERS",
+    "default_worker_tier_for_model",
     "derive_recommended_roles",
     "derive_worker_tier",
     "effective_worker_tier",
@@ -827,8 +829,53 @@ def find_unrated_models(
     return pending
 
 
-def derive_worker_tier(rating: ModelRating) -> int:
-    """Derive provisional routing class; tier 1 is cost/latency, not a quality guarantee."""
+# Default initial worker-tier classification per provider model family.
+# Tier 1 = Cheap / Fast, Tier 2 = Everyday / All-rounder, Tier 3 = Frontier.
+# Used for initial setup and auto-derivation before/during evaluation; explicit
+# per-model overrides (`worker_tier_override = true`) always take precedence.
+PROVIDER_DEFAULT_WORKER_TIERS: Dict[str, Dict[int, Tuple[str, ...]]] = {
+    "anthropic": {
+        1: ("haiku",),
+        2: ("sonnet",),
+        3: ("opus",),
+    },
+    "openai": {
+        1: ("luna", "mini", "nano"),
+        2: ("terra",),
+        3: ("sol",),
+    },
+    "google": {
+        1: ("hydrogen", "flash-lite", "flash_lite"),
+        2: ("neon", "flash"),
+        3: ("carbon", "argon", "pro"),
+    },
+}
+
+
+def default_worker_tier_for_model(model_id: str) -> Optional[int]:
+    """Return the built-in default worker tier (1, 2, or 3) for a known provider model slug."""
+    slug = model_id.strip().lower()
+    if not slug:
+        return None
+    if slug.endswith(":free") or "/free" in slug:
+        return 1
+    tokens = set(re.split(r"[^a-z0-9]+", slug))
+    for tier_map in PROVIDER_DEFAULT_WORKER_TIERS.values():
+        for tier in (1, 2, 3):
+            for pattern in tier_map.get(tier, ()):
+                if pattern in tokens or (
+                    ("-" in pattern or "_" in pattern) and pattern in slug
+                ):
+                    return tier
+    return None
+
+
+def derive_worker_tier(rating: ModelRating, model_id: Optional[str] = None) -> int:
+    """Derive provisional routing class; prefers known provider presets when model_id matches."""
+    if model_id:
+        preset = default_worker_tier_for_model(model_id)
+        if preset is not None:
+            return preset
     capability = (rating.coding + rating.intelligence + rating.agentic) / 3
     if capability >= 88:
         return 3
@@ -879,13 +926,19 @@ def format_rated_models_table(
                 else "fixed/none"
             )
             roles = ",".join(rating.recommended_roles) if rating.recommended_roles else "-"
+            tier_src = (
+                "manual"
+                if rating.worker_tier_override
+                else "derived"
+                if rating.worker_tier is None
+                else "auto"
+            )
             lines.append(
                 f"- {slug} | fam={rating.family} | "
                 f"I:{rating.intelligence} C:{rating.coding} A:{rating.agentic} "
                 f"S:{rating.speed} $:{rating.cost_efficiency} Ctx:{ctx} | "
                 f"billing_tier={rating.billing_tier} | "
-                f"worker_tier={effective_worker_tier(rating)} "
-                f"({'manual' if rating.worker_tier_override else 'derived' if rating.worker_tier is None else 'auto'}) | "
+                f"worker_tier={effective_worker_tier(rating)} ({tier_src}) | "
                 f"effort: {eff} | roles={roles}"
             )
     return "\n".join(lines) if lines else "(no models)"

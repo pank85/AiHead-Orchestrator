@@ -69,6 +69,7 @@ Do NOT maintain or consult hardcoded default model tables. The single authority 
    Extract `.allowed_coder_models` directly from `aihead catalog squad [--worker-mode <mode>] --json` output. Unless explicit `--workers` overrides were passed, this block is built dynamically from effective `[models.available]` + `[models.ratings]` across enabled harnesses and ranked by `worker_mode` (`balanced` | `quality` | `fast` | `frugal`, inheriting `ai_head.routing_profile` when set to `inherit`). Paste this block verbatim into the Architect prompt so the Architect selects the best worker model and per-task effort using the stored ratings. Do not craft your own model list.
 
    The block reports `worker_tier` alongside `billing_tier`; these are distinct.
+   Harnesses disabled in `[models.harnesses]` (`aihead --setup` → `[7] Harnesses`) are excluded from `ALLOWED CODER MODELS` and blocked on dispatch; never select a disabled harness.
 
    Tier 1 = fast/cheap, Tier 2 = decent/all-around, Tier 3 = frontier/clever
 

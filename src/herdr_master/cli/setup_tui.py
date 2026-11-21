@@ -50,6 +50,8 @@ from herdr_master.core.config import (
     CouncilMember,
     ErgoConfig,
     HerdrMasterConfig,
+    find_project_config_path,
+    is_harness_enabled,
     load_effective_models_state,
     load_project_config,
     save_project_config,
@@ -60,6 +62,7 @@ from herdr_master.core.model_ratings import (
     BILLING_TIERS,
     ModelEvaluationConfig,
     ModelRating,
+    default_worker_tier_for_model,
     derive_worker_tier,
     detect_model_family,
     effective_worker_tier,
@@ -67,6 +70,7 @@ from herdr_master.core.model_ratings import (
     infer_supported_efforts,
     lookup_rating,
     merge_ratings,
+    split_effort_suffix,
 )
 from herdr_master.core.models import EffortLevel, HarnessBinding, Squad
 from herdr_master.core.slug import InvalidBindingSlugError
@@ -86,6 +90,7 @@ SECTIONS: Tuple[Tuple[str, str], ...] = (
     ("council", "council"),
     ("herdr-master", "herdr-master"),
     ("models", "Available"),
+    ("harnesses", "Harnesses"),
 )
 
 ADD_CUSTOM_MODEL_VALUE: str = "__custom__"
@@ -225,6 +230,8 @@ class SetupTuiApp:
         self.available_view_harness: Optional[str] = None
         # Parallel to available.toggle.<index> so model ids never enter dotted keys.
         self._available_toggle_ids: List[str] = []
+        self._available_toggle_groups: List[List[str]] = []
+        self._available_all_ids: List[str] = []
         self._available_toggle_mode: str = "herdr"
         self._available_toggle_harness: str = ""
 
@@ -498,8 +505,8 @@ class SetupTuiApp:
         if harness:
             self._ensure_harness_discovered(harness)
         models = self.catalog.models(harness, mode=mode, current=None) if harness else []
-        ids = [str(opt.value) for opt in models]
-        self._available_toggle_ids = ids
+        raw_ids = [str(opt.value) for opt in models]
+        self._available_all_ids = raw_ids
         self._available_toggle_mode = mode
         self._available_toggle_harness = harness
         enabled = (
@@ -507,12 +514,27 @@ class SetupTuiApp:
         )
         enabled_set = None if enabled is None else set(enabled)
         all_enabled = (
-            is_all_enabled(self.cfg.models.available, mode, harness, ids)
+            is_all_enabled(self.cfg.models.available, mode, harness, raw_ids)
             if harness
             else True
         )
         effective_ratings, effective_eval = self._effective_ratings_and_eval()
         billing_tier = effective_eval.billing_for(harness) if harness else "api"
+
+        # Group effort-encoded agy Herdr slugs by base model so users toggle/tier once per model.
+        grouped_entries: List[Tuple[str, List[str]]] = []
+        if harness == "agy" and mode == "herdr":
+            by_base: Dict[str, List[str]] = {}
+            for opt in models:
+                mid = str(opt.value)
+                base_id, _ = split_effort_suffix(mid)
+                by_base.setdefault(base_id, []).append(mid)
+            grouped_entries = list(by_base.items())
+        else:
+            grouped_entries = [(opt.label, [str(opt.value)]) for opt in models]
+
+        self._available_toggle_ids = [group[0] for _, group in grouped_entries]
+        self._available_toggle_groups = [group for _, group in grouped_entries]
 
         rows = [
             FieldRow(
@@ -550,14 +572,25 @@ class SetupTuiApp:
             ),
         ]
         unrated_count = 0
-        for index, opt in enumerate(models):
-            model_id = ids[index]
-            checked = enabled_set is None or model_id in enabled_set
-            rating = lookup_rating(effective_ratings, harness, model_id) if harness else None
+        for index, (display_label, group_ids) in enumerate(grouped_entries):
+            checked = enabled_set is None or any(mid in enabled_set for mid in group_ids)
+            rating = None
+            rep_id = group_ids[0]
+            for mid in group_ids:
+                found = lookup_rating(effective_ratings, harness, mid) if harness else None
+                if found is not None:
+                    rating = found
+                    rep_id = mid
+                    break
+            self._available_toggle_ids[index] = rep_id
             if rating is None:
                 if checked:
-                    unrated_count += 1
-                badge = "[unrated]"
+                    unrated_count += len(group_ids)
+                preset_tier = default_worker_tier_for_model(display_label)
+                if preset_tier is not None:
+                    badge = f"[{WORKER_TIER_LABELS[preset_tier]}] [unrated]"
+                else:
+                    badge = "[unrated]"
                 hint = "Toggle allowlist | [T] set tier | [V] inspect | [E] evaluate unrated models"
             else:
                 tier = effective_worker_tier(rating)
@@ -574,7 +607,7 @@ class SetupTuiApp:
                 FieldRow(
                     key=f"available.toggle.{index}",
                     group="Models",
-                    label=opt.label,
+                    label=display_label,
                     kind="bool",
                     value_text="true" if checked else "false",
                     options=[ChoiceOption(True, "true"), ChoiceOption(False, "false")],
@@ -652,7 +685,7 @@ class SetupTuiApp:
                 self._available_toggle_mode,
                 harness,
                 bool(value),
-                list(self._available_toggle_ids),
+                list(self._available_all_ids or self._available_toggle_ids),
             )
             return True
         if len(parts) < 3:
@@ -688,8 +721,16 @@ class SetupTuiApp:
             if not harness:
                 self._set_status("No harness selected for Available.", error=True)
                 return False
-            model_id = self._available_toggle_ids[index]
-            return self._apply_available_worker_tier(harness, model_id, value)
+            group_ids = (
+                self._available_toggle_groups[index]
+                if index < len(self._available_toggle_groups)
+                else [self._available_toggle_ids[index]]
+            )
+            changed = False
+            for mid in group_ids:
+                if self._apply_available_worker_tier(harness, mid, value):
+                    changed = True
+            return changed
         if parts[1] != "toggle":
             self._set_status(f"Unknown available field {'.'.join(parts)}", error=True)
             return False
@@ -705,15 +746,21 @@ class SetupTuiApp:
         if not harness:
             self._set_status("No harness selected for Available.", error=True)
             return False
-        model_id = self._available_toggle_ids[index]
-        self.cfg.models.available = materialize_toggle(
-            self.cfg.models.available,
-            self._available_toggle_mode,
-            harness,
-            model_id,
-            bool(value),
-            list(self._available_toggle_ids),
+        group_ids = (
+            self._available_toggle_groups[index]
+            if index < len(self._available_toggle_groups)
+            else [self._available_toggle_ids[index]]
         )
+        all_ids = list(self._available_all_ids or self._available_toggle_ids)
+        for model_id in group_ids:
+            self.cfg.models.available = materialize_toggle(
+                self.cfg.models.available,
+                self._available_toggle_mode,
+                harness,
+                model_id,
+                bool(value),
+                all_ids,
+            )
         return True
 
     def _binding_rows(
@@ -778,7 +825,34 @@ class SetupTuiApp:
             )
         return rows
 
+    def _build_harnesses_rows(self) -> List[FieldRow]:
+        rows: List[FieldRow] = []
+        for kind in supported_harnesses(mode="herdr"):
+            spec = get_harness(kind)
+            installed = shutil.which(kind) is not None
+            enabled = is_harness_enabled(self.cfg.models.harnesses, kind)
+            status_badge = "[installed]" if installed else "[not installed]"
+            rows.append(
+                FieldRow(
+                    key=f"harness.{kind}",
+                    group="Supported Harnesses (On/Off)",
+                    label=f"{spec.label} ({kind})",
+                    kind="bool",
+                    value_text="on" if enabled else "off",
+                    options=[ChoiceOption(True, "on"), ChoiceOption(False, "off")],
+                    current_value=enabled,
+                    hint=(
+                        f"Enable or disable {spec.label} ({kind}) for model & worker selection "
+                        f"({'CLI found in PATH' if installed else 'CLI not found in PATH'})"
+                    ),
+                    badge=status_badge,
+                )
+            )
+        return rows
+
     def _section_rows(self, section: str) -> List[FieldRow]:
+        if section == "harnesses":
+            return self._build_harnesses_rows()
         if section == "aihead":
             ah = self.cfg.ai_head
             rows = self._binding_rows("aihead", "Coordinator Binding", ah.binding)
@@ -1348,6 +1422,15 @@ class SetupTuiApp:
                 self.master_custom_coordinator = True
                 self._apply_binding_change(self.master_coordinator, parts[1], value)
 
+        elif root == "harness":
+            kind = parts[1].strip().lower()
+            enabled = bool(value)
+            self.cfg.models.harnesses[kind] = enabled
+            self.dirty = True
+            state_lbl = "enabled" if enabled else "disabled"
+            self._set_status(f"Harness '{kind}' {state_lbl} for model & worker selection.")
+            return
+
         elif root == "available":
             if not self._apply_available_field(parts, value):
                 return
@@ -1544,7 +1627,7 @@ class SetupTuiApp:
             if existing is None:
                 self._set_status("No rating stored yet; evaluate or choose tier 1/2/3.", error=True)
                 return False
-            recomputed = derive_worker_tier(existing)
+            recomputed = derive_worker_tier(existing, model_id=model_id)
             updated = existing.model_copy(
                 update={"worker_tier": recomputed, "worker_tier_override": False}
             )
@@ -2054,7 +2137,7 @@ class SetupTuiApp:
             self._set_status("Reset edits to saved configuration.")
             return
 
-        if key in ("1", "2", "3", "4", "5", "6"):
+        if key.isdigit() and 1 <= int(key) <= len(SECTIONS):
             self.section_index = int(key) - 1
             self.focus_pane = "options"
             self._clamp_cursor()
@@ -2153,6 +2236,10 @@ class SetupTuiApp:
                 text = f"{self.master_coordinator.kind.value}:{self.master_coordinator.model}"
         elif section == "models":
             text = self._available_enabled_summary()
+        elif section == "harnesses":
+            all_h = supported_harnesses(mode="herdr")
+            enabled_n = sum(1 for h in all_h if is_harness_enabled(self.cfg.models.harnesses, h))
+            text = f"{enabled_n}/{len(all_h)} on"
         else:
             text = ""
         return text if len(text) <= 20 else text[:19] + "…"
@@ -2395,7 +2482,11 @@ class SetupTuiApp:
                 line.append(": ", style="dim")
                 line.append(f"[ {row.value_text} ]", style=val_style)
                 if row.badge:
-                    badge_style = "yellow" if row.badge == "[unrated]" else "dim green"
+                    badge_style = (
+                        "yellow"
+                        if row.badge in ("[unrated]", "[not installed]")
+                        else "dim green"
+                    )
                     line.append(f"  {row.badge}", style=badge_style)
             visual_lines.append((idx, line))
 
@@ -2424,7 +2515,14 @@ class SetupTuiApp:
         width = max(72, width)
         height = max(20, height)
 
-        target_name = str(self.config_path or ".herdr-master.toml")
+        resolved_target = (
+            self.config_path or find_project_config_path() or (Path.cwd() / ".herdr-master.toml")
+        ).resolve()
+        try:
+            rel_home = resolved_target.relative_to(Path.home().resolve())
+            target_name = f"~/{rel_home}"
+        except ValueError:
+            target_name = str(resolved_target)
         dirty_mark = " *" if self.dirty else ""
         header_txt = Text()
         header_txt.append("Herdr-Master Unified Skill Setup", style="bold white")

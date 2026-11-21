@@ -14,6 +14,7 @@ from herdr_master.core.eval_sources import BenchmarkEvidence
 from herdr_master.core.model_ratings import (
     ModelRating,
     apply_effort_calibration,
+    default_worker_tier_for_model,
     derive_worker_tier,
     effective_worker_tier,
     find_unrated_models,
@@ -230,3 +231,38 @@ def test_dynamic_coder_pool_and_triage_route_validation() -> None:
 
     core_ergo = validate_route(valid_ergo, available=available, ratings=ratings, backend="core")
     assert core_ergo.valid is False
+
+    # Disabled harness is excluded from dynamic coder pool and rejected by validate_route
+    filtered_pool, _, _ = build_dynamic_coder_pool(
+        available=available,
+        ratings=ratings,
+        mode="herdr",
+        worker_mode="balanced",
+        disabled_harnesses={"pi"},
+    )
+    assert all(b.kind.value != "pi" for b in filtered_pool)
+
+    disabled_route = validate_route(
+        valid_ergo, available=available, ratings=ratings, disabled_harnesses={"pi"}
+    )
+    assert disabled_route.valid is False
+
+
+@pytest.mark.parametrize(
+    ("model_id", "expected_tier"),
+    [
+        ("haiku", 1),
+        ("claude-sonnet-5-5-medium", 2),
+        ("claude-opus-5-5-high", 3),
+        ("openai/gpt-6-luna", 1),
+        ("openai/gpt-6.1-terra", 2),
+        ("openai/gpt-6.1-sol", 3),
+        ("gemini-4-hydrogen-low", 1),
+        ("gemini-4-neon-medium", 2),
+        ("gemini-4-carbon-high", 3),
+        ("gemini-4-argon-high", 3),
+        ("kilo/kilo-auto/free", 1),
+    ],
+)
+def test_provider_default_worker_tier_presets(model_id: str, expected_tier: int) -> None:
+    assert default_worker_tier_for_model(model_id) == expected_tier

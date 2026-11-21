@@ -296,9 +296,11 @@ def available_cmd(
             effective = load_effective_models_state(resolved_path, project_cfg=cfg)
             available_obj = effective.available
             effective_ratings = effective.ratings
+            disabled_harnesses = effective.disabled_harnesses
         else:
             available_obj = None
             effective_ratings = {}
+            disabled_harnesses = frozenset()
 
         restricted = available_obj is not None
         automode = bool(cfg.ai_head.automode) if cfg is not None else False
@@ -309,6 +311,8 @@ def available_cmd(
         for mode in ("herdr", "native"):
             modes[mode] = {}
             for harness in supported_harnesses(mode=mode):
+                if harness in disabled_harnesses:
+                    continue
                 discovered = [opt.value for opt in catalog.models(harness, mode=mode)]
                 enabled = enabled_model_ids(available_obj, mode, harness)
                 modes[mode][harness] = {
@@ -316,18 +320,26 @@ def available_cmd(
                     "enabled": enabled,
                 }
 
-        target_models = collect_target_models(available_obj, catalog, all_discovered=False)
+        target_models = {
+            h: mids
+            for h, mids in collect_target_models(
+                available_obj, catalog, all_discovered=False
+            ).items()
+            if h not in disabled_harnesses
+        }
         unrated_models = find_unrated_models(target_models, effective_ratings)
         ratings_data = {
             harness: {
                 mid: rating.model_dump(exclude_none=True) for mid, rating in model_map.items()
             }
             for harness, model_map in effective_ratings.items()
+            if harness not in disabled_harnesses
         }
 
         payload = {
             "restricted": restricted,
             "automode": automode,
+            "disabled_harnesses": sorted(disabled_harnesses),
             "available": available_data,
             "live_counts": catalog.live_counts,
             "modes": modes,
@@ -693,7 +705,7 @@ def rate_cmd(
         updated = ModelRating.model_validate(data)
         if clear_worker_tier_override:
             data = updated.model_dump()
-            data["worker_tier"] = derive_worker_tier(updated)
+            data["worker_tier"] = derive_worker_tier(updated, model_id=model_id)
             updated = ModelRating.model_validate(data)
         if not tier_only:
             updated.recommended_roles = derive_recommended_roles(updated)
@@ -805,6 +817,7 @@ def validate_route_cmd(
             ratings=effective.ratings,
             agy_mode=cfg.orchestration.agy_mode,
             backend=backend,
+            disabled_harnesses=effective.disabled_harnesses,
         )
         if json_output:
             _emit(res.model_dump())
