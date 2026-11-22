@@ -340,7 +340,7 @@ To eliminate orphaned finished jobs, eliminate delays, and shield the human user
     4. Run the reader in that pane (use the installed repository path if different):
 
        ```bash
-       herdr --session <s> pane run <pane-id> -- /home/pank/projects/AiHead-Orchestrator/scripts/herdr-ask.sh --file <markdown-path> --to <verified-parent-pane> --session <s> --tab-id <tab-id> --type Q --tag <qid>
+       herdr --session <s> pane run <pane-id> "/home/pank/projects/AiHead-Orchestrator/scripts/herdr-ask.sh --file <markdown-path> --to <verified-parent-pane> --session <s> --tab-id <tab-id> --type Q --tag <qid>"
        ```
 
        For Plan, Update, or Info use the corresponding `--type` and omit `--tag`; Enter acknowledges with `οκ`, or the user can type a follow-up. For Q, the user types an answer. The reader sends only to the verified parent, using exactly `User answer for <qid> tab <tab-id>: <answer>` for Q or `User ack/reply for <Plan|Update|Info> tab <tab-id>: <response>` for essential tabs. It never closes the tab itself; the user or coordinator owns tab closure. The coordinator does not wait for the reply in its current turn.
